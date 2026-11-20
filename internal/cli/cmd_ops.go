@@ -222,14 +222,14 @@ command after --, run that instead.
 
 When the container has no shell, as in distroless images, tug offers to add
 an ephemeral debug container that shares the container's processes, and
-opens the shell there; --debug does so without asking. The container's files
-are under /proc/1/root. A debug container stays in the pod until the pod is
-replaced, and adding one is a write.`,
+opens the shell there; --debug-container does so without asking. The
+container's files are under /proc/1/root. A debug container stays in the pod
+until the pod is replaced, and adding one is a write.`,
 		Example: `  tug sh api
   tug sh api -c sidecar
   tug sh api -- env
-  tug sh api --debug                        # a busybox shell beside the app's processes
-  tug sh api --debug --image nicolaka/netshoot -- tcpdump -i any`,
+  tug sh api --debug-container              # a busybox shell beside the app's processes
+  tug sh api --debug-container --image nicolaka/netshoot -- tcpdump -i any`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dash := cmd.ArgsLenAtDash(); dash > 1 || (dash < 0 && len(args) > 1) {
@@ -276,14 +276,14 @@ replaced, and adding one is a write.`,
 	f := cmd.Flags()
 	f.StringVarP(&o.namespace, "namespace", "n", "", "namespace (default: the session's)")
 	f.StringVarP(&o.container, "container", "c", "", "container (default: the pod's default container)")
-	f.BoolVar(&o.debug, "debug", false, "open the shell in an ephemeral debug container that shares the container's processes")
+	f.BoolVar(&o.debug, "debug-container", false, "open the shell in an ephemeral debug container that shares the container's processes")
 	f.StringVar(&o.image, "image", ops.DefaultDebugImage, "image of the debug container")
 	return cmd
 }
 
 // debugCommand is the tug sh command line that adds a debug container.
 func debugCommand(cmd *cobra.Command, target string, o shOptions) string {
-	line := "tug sh " + target + " --debug"
+	line := "tug sh " + target + " --debug-container"
 	if o.namespace != "" {
 		line += " -n " + o.namespace
 	}

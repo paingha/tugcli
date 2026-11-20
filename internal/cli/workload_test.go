@@ -350,9 +350,9 @@ func TestShDebugContainers(t *testing.T) {
 	mustTug(t, "connect", "payments-prod") // env=prod: read-only
 
 	// Adding a debug container is a write, refused without a terminal to ask on.
-	r := tug(t, "sh", "scratch", "-n", "shop", "--debug")
+	r := tug(t, "sh", "scratch", "-n", "shop", "--debug-container")
 	if r.code == 0 || !strings.Contains(r.stderr, "read-only") || !strings.Contains(r.stderr, "tug unlock") {
-		t.Fatalf("sh --debug on a read-only session: %+v", r)
+		t.Fatalf("sh --debug-container on a read-only session: %+v", r)
 	}
 	if writes.Load() != 0 {
 		t.Fatalf("%d writes reached the API server", writes.Load())
@@ -370,27 +370,27 @@ func TestShDebugContainers(t *testing.T) {
 	// Without a shell, and without a terminal to ask on, tug says how to get one.
 	r = tug(t, "sh", "scratch", "-n", "shop")
 	if r.code != 1 || !strings.Contains(r.stderr, "container app of pod/scratch has no shell") ||
-		!strings.Contains(r.stderr, "run `tug sh scratch --debug -n shop`") {
+		!strings.Contains(r.stderr, "run `tug sh scratch --debug-container -n shop`") {
 		t.Fatalf("sh into a distroless container: %+v", r)
 	}
 	if writes.Load() != 0 {
 		t.Fatal("a debug container was added without asking")
 	}
 
-	// --debug adds one that shares the app's processes, and attaches to it.
-	r = tug(t, "sh", "scratch", "-n", "shop", "--debug")
+	// --debug-container adds one that shares the app's processes, and attaches to it.
+	r = tug(t, "sh", "scratch", "-n", "shop", "--debug-container")
 	attached := regexp.MustCompile(`^attached to debugger-[a-z0-9]{5} \(image busybox:1\.36, target app, stdin true, tty false\)\n$`)
 	if r.code != 0 || !attached.MatchString(r.stdout) || !strings.Contains(r.stderr, "sharing the processes of app") {
-		t.Fatalf("sh --debug: %+v", r)
+		t.Fatalf("sh --debug-container: %+v", r)
 	}
 	if writes.Load() != 1 {
 		t.Fatalf("want 1 write (the ephemeral container), got %d", writes.Load())
 	}
 
 	// A command may finish before tug can attach; its logs are shown instead.
-	r = tug(t, "sh", "scratch", "-n", "shop", "--debug", "--image", "alpine:3.20", "--", "ps")
+	r = tug(t, "sh", "scratch", "-n", "shop", "--debug-container", "--image", "alpine:3.20", "--", "ps")
 	if r.code != 0 || !strings.Contains(r.stdout, "(image alpine:3.20, target app, stdin true, tty false, command ps)") {
-		t.Fatalf("sh --debug --image alpine:3.20 -- ps: %+v", r)
+		t.Fatalf("sh --debug-container --image alpine:3.20 -- ps: %+v", r)
 	}
 
 	// The debug containers stay in the pod, and its tree shows them.
