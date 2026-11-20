@@ -125,7 +125,8 @@ var _ Provider = sdkAdapter{}
 
 func (a sdkAdapter) Info() provider.Info {
 	info := a.p.Info()
-	info.Capabilities = provider.Capabilities(a.p)
+	// Serve mode is for plugin processes; a built-in runs in tug itself.
+	info.Capabilities = provider.Capabilities(a.p) &^ provider.CapServe
 	return info
 }
 

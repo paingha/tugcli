@@ -37,7 +37,7 @@ func TestDescribe(t *testing.T) {
 	if d.Name != "example" || d.Version != "0.1.0" {
 		t.Fatalf("describe name, version = %q, %q; want example, 0.1.0", d.Name, d.Version)
 	}
-	if want := provider.CapList | provider.CapCredential; d.Capabilities != want {
+	if want := provider.CapList | provider.CapCredential | provider.CapServe; d.Capabilities != want {
 		t.Fatalf("capabilities = %v, want %v", d.Capabilities, want)
 	}
 	if len(d.Secrets) != 1 || d.Secrets[0].Name != "api_token" || d.Secrets[0].Optional {
