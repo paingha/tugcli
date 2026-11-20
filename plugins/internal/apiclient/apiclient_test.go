@@ -31,6 +31,16 @@ func TestBaseURL(t *testing.T) {
 	}
 }
 
+func TestCheckURL(t *testing.T) {
+	if got, err := CheckURL("url", "https://rancher.example.com/"); err != nil || got != "https://rancher.example.com" {
+		t.Errorf(`CheckURL("url", "https://rancher.example.com/") = %q, %v, want "https://rancher.example.com"`, got, err)
+	}
+	_, err := CheckURL("url", "http://rancher.example.com")
+	if pe := provider.AsError(err); pe.Code != provider.InvalidConfig || pe.Message != "url must use https" {
+		t.Errorf(`CheckURL("url", "http://rancher.example.com") = %+v, want InvalidConfig naming the setting`, pe)
+	}
+}
+
 func TestDo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

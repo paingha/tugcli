@@ -1,0 +1,28 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: rancher
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/rancher
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-rancher}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-rancher}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-rancher}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-rancher}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-rancher.exe}
+  secrets:
+  - {name: api_token, prompt: "Rancher API bearer token (token-xxxxx:...)"}
+  env: []
+  # The plugin talks only to the Rancher server that each account's url
+  # setting names, so there is no fixed host to list.
+  network: ["the Rancher server in the account's url setting"]
+  accountConfig:
+    type: object
+    required: [url]
+    properties:
+      url: {type: string, description: "the Rancher server, such as https://rancher.example.com (https)"}
+      apiURL: {type: string, description: "API endpoint override (https); defaults to url"}

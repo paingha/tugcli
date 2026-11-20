@@ -39,12 +39,18 @@ func BaseURL(acct provider.Account, def string) (string, error) {
 	if raw == "" {
 		return def, nil
 	}
+	return CheckURL(ConfigAPIURL, raw)
+}
+
+// CheckURL checks raw, the value of the account setting key, the way
+// BaseURL checks apiURL, and returns it without a trailing slash.
+func CheckURL(key, raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return "", provider.Errorf(provider.InvalidConfig, "%s %q is not a URL", ConfigAPIURL, raw)
+		return "", provider.Errorf(provider.InvalidConfig, "%s %q is not a URL", key, raw)
 	}
 	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
-		return "", provider.Errorf(provider.InvalidConfig, "%s must use https", ConfigAPIURL)
+		return "", provider.Errorf(provider.InvalidConfig, "%s must use https", key)
 	}
 	return strings.TrimSuffix(raw, "/"), nil
 }
