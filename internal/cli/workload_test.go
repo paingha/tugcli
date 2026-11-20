@@ -100,10 +100,61 @@ func notReadyPod(p *corev1.Pod) {
 	p.Status.ContainerStatuses[0].Ready = false
 }
 
+// mounting adds a volume for a ConfigMap and one for a Secret to a pod.
+func mounting(configMap, secret string) func(*corev1.Pod) {
+	return func(p *corev1.Pod) {
+		p.Spec.Volumes = append(p.Spec.Volumes,
+			corev1.Volume{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: configMap},
+			}}},
+			corev1.Volume{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secret}}},
+		)
+	}
+}
+
 func shopObjects() []runtime.Object {
 	checkout := shopDeployment("checkout", 2, 2)
 	checkoutRS := shopReplicaSet(checkout, "6b8c")
 	checkoutLabels := checkoutRS.Labels
+	checkoutMounts := mounting("checkout-config", "checkout-tls")
+
+	pricing := shopDeployment("pricing", 1, 0)
+	pricingRS := shopReplicaSet(pricing, "9f2a")
+	missingSecret := shopPod("pricing-9f2a-m4k7p", pricingRS.Labels, controller("ReplicaSet", pricingRS.Name),
+		mounting("checkout-config", "pricing-api-key"), func(p *corev1.Pod) {
+			notReadyPod(p)
+			p.Status.ContainerStatuses[0].State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+				Reason: "CreateContainerConfigError", Message: `secret "pricing-api-key" not found`,
+			}}
+		})
+
+	one := int32(1)
+	ledger := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "ledger", Namespace: "shop", UID: "ledger", Generation: 1},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &one,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "ledger"}},
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "ledger"}}},
+		},
+		Status: appsv1.StatefulSetStatus{ObservedGeneration: 1, Replicas: 1, UpdatedReplicas: 1, UpdateRevision: "ledger-5f7d8", CurrentRevision: "ledger-5f7d8"},
+	}
+	ledgerRev := &appsv1.ControllerRevision{
+		ObjectMeta: metav1.ObjectMeta{Name: "ledger-5f7d8", Namespace: "shop", Labels: map[string]string{"app": "ledger"},
+			OwnerReferences: controller("StatefulSet", "ledger")},
+		Revision: 1,
+	}
+	waitingForVolume := shopPod("ledger-0", map[string]string{"app": "ledger", "controller-revision-hash": "ledger-5f7d8"},
+		controller("StatefulSet", "ledger"), func(p *corev1.Pod) {
+			p.Spec.NodeName = ""
+			p.Spec.Volumes = []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data-ledger-0"},
+			}}}
+			p.Status = corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable",
+				Message: "0/3 nodes are available: 3 pod has unbound immediate PersistentVolumeClaims.",
+			}}}
+		})
+	fast := "fast-ssd"
 
 	billing := shopDeployment("billing", 1, 0)
 	billingRS := shopReplicaSet(billing, "5d4f")
@@ -127,8 +178,27 @@ func shopObjects() []runtime.Object {
 
 	return []runtime.Object{
 		checkout, checkoutRS,
-		shopPod("checkout-6b8c-aaaaa", checkoutLabels, controller("ReplicaSet", checkoutRS.Name)),
-		shopPod("checkout-6b8c-bbbbb", checkoutLabels, controller("ReplicaSet", checkoutRS.Name)),
+		shopPod("checkout-6b8c-aaaaa", checkoutLabels, controller("ReplicaSet", checkoutRS.Name), checkoutMounts),
+		shopPod("checkout-6b8c-bbbbb", checkoutLabels, controller("ReplicaSet", checkoutRS.Name), checkoutMounts),
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "shop"},
+			Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "checkout"}, ClusterIP: "10.96.14.2",
+				Ports: []corev1.ServicePort{{Port: 80, Protocol: corev1.ProtocolTCP}, {Port: 9090, Protocol: corev1.ProtocolTCP}}},
+		},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "checkout-config", Namespace: "shop"},
+			Data: map[string]string{"currency": "EUR", "tax.yaml": "rate: 0.2"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "checkout-tls", Namespace: "shop"}, Type: corev1.SecretTypeTLS,
+			Data: map[string][]byte{"tls.crt": []byte("not a real certificate"), "tls.key": []byte("not a real key")}},
+
+		pricing, pricingRS, missingSecret,
+
+		ledger, ledgerRev, waitingForVolume,
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "data-ledger-0", Namespace: "shop"},
+			Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: &fast},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+		},
+		shopEvent("PersistentVolumeClaim", "data-ledger-0", "ProvisioningFailed", `storageclass.storage.k8s.io "fast-ssd" not found`, 40),
 
 		billing, billingRS, crashing,
 		shopEvent("Pod", crashing.Name, "BackOff", "Back-off restarting failed container main in pod "+crashing.Name, 31),
@@ -184,7 +254,83 @@ func TestWhy(t *testing.T) {
 	if r := tug(t, "why", "billing", "-n", "shop", "-o", "name"); r.code == 0 || !strings.Contains(r.stderr, "table, json or yaml") {
 		t.Errorf("tug why -o name: %+v", r)
 	}
+
+	// A volume claim stuck in Pending, and the reason the provisioner gave.
+	out = mustTug(t, "why", "sts/ledger", "-n", "shop")
+	for _, want := range []string{
+		"error    pvc/data-ledger-0: Pending",
+		`is Pending: no volume is bound to it: storageclass.storage.k8s.io "fast-ssd" not found`,
+		"next: check storage class fast-ssd and its provisioner: `tug describe pvc/data-ledger-0 -n shop`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tug why sts/ledger lacks %q:\n%s", want, out)
+		}
+	}
 	if writes.Load() != 0 {
 		t.Fatalf("why wrote to the cluster %d times", writes.Load())
+	}
+}
+
+func TestTree(t *testing.T) {
+	isolate(t)
+	srv, writes := fakeAPIServer(t)
+	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, srv))
+	newSession(t)
+	mustTug(t, "connect", "payments-prod")
+
+	want := `deploy/checkout                  ✓ 2/2 ready
+├── svc/checkout                 ✓ ClusterIP 80/TCP,9090/TCP, 2/2 pods ready
+└── rs/checkout-6b8c             ✓ 2/2 ready, revision 2
+    ├── pod/checkout-6b8c-aaaaa  ✓ Running
+    │   ├── container main       ✓ running
+    │   ├── cm/checkout-config   ✓ 2 keys
+    │   └── secret/checkout-tls  ✓ kubernetes.io/tls, 2 keys
+    └── pod/checkout-6b8c-bbbbb  ✓ Running
+        ├── container main       ✓ running
+        ├── cm/checkout-config   ✓ 2 keys
+        └── secret/checkout-tls  ✓ kubernetes.io/tls, 2 keys
+`
+	if got := mustTug(t, "tree", "checkout", "-n", "shop"); got != want {
+		t.Errorf("tug tree checkout =\n%s\nwant\n%s", got, want)
+	}
+
+	out := mustTug(t, "tree", "pricing", "-n", "shop")
+	for _, want := range []string{
+		"└── pod/pricing-9f2a-m4k7p      ✗ CreateContainerConfigError",
+		"├── cm/checkout-config      ✓ 2 keys",
+		"└── secret/pricing-api-key  ✗ not found",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("tug tree pricing lacks %q:\n%s", want, out)
+		}
+	}
+
+	var root ops.TreeNode
+	if err := json.Unmarshal([]byte(mustTug(t, "tree", "sts/ledger", "-n", "shop", "-o", "json")), &root); err != nil {
+		t.Fatal(err)
+	}
+	if root.Kind != "StatefulSet" || root.Health != ops.HealthNotReady || len(root.Children) != 1 {
+		t.Fatalf("tree root = %+v", root)
+	}
+	rev := root.Children[0]
+	if rev.Kind != "ControllerRevision" || rev.Name != "ledger-5f7d8" || len(rev.Children) != 1 {
+		t.Fatalf("revision = %+v", rev)
+	}
+	pod := rev.Children[0]
+	if pod.Name != "ledger-0" || len(pod.Children) != 2 {
+		t.Fatalf("pod = %+v", pod)
+	}
+	if pvc := pod.Children[1]; pvc.Kind != "PersistentVolumeClaim" || pvc.Health != ops.HealthNotReady || pvc.Status != "Pending, class fast-ssd" {
+		t.Errorf("claim = %+v, want data-ledger-0 Pending", pvc)
+	}
+
+	if out := mustTug(t, "tree", "checkout", "-n", "shop", "-o", "yaml"); !strings.Contains(out, "kind: Deployment") || !strings.Contains(out, "health: ready") {
+		t.Errorf("tug tree -o yaml:\n%s", out)
+	}
+	if out := mustTug(t, "tree", "checkout", "-n", "shop", "-o", "json"); strings.Contains(out, "not a real") {
+		t.Errorf("tree printed a Secret's value:\n%s", out)
+	}
+	if writes.Load() != 0 {
+		t.Fatalf("tree wrote to the cluster %d times", writes.Load())
 	}
 }

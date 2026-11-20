@@ -1,4 +1,5 @@
-// Package render writes tables, structured output and colour for the CLI.
+// Package render writes tables, trees, structured output and colour for the
+// CLI.
 package render
 
 import (
@@ -10,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 	"sigs.k8s.io/yaml"
@@ -65,6 +67,69 @@ func Table(w io.Writer, header []string, rows [][]string) error {
 		fmt.Fprintln(tw, strings.Join(r, "\t"))
 	}
 	return tw.Flush()
+}
+
+// TreeNode is one line of a tree drawn by Tree: a label, a detail shown in a
+// column after the labels, and the nodes beneath it.
+type TreeNode struct {
+	Label    string
+	Detail   string
+	Children []TreeNode
+}
+
+// Tree draws a tree with box-drawing characters, its details lined up in a
+// column after the widest label. Labels and details may carry colour.
+func Tree(w io.Writer, root TreeNode) error {
+	type line struct{ head, detail string }
+	var lines []line
+	var walk func(n TreeNode, prefix, indent string)
+	walk = func(n TreeNode, prefix, indent string) {
+		lines = append(lines, line{prefix + n.Label, n.Detail})
+		for i, c := range n.Children {
+			if i == len(n.Children)-1 {
+				walk(c, indent+"└── ", indent+"    ")
+			} else {
+				walk(c, indent+"├── ", indent+"│   ")
+			}
+		}
+	}
+	walk(root, "", "")
+
+	width := 0
+	for _, l := range lines {
+		width = max(width, visibleWidth(l.head))
+	}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(l.head)
+		if l.detail != "" {
+			b.WriteString(strings.Repeat(" ", width-visibleWidth(l.head)+2))
+			b.WriteString(l.detail)
+		}
+		b.WriteByte('\n')
+	}
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// visibleWidth counts the characters of s that a terminal shows, leaving out
+// ANSI escape sequences.
+func visibleWidth(s string) int {
+	n := 0
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			i += 2
+			for i < len(s) && (s[i] < 0x40 || s[i] > 0x7e) {
+				i++ // parameter and intermediate bytes
+			}
+			i++ // the final byte
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		n++
+	}
+	return n
 }
 
 // Colors applies ANSI colours when enabled.

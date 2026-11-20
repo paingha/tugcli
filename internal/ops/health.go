@@ -67,6 +67,38 @@ func fetchWorkload(ctx context.Context, cs kubernetes.Interface, t resolve.Targe
 	return w, nil
 }
 
+// object returns the workload's metadata.
+func (w *workload) object() metav1.Object {
+	switch {
+	case w.deploy != nil:
+		return w.deploy
+	case w.sts != nil:
+		return w.sts
+	case w.ds != nil:
+		return w.ds
+	case w.job != nil:
+		return w.job
+	default:
+		return w.pod
+	}
+}
+
+// template returns the workload's pod template; nil for a bare pod.
+func (w *workload) template() *corev1.PodTemplateSpec {
+	switch {
+	case w.deploy != nil:
+		return &w.deploy.Spec.Template
+	case w.sts != nil:
+		return &w.sts.Spec.Template
+	case w.ds != nil:
+		return &w.ds.Spec.Template
+	case w.job != nil:
+		return &w.job.Spec.Template
+	default:
+		return nil
+	}
+}
+
 // pods returns the workload's pods, sorted by name.
 func (w *workload) pods(ctx context.Context, cs kubernetes.Interface) ([]corev1.Pod, error) {
 	if w.pod != nil {
