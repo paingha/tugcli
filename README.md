@@ -37,6 +37,7 @@ tug restart api | tug scale api 3 | tug rollback api
 tug get pods                    # anything tug does not know runs as kubectl
 tug unlock 15m                  # allow writes on a read-only (env=prod) session
 tug auth rotate lke-prod        # new credential from the provider; the old one is revoked
+tug auth login cks-train        # sign in to the cluster's OIDC issuer in the browser (--device over SSH)
 ```
 
 Targets are fuzzy: exact beats prefix beats fuzzy, workloads beat bare pods,
@@ -51,7 +52,7 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 | `aws` (EKS) | built-in | `~/.aws` profiles; `--set regions=us-east-1,eu-west-1` | short-lived token from a presigned STS request; no AWS CLI needed |
 | `google` (GKE) | built-in | gcloud configurations (one account per project) | short-lived OAuth token from Application Default Credentials, else `gke-gcloud-auth-plugin` |
 | `akamai` (LKE) | plugin, [plugins/akamai](plugins/akamai) | personal access token with Kubernetes read/write | the kubeconfig's token, kept in the keychain; `tug auth rotate` regenerates it |
-| `coreweave` (CKS) | plugin, [plugins/coreweave](plugins/coreweave) | API access token | the API token (managed auth); `--set auth=oidc` returns the cluster's OIDC issuer, but tug cannot sign in with OIDC yet |
+| `coreweave` (CKS) | plugin, [plugins/coreweave](plugins/coreweave) | API access token | the API token (managed auth), or with `--set auth=oidc` an ID token from the cluster's OIDC issuer (`tug auth login`) |
 
 ```bash
 tug import local --account kind           # every kind cluster, even ones no kubeconfig mentions
@@ -62,7 +63,11 @@ tug import akamai --account work          # asks for the token once, keeps it in
 ```
 
 Every kubeconfig tug writes authenticates with `tug auth token`, so no secret is
-written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
+written to disk. For clusters that trust an OpenID Connect issuer, tug signs in
+with the authorization code flow and PKCE (the browser comes back to
+`http://localhost:8000`, or `18000`, as with kubelogin) or with a device code,
+keeps the refresh token in the keychain, and refreshes the ID token as it
+expires. `oidc.listenAddresses` in `config.yaml` changes the redirect ports. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 
 ## The local API proxy (tugd)
 

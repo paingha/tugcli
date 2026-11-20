@@ -146,6 +146,11 @@ func (a *app) doctorCluster(cfg *doctor.Config, cat *catalog.Catalog, cl *catalo
 		return
 	}
 	svc, broker, err := a.services(cat)
+	if err == nil {
+		// doctor only reads: it reports a missing sign-in instead of
+		// starting one.
+		broker.OIDC = a.oidcClient(broker.Store, nil)
+	}
 	if err != nil {
 		cfg.Credential = func(context.Context) (*credentials.Resolved, error) { return nil, err }
 		return

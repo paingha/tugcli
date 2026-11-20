@@ -223,6 +223,8 @@ plugins:
     list: 90s
 sessions:
   maxAge: 24h
+oidc:
+  listenAddresses: [127.0.0.1:9000]
 `)
 	c, err := Load(dir)
 	if err != nil {
@@ -242,6 +244,9 @@ sessions:
 	}
 	if got := c.Plugins.Timeouts["list"].Duration; got != 90*time.Second {
 		t.Errorf("Plugins.Timeouts[list] = %v, want 90s", got)
+	}
+	if want := []string{"127.0.0.1:9000"}; !reflect.DeepEqual(c.OIDC.ListenAddresses, want) {
+		t.Errorf("OIDC.ListenAddresses = %v, want %v", c.OIDC.ListenAddresses, want)
 	}
 	if c.Sessions.MaxAge.Duration != 24*time.Hour {
 		t.Errorf("Sessions.MaxAge = %v, want 24h", c.Sessions.MaxAge.Duration)

@@ -11,12 +11,14 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/browser"
 	"github.com/paingha/tugcli/internal/builtin/aws"
 	"github.com/paingha/tugcli/internal/builtin/google"
 	"github.com/paingha/tugcli/internal/builtin/kubeconfig"
@@ -25,6 +27,7 @@ import (
 	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/importer"
+	"github.com/paingha/tugcli/internal/oidc"
 	"github.com/paingha/tugcli/internal/passthrough"
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
@@ -197,9 +200,47 @@ func (a *app) services(cat *catalog.Catalog) (*importer.Service, *credentials.Br
 		return nil, nil, err
 	}
 	svc := &importer.Service{Registry: a.registry(), Store: store, Now: a.now}
-	broker := &credentials.Broker{Store: store, Now: a.now, Fetch: svc.Fetcher(cat)}
+	broker := &credentials.Broker{Store: store, Now: a.now, Fetch: svc.Fetcher(cat), OIDC: a.oidcClient(store, a.implicitSignIn())}
 	svc.Broker = broker
 	return svc, broker, nil
+}
+
+// oidcClient returns the client that signs in to OpenID Connect issuers.
+// With ui, it may sign in on its own when there is no token to use.
+func (a *app) oidcClient(store credentials.Store, ui *oidc.UI) *oidc.Client {
+	opts := []oidc.Option{
+		oidc.WithNow(a.now),
+		oidc.WithLogger(a.log),
+		oidc.WithLockDir(filepath.Join(a.paths.Cache, "oidc")),
+		oidc.WithListenAddresses(a.cfg.OIDC.ListenAddresses...),
+	}
+	if ui != nil {
+		opts = append(opts, oidc.WithLogin(*ui))
+	}
+	return oidc.New(store, opts...)
+}
+
+// implicitSignIn lets a command that needs a token, such as `tug auth token`
+// run by kubectl, sign in on its own, but only where someone can see the
+// address to open: when stderr is a terminal.
+func (a *app) implicitSignIn() *oidc.UI {
+	if !a.stderrTerminal() {
+		return nil
+	}
+	ui := a.signInUI(false)
+	return &ui
+}
+
+// signInUI shows sign-in steps on stderr and opens the system browser.
+// Over SSH, where a browser here is no use, it prefers a device code.
+func (a *app) signInUI(device bool) oidc.UI {
+	return oidc.UI{
+		Tell: func(msg string) { fmt.Fprintln(a.stderr, msg) },
+		OpenBrowser: func(ctx context.Context, u string) error {
+			return browser.Open(ctx, u, os.Getenv)
+		},
+		Device: device || os.Getenv("SSH_CONNECTION") != "",
+	}
 }
 
 func (a *app) catalogPath() string { return catalog.Path(a.paths.Data) }

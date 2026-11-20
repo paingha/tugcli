@@ -34,6 +34,10 @@ func CredentialKey(clusterID string) string { return "cred/" + clusterID }
 // DelegateKey caches the output of a delegated exec plugin.
 func DelegateKey(clusterID string) string { return "deleg/" + clusterID }
 
+// OIDCKey holds one part of an OpenID Connect sign-in, such as its refresh
+// token. id names the issuer, client and scopes; the oidc package derives it.
+func OIDCKey(id, part string) string { return "oidc/" + id + "/" + part }
+
 // SecretKey holds a provider secret declared by its manifest, per account.
 func SecretKey(provider, account, name string) string {
 	return "secret/" + provider + "/" + account + "/" + name

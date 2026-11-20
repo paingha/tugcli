@@ -24,6 +24,13 @@ func (a *app) interactive() bool {
 	return ok && term.IsTerminal(int(errf.Fd()))
 }
 
+// stderrTerminal reports whether stderr is a terminal, so someone can read
+// what tug writes there even when stdin is not.
+func (a *app) stderrTerminal() bool {
+	f, ok := a.stderr.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
 // readLine prompts on stderr and reads one line.
 func (a *app) readLine(prompt string) (string, error) {
 	fmt.Fprint(a.stderr, prompt)

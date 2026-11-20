@@ -235,7 +235,8 @@ func ClientCert(certPEM, keyPEM []byte, expiresAt time.Time) Credential {
 	return Credential{Type: CredentialClientCert, CertData: certPEM, KeyData: keyPEM, ExpiresAt: expiry(expiresAt)}
 }
 
-// OIDC returns a credential that tells tug to run an OIDC login.
+// OIDC returns a credential that tells tug to sign in to an OpenID Connect
+// issuer and use its ID token. tug always asks for the openid scope.
 func OIDC(issuer, clientID string, scopes ...string) Credential {
 	return Credential{Type: CredentialOIDC, Issuer: issuer, ClientID: clientID, Scopes: scopes}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -207,14 +208,64 @@ func TestBrokerDelegate(t *testing.T) {
 	}
 }
 
-func TestBrokerOIDCNotYetSupported(t *testing.T) {
-	b := &Broker{Store: NewMemoryStore()}
-	if err := b.Put("c", provider.OIDC("https://issuer", "tug")); err != nil {
-		t.Fatal(err)
+// fakeOIDC answers oidc credentials with a fixed token, or an error.
+type fakeOIDC struct {
+	err       error
+	calls     []provider.Credential
+	refreshes int
+}
+
+func (f *fakeOIDC) IDToken(_ context.Context, c provider.Credential, refresh bool) (string, time.Time, error) {
+	f.calls = append(f.calls, c)
+	if refresh {
+		f.refreshes++
 	}
-	_, err := b.ExecCredential(context.Background(), "c", false)
-	if provider.CodeOf(err) != provider.Unimplemented {
-		t.Fatalf("want Unimplemented, got %v", err)
+	if f.err != nil {
+		return "", time.Time{}, f.err
+	}
+	return "id-token", time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), nil
+}
+
+func TestBrokerOIDC(t *testing.T) {
+	cred := provider.OIDC("https://issuer", "tug", "groups")
+	tests := []struct {
+		name     string
+		oidc     *fakeOIDC
+		wantCode provider.Code
+		wantHint string
+	}{
+		{name: "signed in", oidc: &fakeOIDC{}},
+		{name: "nobody signed in", oidc: &fakeOIDC{err: fmt.Errorf("no sign-in: %w", ErrLoginRequired)},
+			wantCode: provider.Unauthenticated, wantHint: "tug auth login prov/acct/c"},
+		{name: "issuer down", oidc: &fakeOIDC{err: provider.Errorf(provider.Unavailable, "down")}, wantCode: provider.Unavailable},
+		{name: "no OIDC client", wantCode: provider.Unimplemented},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// --refresh asks the provider again too.
+			fetch := func(context.Context, string) (provider.Credential, error) { return cred, nil }
+			b := &Broker{Store: NewMemoryStore(), Fetch: fetch}
+			if tt.oidc != nil {
+				b.OIDC = tt.oidc
+			}
+			ec, err := b.ExecCredential(context.Background(), "prov/acct/c", true)
+			if tt.wantCode != "" {
+				pe := provider.AsError(err)
+				if pe.Code != tt.wantCode || !strings.Contains(pe.Hint, tt.wantHint) {
+					t.Fatalf("ExecCredential = %+v, want code %s and hint %q", pe, tt.wantCode, tt.wantHint)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ec.Status.Token != "id-token" || ec.Status.ExpirationTimestamp == nil || ec.Status.ExpirationTimestamp.Year() != 2030 {
+				t.Fatalf("status = %+v, want the ID token and its expiry", ec.Status)
+			}
+			if len(tt.oidc.calls) != 1 || tt.oidc.calls[0].Issuer != "https://issuer" || tt.oidc.refreshes != 1 {
+				t.Fatalf("IDToken calls %+v, refreshes %d; want one refreshing call for the stored credential", tt.oidc.calls, tt.oidc.refreshes)
+			}
+		})
 	}
 }
 

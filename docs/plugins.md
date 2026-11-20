@@ -397,7 +397,7 @@ Return one of four shapes. The SDK has a constructor for each:
 | `token` | `provider.Token(token, expiresAt)` | The API server accepts a bearer token: an API token, a short-lived token you mint, a service account token. |
 | `clientCert` | `provider.ClientCert(certPEM, keyPEM, expiresAt)` | The cluster uses client certificates. |
 | `delegate` | `provider.Delegate(command, args...)` | The vendor already ships a kubectl exec credential plugin. tug runs it unchanged and, when its output has an expiry, caches it until then. |
-| `oidc` | `provider.OIDC(issuer, clientID, scopes...)` | Reserved: tug stores it, but `tug auth token` answers `Unimplemented` because tug cannot run the OIDC login yet. Until it can, return a `delegate` credential that runs an OIDC helper, such as `kubectl oidc-login get-token`. |
+| `oidc` | `provider.OIDC(issuer, clientID, scopes...)` | The cluster trusts an OpenID Connect issuer. tug signs the user in (`tug auth login`, or on its own when kubectl needs a token and stderr is a terminal), keeps the refresh token, and hands kubectl the ID token. `openid` is always requested; add `offline_access` if your issuer issues refresh tokens only with it. Set `ClientSecret` only for issuers that require one for public clients, as Google does. The issuer must accept `http://localhost:8000` and `http://localhost:18000` as redirect URIs, as for kubelogin. |
 
 Set the expiry for anything short-lived. tug reuses a cached credential until
 60 seconds before `ExpiresAt` and then asks your plugin again. Pass
@@ -1202,7 +1202,7 @@ Use it to check the endpoint, CA and credential your plugin returns.
 | `Unavailable: plugin acme list timed out after 30s` | The API is slow or the plugin ignores its context. Raise `plugins.timeouts.list` in `config.yaml` or make `list` faster. |
 | `response is not JSON` (tug) or `extra output after the response` (`tug plugin test`) | Something besides the response went to stdout. Log to stderr. |
 | `plugin returned an invalid credential` | The credential lacks a field its type needs, such as an empty token. |
-| `OIDC login (issuer ...) is not supported yet` | The plugin returned an `oidc` credential; use `delegate` for now. |
+| `not signed in to https://...` | The cluster uses an `oidc` credential and nobody has signed in, or the refresh token expired. Run the `tug auth login` command in the hint. |
 | `<name> is a built-in provider; a plugin may replace it only if plugins.allowOverride in config.yaml lists it` | The plugin uses a built-in provider's name. Pick another name. |
 | Changes to `main.go` do not show up | Rebuild (`make build` or `make link`), then `tug sync` to refresh listed data or `tug auth token --refresh` for credentials. |
 | `plugin acme needs tug v0.5.0 or later and this is v0.4.0` | The plugin's `minTugVersion` is newer than tug. Upgrade tug. |
