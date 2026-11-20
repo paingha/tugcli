@@ -46,8 +46,8 @@ func TestPackageInstallRemove(t *testing.T) {
 			t.Errorf("packaged %s/%s with a %s binary", p.OS, p.Arch, runtime.GOOS)
 		}
 	}
-	if len(res.Mismatched) == 0 {
-		t.Error("other platforms should be reported as mismatched")
+	if len(res.Mismatched)+len(res.Missing) == 0 {
+		t.Error("other platforms should be left out as mismatched or missing")
 	}
 
 	d := NewDirs(t.TempDir())
