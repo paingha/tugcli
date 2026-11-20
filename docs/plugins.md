@@ -277,7 +277,7 @@ make package       # builds every platform, then: tug plugin package . -o dist
 
 ```text
 dist/tug-provider-acme_0.1.0.tar.gz
-  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64
+  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, windows/arm64
   sha256:    98b07c5943ae2674b04199c8f1f33cd24fb7ed56b8c03d6f0f9951dcc99b2ee9
 ```
 
@@ -971,7 +971,7 @@ prints the archive's path, its platforms and the archive's own sha256:
 
 ```text
 dist/tug-provider-acme_0.1.0.tar.gz
-  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64
+  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, windows/arm64
   sha256:    98b07c5943ae2674b04199c8f1f33cd24fb7ed56b8c03d6f0f9951dcc99b2ee9
 ```
 

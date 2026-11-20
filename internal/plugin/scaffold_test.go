@@ -83,8 +83,12 @@ func TestScaffoldGoBuildsTestsAndConforms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Manifest.Spec.Platforms) != 1 || len(res.Missing) != 4 {
-		t.Fatalf("packaged %d platforms, %d missing", len(res.Manifest.Spec.Platforms), len(res.Missing))
+	// Only this machine's binary was built; every other platform the
+	// scaffold declares is left out.
+	wantMissing := len(p.Manifest.Spec.Platforms) - 1
+	if len(res.Manifest.Spec.Platforms) != 1 || len(res.Missing) != wantMissing {
+		t.Fatalf("Package(scaffold) = %d platforms, %d missing; want 1, %d missing",
+			len(res.Manifest.Spec.Platforms), len(res.Missing), wantMissing)
 	}
 	staged, err := NewDirs(t.TempDir()).Stage(res.Path, res.SHA256)
 	if err != nil {

@@ -27,7 +27,7 @@ example-plugin: ## Build the example provider plugin
 PLUGINS        := akamai coreweave
 PLUGIN_HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
 PLUGIN_EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
-PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64
+PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64 windows_arm64
 # Where plugins-dist writes the archives. Releases use build/plugins, since
 # GoReleaser empties dist/ before it starts.
 PLUGINS_OUT    ?= dist/plugins
