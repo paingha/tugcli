@@ -94,7 +94,7 @@ func (a *app) runImport(ctx context.Context, args []string, o importOptions) err
 		return err
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d sources failed", failed, len(sources))
+		return fmt.Errorf("%d of %s failed", failed, plural(len(sources), "source", "sources"))
 	}
 	return nil
 }
@@ -269,7 +269,7 @@ func (a *app) printResult(r importer.Result) {
 		}
 		return
 	}
-	parts := []string{fmt.Sprintf("%d clusters", r.Clusters)}
+	parts := []string{plural(r.Clusters, "cluster", "clusters")}
 	if n := len(r.Merge.Added); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d new", n))
 	}
@@ -277,7 +277,7 @@ func (a *app) printResult(r importer.Result) {
 		parts = append(parts, c.Yellow(fmt.Sprintf("%d stale", n)))
 	}
 	if r.Credentials > 0 {
-		parts = append(parts, fmt.Sprintf("%d credentials moved to %s", r.Credentials, a.store.Name()))
+		parts = append(parts, fmt.Sprintf("%s moved to %s", plural(r.Credentials, "credential", "credentials"), a.store.Name()))
 	}
 	fmt.Fprintf(a.stdout, "%s %s: %s\n", c.Green("✓"), r.Source.Key(), strings.Join(parts, ", "))
 }
@@ -327,7 +327,7 @@ func newSyncCmd(a *app) *cobra.Command {
 				return err
 			}
 			if failed > 0 {
-				return fmt.Errorf("%d of %d sources failed", failed, len(results))
+				return fmt.Errorf("%d of %s failed", failed, plural(len(results), "source", "sources"))
 			}
 			return nil
 		},
@@ -540,7 +540,7 @@ func newForgetCmd(a *app) *cobra.Command {
 			if err := cat.Save(a.catalogPath()); err != nil {
 				return err
 			}
-			fmt.Fprintf(a.stdout, "Removed %s and %d clusters\n", args[0], len(removed))
+			fmt.Fprintf(a.stdout, "Removed %s and %s\n", args[0], plural(len(removed), "cluster", "clusters"))
 			return forgetErr
 		},
 	}

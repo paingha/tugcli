@@ -119,7 +119,7 @@ func TestPluginLifecycle(t *testing.T) {
 	}
 
 	out = mustTug(t, "import", "acme", "--account", "demo", "--set", "clusters=dev=https://127.0.0.1:6443")
-	if !strings.Contains(out, "acme/demo: 1 clusters") {
+	if !strings.Contains(out, "acme/demo: 1 cluster,") {
 		t.Fatalf("import through the installed plugin: %s", out)
 	}
 	if out := mustTug(t, "ls", "-o", "name"); strings.TrimSpace(out) != "dev" {
@@ -185,7 +185,7 @@ func TestWASMPluginLifecycle(t *testing.T) {
 	}
 
 	t.Setenv("TUG_SECRET_API_TOKEN", "ex_wasm")
-	if out := mustTug(t, "import", "example", "--account", "demo", "--set", "clusters=dev=https://127.0.0.1:6443"); !strings.Contains(out, "example/demo: 1 clusters") {
+	if out := mustTug(t, "import", "example", "--account", "demo", "--set", "clusters=dev=https://127.0.0.1:6443"); !strings.Contains(out, "example/demo: 1 cluster") {
 		t.Fatalf("import through the WebAssembly plugin: %s", out)
 	}
 	if ec := mustTug(t, "auth", "token", "--cluster", "dev"); !strings.Contains(ec, `"token":"ex_wasm"`) {

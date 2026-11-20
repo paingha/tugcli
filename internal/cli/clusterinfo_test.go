@@ -70,7 +70,7 @@ func TestDelegateGetsClusterInfo(t *testing.T) {
 		}
 	}
 	mustTug(t, "plugin", "link", dir)
-	if out := mustTug(t, "import", "inv", "--account", "a"); !strings.Contains(out, "inv/a: 1 clusters") {
+	if out := mustTug(t, "import", "inv", "--account", "a"); !strings.Contains(out, "inv/a: 1 cluster") {
 		t.Fatalf("import inv: %s", out)
 	}
 
