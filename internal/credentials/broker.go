@@ -23,6 +23,18 @@ const Skew = 60 * time.Second
 // Fetcher asks a cluster's provider for a fresh credential.
 type Fetcher func(ctx context.Context, clusterID string) (sdk.Credential, error)
 
+// ErrLoginRequired is wrapped by OIDCTokens when nobody is signed in to the
+// issuer and it may not start a sign-in itself.
+var ErrLoginRequired = errors.New("sign-in required")
+
+// OIDCTokens turns a credential of type oidc into an ID token, signing in or
+// refreshing as needed. The oidc package implements it.
+type OIDCTokens interface {
+	// IDToken returns a valid ID token and when it expires. With refresh
+	// set, it does not answer from its cache.
+	IDToken(ctx context.Context, c sdk.Credential, refresh bool) (token string, expiresAt time.Time, err error)
+}
+
 // Broker answers credential requests from the cache and falls back to the
 // provider. It is the core of `tug auth token`.
 type Broker struct {
@@ -32,6 +44,8 @@ type Broker struct {
 	// RunExec runs a delegated exec plugin and returns its stdout. Tests
 	// replace it.
 	RunExec func(ctx context.Context, cfg sdk.ExecConfig) ([]byte, error)
+	// OIDC answers credentials of type oidc. Without it they are refused.
+	OIDC OIDCTokens
 }
 
 // Resolved is a credential ready to use: either a token, a client certificate,
@@ -130,10 +144,27 @@ func (b *Broker) Resolve(ctx context.Context, clusterID string, refresh bool) (*
 	case sdk.CredentialDelegate:
 		return &Resolved{Delegate: c.Exec}, nil
 	case sdk.CredentialOIDC:
-		return nil, sdk.Errorf(sdk.Unimplemented, "OIDC login (issuer %s) is not supported yet", c.Issuer)
+		return b.resolveOIDC(ctx, clusterID, c, refresh)
 	default:
 		return nil, fmt.Errorf("unknown credential type %q", c.Type)
 	}
+}
+
+// resolveOIDC signs in to the credential's issuer, or reuses the sign-in,
+// and returns its ID token.
+func (b *Broker) resolveOIDC(ctx context.Context, clusterID string, c sdk.Credential, refresh bool) (*Resolved, error) {
+	if b.OIDC == nil {
+		return nil, sdk.Errorf(sdk.Unimplemented, "this command cannot sign in to %s", c.Issuer)
+	}
+	token, exp, err := b.OIDC.IDToken(ctx, c, refresh)
+	if errors.Is(err, ErrLoginRequired) {
+		return nil, sdk.Errorf(sdk.Unauthenticated, "not signed in to %s", c.Issuer).
+			WithHint(fmt.Sprintf("run `tug auth login %s` to sign in", clusterID))
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Resolved{Token: token, ExpiresAt: &exp}, nil
 }
 
 // ExecCredential returns the client.authentication.k8s.io/v1 ExecCredential
