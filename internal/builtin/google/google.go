@@ -232,8 +232,12 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 	if err := json.Unmarshal(body, &lr); err != nil {
 		return nil, provider.Errorf(provider.Internal, "decoding Container API response: %v", err)
 	}
+	// A location that did not answer is not evidence that its clusters are
+	// gone. A partial list would mark them stale, so fail the whole listing
+	// and leave the catalog as it was.
 	if len(lr.MissingZones) > 0 {
-		fmt.Fprintf(os.Stderr, "google: these locations did not answer and may be missing: %s\n", strings.Join(lr.MissingZones, ", "))
+		return nil, provider.Errorf(provider.Unavailable, "these locations did not answer: %s", strings.Join(lr.MissingZones, ", ")).
+			WithHint("try tug sync again shortly")
 	}
 	out := make([]provider.Cluster, 0, len(lr.Clusters))
 	for _, c := range lr.Clusters {

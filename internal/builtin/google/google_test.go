@@ -37,6 +37,8 @@ func fakeContainerAPI(t *testing.T, token string) *httptest.Server {
 			fmt.Fprint(w, `{"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}`)
 		case r.URL.Path == "/v1/projects/acme-prod/locations/-/clusters":
 			fmt.Fprintf(w, listBody, ca)
+		case r.URL.Path == "/v1/projects/partial/locations/-/clusters":
+			fmt.Fprint(w, `{"clusters":[],"missingZones":["asia-east1-a"]}`)
 		case r.URL.Path == "/v1/projects/disabled/locations/-/clusters":
 			w.WriteHeader(http.StatusForbidden)
 			fmt.Fprint(w, `{"error":{"code":403,"message":"Kubernetes Engine API has not been used in project disabled before or it is disabled.","status":"PERMISSION_DENIED"}}`)
@@ -96,6 +98,8 @@ func TestListErrors(t *testing.T) {
 		{"no ADC", newTestProvider(srv, "", errors.New("could not find default credentials")), "acme-prod", provider.Unauthenticated, "application-default login"},
 		{"API disabled", newTestProvider(srv, "ya29.good", nil), "disabled", provider.PermissionDenied, "gcloud services enable container.googleapis.com"},
 		{"no project", newTestProvider(srv, "ya29.good", nil), "", provider.InvalidConfig, "--account"},
+		// A partial list would mark the missing locations' clusters stale.
+		{"missing zones", newTestProvider(srv, "ya29.good", nil), "partial", provider.Unavailable, "sync again"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
