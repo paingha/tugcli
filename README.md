@@ -49,8 +49,8 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 | `local` | built-in | one per tool found: kind and k3d (through their CLIs), minikube, Docker Desktop, OrbStack, Rancher Desktop (through their contexts) | the tool's client certificate, read fresh after a recreate; labelled `local=true`, `distro=<tool>`, `env=dev` |
 | `aws` (EKS) | built-in | `~/.aws` profiles; `--set regions=us-east-1,eu-west-1` | short-lived token from a presigned STS request; no AWS CLI needed |
 | `google` (GKE) | built-in | gcloud configurations (one account per project) | short-lived OAuth token from Application Default Credentials, else `gke-gcloud-auth-plugin` |
-| `akamai` (LKE) | plugin, [plugins/akamai](plugins/akamai) | personal access token with Kubernetes read/write | the kubeconfig's token, kept in the keychain; `rotate` regenerates it |
-| `coreweave` (CKS) | plugin, [plugins/coreweave](plugins/coreweave) | API access token | the API token (managed auth), or the cluster's OIDC issuer with `--set auth=oidc` |
+| `akamai` (LKE) | plugin, [plugins/akamai](plugins/akamai) | personal access token with Kubernetes read/write | the kubeconfig's token, kept in the keychain; the plugin can regenerate it (`rotate`), though no tug command asks it to yet |
+| `coreweave` (CKS) | plugin, [plugins/coreweave](plugins/coreweave) | API access token | the API token (managed auth); `--set auth=oidc` returns the cluster's OIDC issuer, but tug cannot sign in with OIDC yet |
 
 ```bash
 tug import local --account kind           # every kind cluster, even ones no kubeconfig mentions
@@ -108,7 +108,13 @@ tug plugin ls | describe | link | unlink | remove
 Install verifies every binary against the manifest, refuses archives with
 links or paths outside the plugin directory, and shows the plugin's
 publisher, secrets and network hosts before asking to confirm. Plugins run
-with a scrubbed environment and receive only the secrets they declare.
+with a scrubbed environment and receive only the secrets they declare. A
+plugin whose `minTugVersion` is newer than tug is refused. Fields in
+`plugin.yaml` that tug does not know are ignored with a warning, and
+`tug import` warns about `--set` keys the plugin's `accountConfig` does not
+describe.
+`plugins.timeouts` in `config.yaml` sets the time allowed for each operation,
+for example `{list: 60s, rotate: 2m}`.
 
 With the Go SDK, a plugin is mostly two methods:
 
