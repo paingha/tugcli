@@ -80,6 +80,10 @@ type Cluster struct {
 	InsecureSkipTLSVerify bool   `json:"insecureSkipTLSVerify,omitempty"`
 	ProxyURL              string `json:"proxyURL,omitempty"`
 	DefaultNamespace      string `json:"defaultNamespace,omitempty"`
+	// Tunnel is how tug reaches the API server when it is not directly
+	// reachable, such as ssh://user@bastion or ssm://i-0123456789abcdef0.
+	// The user sets it with `tug tunnel set`, and syncs keep it.
+	Tunnel string `json:"tunnel,omitempty"`
 
 	// Labels come from the provider and are normalised; UserLabels are set by
 	// the user and win over them.
@@ -245,6 +249,7 @@ func (c *Catalog) Merge(src Source, listed []provider.Cluster, now time.Time) Me
 		if existing := c.byID(id); existing != nil {
 			next.Name = existing.Name
 			next.UserLabels = existing.UserLabels
+			next.Tunnel = existing.Tunnel
 			next.FirstSeen = existing.FirstSeen
 			// A listing without a CA for an unchanged endpoint means the
 			// provider could not fetch it this time, for example a kubeconfig

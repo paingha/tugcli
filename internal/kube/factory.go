@@ -23,6 +23,7 @@ import (
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/guard"
+	"github.com/paingha/tugcli/internal/tunnel"
 )
 
 // discoveryTTL is how long cached API discovery stays fresh.
@@ -38,6 +39,8 @@ type Factory struct {
 	// beneath it.
 	CacheDir  string
 	UserAgent string
+	// Tunnels opens the cluster's tunnel, when it has one.
+	Tunnels *tunnel.Pool
 }
 
 // RESTConfig returns a client config for the cluster.
@@ -54,7 +57,19 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 		QPS:   50,
 		Burst: 100,
 	}
-	if cl.ProxyURL != "" {
+	switch {
+	case cl.Tunnel != "":
+		// The tunnel is a proxy to client-go, so exec, attach and
+		// port-forward upgrades go through it too.
+		if f.Tunnels == nil {
+			return nil, fmt.Errorf("cluster %s is reached through a tunnel, which this command cannot open", cl.Name)
+		}
+		u, err := f.Tunnels.ProxyURL(ctx, cl.Tunnel)
+		if err != nil {
+			return nil, fmt.Errorf("opening the tunnel to %s: %w", cl.Name, err)
+		}
+		cfg.Proxy = http.ProxyURL(u)
+	case cl.ProxyURL != "":
 		u, err := url.Parse(cl.ProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("cluster %s: invalid proxy URL: %w", cl.Name, err)

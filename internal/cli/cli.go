@@ -33,6 +33,7 @@ import (
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/session"
+	"github.com/paingha/tugcli/internal/tunnel"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -53,6 +54,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		stderr: stderr,
 		now:    time.Now,
 	}
+	defer a.closeTunnels()
 	root := newRootCmd(a)
 	root.SetArgs(args)
 	root.SetIn(stdin)
@@ -90,10 +92,11 @@ type app struct {
 
 	// mu guards the pieces below, which load on first use. tugd asks for
 	// them from concurrent proxy requests.
-	mu       sync.Mutex
-	store    credentials.Store
-	reg      *registry.Registry
-	problems []plugin.Problem
+	mu         sync.Mutex
+	tunnelPool *tunnel.Pool
+	store      credentials.Store
+	reg        *registry.Registry
+	problems   []plugin.Problem
 }
 
 // exitError carries a specific exit code without printing anything more.
@@ -203,6 +206,26 @@ func (a *app) services(cat *catalog.Catalog) (*importer.Service, *credentials.Br
 	broker := &credentials.Broker{Store: store, Now: a.now, Fetch: svc.Fetcher(cat), OIDC: a.oidcClient(store, a.implicitSignIn())}
 	svc.Broker = broker
 	return svc, broker, nil
+}
+
+// tunnels returns the pool that keeps this process's tunnels open.
+func (a *app) tunnels() *tunnel.Pool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.tunnelPool == nil {
+		a.tunnelPool = tunnel.NewPool(tunnel.WithLogger(a.log))
+	}
+	return a.tunnelPool
+}
+
+// closeTunnels ends every tunnel this process opened.
+func (a *app) closeTunnels() {
+	a.mu.Lock()
+	p := a.tunnelPool
+	a.mu.Unlock()
+	if p != nil {
+		_ = p.Close() // best effort on the way out
+	}
 }
 
 // oidcClient returns the client that signs in to OpenID Connect issuers.

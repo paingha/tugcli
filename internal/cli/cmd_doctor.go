@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/paingha/tugcli/internal/kube"
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/session"
+	"github.com/paingha/tugcli/internal/tunnel"
 	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/provider"
 )
@@ -164,8 +166,15 @@ func (a *app) doctorCluster(cfg *doctor.Config, cat *catalog.Catalog, cl *catalo
 		Guard:     &guard.Policy{Cluster: cl.Name, ReadOnly: true, Now: a.now},
 		CacheDir:  a.paths.Cache,
 		UserAgent: "tug/" + version.String(),
+		Tunnels:   a.tunnels(),
 	}
 	cfg.RESTConfig = f.RESTConfig
+	if cl.Tunnel != "" {
+		cfg.Tunnel = tunnel.Redacted(cl.Tunnel)
+		cfg.Dial = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return a.tunnels().Dial(ctx, cl.Tunnel, addr)
+		}
+	}
 
 	p, err := a.registry().Get(cl.Provider)
 	if err != nil {

@@ -20,6 +20,7 @@ import (
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/resolve"
 	"github.com/paingha/tugcli/internal/session"
+	"github.com/paingha/tugcli/internal/tunnel"
 	"github.com/paingha/tugcli/internal/version"
 )
 
@@ -77,6 +78,11 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 		readOnly = false
 	}
 	auth := session.AuthCommand{Command: selfPath()}
+	if cl.Tunnel != "" && !o.proxy {
+		// kubectl cannot open tug's tunnels; tugd can, and keeps them open.
+		fmt.Fprintln(a.stderr, a.colors().Dim(cl.Name+" is reached through "+tunnel.Redacted(cl.Tunnel)+", so this session goes through tugd"))
+		o.proxy = true
+	}
 	if o.proxy {
 		c, err := a.ensureDaemon(ctx)
 		if err != nil {
@@ -344,6 +350,7 @@ func (a *app) factory(s *session.Session) (*kube.Factory, error) {
 		Guard:     policy,
 		CacheDir:  a.paths.Cache,
 		UserAgent: "tug/" + version.String(),
+		Tunnels:   a.tunnels(),
 	}, nil
 }
 

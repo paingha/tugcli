@@ -131,6 +131,19 @@ func checkCluster(ctx context.Context, cfg Config, kubectlVersion string) []Resu
 // networkChecks resolves the host and opens a TCP connection. It reports
 // whether the cluster is reachable.
 func networkChecks(ctx context.Context, cfg Config, host, addr string, add func(Result)) bool {
+	if cfg.Tunnel != "" {
+		dctx, cancel := context.WithTimeout(ctx, 3*cfg.Timeout) // a tunnel may sign in first
+		defer cancel()
+		conn, err := cfg.Dial(dctx, "tcp", addr)
+		if err != nil {
+			add(cluster("tunnel", Fail, fmt.Sprintf("cannot reach %s through %s: %v", addr, cfg.Tunnel, err),
+				"check that the jump host, instance or proxy is up and that you can sign in to it; `tug tunnel test` retries the tunnel alone"))
+			return false
+		}
+		conn.Close()
+		add(cluster("tunnel", OK, "reached "+addr+" through "+cfg.Tunnel, ""))
+		return true
+	}
 	if net.ParseIP(host) == nil {
 		lctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		addrs, err := cfg.Resolver.LookupHost(lctx, host)

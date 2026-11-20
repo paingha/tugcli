@@ -74,7 +74,7 @@ func (a *app) daemonUpstream(ctx context.Context, clusterID string) (*rest.Confi
 	if err != nil {
 		return nil, err
 	}
-	f := &kube.Factory{Cluster: cl, Broker: broker, CacheDir: a.paths.Cache, UserAgent: "tugd/" + version.String()}
+	f := &kube.Factory{Cluster: cl, Broker: broker, CacheDir: a.paths.Cache, UserAgent: "tugd/" + version.String(), Tunnels: a.tunnels()}
 	return f.RESTConfig(ctx)
 }
 
