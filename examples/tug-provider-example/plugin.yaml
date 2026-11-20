@@ -1,0 +1,25 @@
+# Manifest for the example plugin. Link it for development with:
+#   go build -o bin/tug-provider-example . && tug plugin link .
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: example
+  version: 0.1.0
+  publisher: tug
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/tug-provider-example}
+  - {os: darwin, arch: amd64, bin: bin/tug-provider-example}
+  - {os: linux, arch: amd64, bin: bin/tug-provider-example}
+  - {os: linux, arch: arm64, bin: bin/tug-provider-example}
+  - {os: windows, arch: amd64, bin: bin/tug-provider-example.exe}
+  secrets:
+  - {name: api_token, prompt: "Example API token"}
+  env: []
+  network: []
+  accountConfig:
+    type: object
+    properties:
+      clusters: {type: string, description: "name=url pairs, comma separated"}

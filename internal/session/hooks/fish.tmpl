@@ -1,0 +1,65 @@
+# tug shell integration for fish. Add this to ~/.config/fish/config.fish:
+#   tug init fish | source
+# Set TUG_PROMPT_DISABLE=1 to keep your prompt unchanged and use $TUG_PROMPT yourself.
+set -g _tug_bin {{.Bin}}
+
+if test "$TUG_SESSION_PID" != "$fish_pid"
+    $_tug_bin session new --shell fish --pid $fish_pid --parent "$TUG_SESSION" | source
+end
+
+function _tug_sync --on-event fish_prompt
+    set -l f "$TUG_SESSION_DIR/kubeconfig"
+    if test -n "$TUG_SESSION_DIR"; and test -f "$f"
+        set -gx KUBECONFIG $f
+        set -g TUG_PROMPT ""
+        if test -r "$TUG_SESSION_DIR/prompt"
+            read -l -d \t style text < "$TUG_SESSION_DIR/prompt"
+            switch "$style"
+                case prod
+                    set -g TUG_PROMPT (set_color -o red)"⎈ $text (read-only)"(set_color normal)" "
+                case unlocked
+                    set -g TUG_PROMPT (set_color -o yellow)"⎈ $text (unlocked)"(set_color normal)" "
+                case '*'
+                    set -g TUG_PROMPT (set_color cyan)"⎈ $text"(set_color normal)" "
+            end
+        end
+    else
+        if test "$KUBECONFIG" = "$f"
+            if test -n "$TUG_ORIG_KUBECONFIG"
+                set -gx KUBECONFIG $TUG_ORIG_KUBECONFIG
+            else
+                set -e KUBECONFIG
+            end
+        end
+        set -g TUG_PROMPT ""
+    end
+end
+
+function _tug_exit --on-event fish_exit
+    if test "$TUG_SESSION_PID" = "$fish_pid"
+        $_tug_bin session end --id "$TUG_SESSION" >/dev/null 2>&1
+    end
+end
+
+function tug
+    $_tug_bin $argv
+    set -l rc $status
+    _tug_sync
+    return $rc
+end
+
+function _tug_return
+    return $argv[1]
+end
+
+if test "$TUG_PROMPT_DISABLE" != 1; and not functions -q _tug_orig_fish_prompt; and functions -q fish_prompt
+    functions -c fish_prompt _tug_orig_fish_prompt
+    function fish_prompt
+        set -l last $status
+        printf '%s' $TUG_PROMPT
+        _tug_return $last
+        _tug_orig_fish_prompt
+    end
+end
+
+_tug_sync

@@ -1,0 +1,63 @@
+# GoReleaser: signed binaries for macOS, Linux and Windows (Phase 0).
+version: 2
+
+project_name: tug
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: tug
+    main: ./cmd/tug
+    binary: tug
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/paingha/tugcli/internal/version.version={{ .Version }}
+      - -X github.com/paingha/tugcli/internal/version.commit={{ .FullCommit }}
+      - -X github.com/paingha/tugcli/internal/version.date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+# Keyless signing with Sigstore; the release workflow grants id-token: write.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - --output-signature=${signature}
+      - --output-certificate=${certificate}
+      - ${artifact}
+      - --yes
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
+
+# Package managers. These need their tap/bucket repositories and a token
+# before they can be enabled:
+# homebrew_casks:
+#   - repository: {owner: paingha, name: homebrew-tap, token: "{{ .Env.TAP_TOKEN }}"}
+# scoops:
+#   - repository: {owner: paingha, name: scoop-bucket, token: "{{ .Env.TAP_TOKEN }}"}
+# krews:
+#   - repository: {owner: paingha, name: krew-index, token: "{{ .Env.TAP_TOKEN }}"}

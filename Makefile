@@ -1,0 +1,69 @@
+SHELL := /bin/bash
+
+MODULE   := github.com/paingha/tugcli
+BIN      := bin/tug
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT   ?= $(shell git rev-parse HEAD 2>/dev/null)
+DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS  := -s -w \
+	-X $(MODULE)/internal/version.version=$(VERSION) \
+	-X $(MODULE)/internal/version.commit=$(COMMIT) \
+	-X $(MODULE)/internal/version.date=$(DATE)
+
+GOLANGCI_LINT ?= golangci-lint
+KIND_CLUSTER  ?= tug-e2e
+
+.PHONY: all
+all: lint test build
+
+.PHONY: build
+build: ## Build bin/tug
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/tug
+
+.PHONY: example-plugin
+example-plugin: ## Build the example provider plugin
+	go build -o examples/tug-provider-example/bin/tug-provider-example ./examples/tug-provider-example
+
+.PHONY: test
+test: ## Run unit and in-process end-to-end tests
+	go test -race ./...
+
+.PHONY: test-short
+test-short: ## Skip tests that build binaries
+	go test -short ./...
+
+.PHONY: cover
+cover: ## Write coverage.html
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out -o coverage.html
+
+.PHONY: lint
+lint: ## Run golangci-lint
+	$(GOLANGCI_LINT) run ./...
+
+.PHONY: fmt
+fmt: ## Format code
+	gofmt -w .
+	$(GOLANGCI_LINT) fmt ./...
+
+.PHONY: tidy
+tidy: ## Tidy go.mod and fail if it changed
+	go mod tidy
+	git diff --exit-code go.mod go.sum
+
+.PHONY: e2e-kind
+e2e-kind: build ## Create a kind cluster and run the end-to-end script against it
+	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER) --wait 60s
+	TUG_BIN=$(abspath $(BIN)) KIND_CLUSTER=$(KIND_CLUSTER) ./scripts/e2e-kind.sh
+
+.PHONY: snapshot
+snapshot: ## Build release artifacts locally without publishing
+	goreleaser release --snapshot --clean
+
+.PHONY: clean
+clean:
+	rm -rf bin dist coverage.out coverage.html examples/tug-provider-example/bin
+
+.PHONY: help
+help:
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'

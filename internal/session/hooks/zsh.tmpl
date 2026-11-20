@@ -1,0 +1,51 @@
+# tug shell integration for zsh. Add this to the end of ~/.zshrc:
+#   eval "$(tug init zsh)"
+# Set TUG_PROMPT_DISABLE=1 to keep your prompt unchanged and use $TUG_PROMPT yourself.
+typeset -g _tug_bin={{.Bin}}
+
+if [[ "${TUG_SESSION_PID:-}" != "$$" ]]; then
+  eval "$("$_tug_bin" session new --shell zsh --pid $$ --parent "${TUG_SESSION:-}")"
+fi
+
+_tug_sync() {
+  local f="${TUG_SESSION_DIR:-}/kubeconfig" style text
+  if [[ -n "${TUG_SESSION_DIR:-}" && -f "$f" ]]; then
+    export KUBECONFIG="$f"
+    typeset -g TUG_PROMPT=""
+    if [[ -r "$TUG_SESSION_DIR/prompt" ]] && IFS=$'\t' read -r style text < "$TUG_SESSION_DIR/prompt"; then
+      text="${text//\%/%%}"
+      case "$style" in
+        prod) TUG_PROMPT="%B%F{red}⎈ ${text} (read-only)%f%b " ;;
+        unlocked) TUG_PROMPT="%B%F{yellow}⎈ ${text} (unlocked)%f%b " ;;
+        *) TUG_PROMPT="%F{cyan}⎈ ${text}%f " ;;
+      esac
+    fi
+  else
+    if [[ "${KUBECONFIG:-}" == "$f" ]]; then
+      if [[ -n "${TUG_ORIG_KUBECONFIG:-}" ]]; then export KUBECONFIG="$TUG_ORIG_KUBECONFIG"; else unset KUBECONFIG; fi
+    fi
+    typeset -g TUG_PROMPT=""
+  fi
+}
+
+_tug_exit() {
+  [[ "${TUG_SESSION_PID:-}" == "$$" ]] && "$_tug_bin" session end --id "$TUG_SESSION" >/dev/null 2>&1
+}
+
+tug() {
+  "$_tug_bin" "$@"
+  local rc=$?
+  _tug_sync
+  return $rc
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _tug_sync
+add-zsh-hook zshexit _tug_exit
+
+if [[ "${TUG_PROMPT_DISABLE:-}" != 1 && "$PROMPT" != *'${TUG_PROMPT}'* ]]; then
+  setopt prompt_subst
+  PROMPT='${TUG_PROMPT}'"$PROMPT"
+fi
+
+_tug_sync
