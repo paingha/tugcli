@@ -1,0 +1,27 @@
+# Manifest for the Python SDK's example plugin. Link it from a checkout of
+# tugcli with:
+#   tug plugin link sdk/python/examples/tug-provider-pyexample
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: pyexample
+  version: 0.1.0
+  publisher: tug
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, accounts, serve]
+  # One script serves every platform with python3. Windows is left out
+  # because it cannot run the script directly.
+  platforms:
+  - {os: darwin, arch: arm64, bin: tug-provider-pyexample}
+  - {os: darwin, arch: amd64, bin: tug-provider-pyexample}
+  - {os: linux, arch: amd64, bin: tug-provider-pyexample}
+  - {os: linux, arch: arm64, bin: tug-provider-pyexample}
+  secrets:
+  - {name: api_token, prompt: "Example API token (starts with ex_)"}
+  env: [PYEXAMPLE_CLUSTERS]
+  network: []
+  accountConfig:
+    type: object
+    properties:
+      clusters: {type: string, description: "name=url pairs, comma separated"}

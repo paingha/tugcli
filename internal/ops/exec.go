@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -55,21 +56,61 @@ func Exec(ctx context.Context, cfg *rest.Config, cs kubernetes.Interface, o Exec
 			TTY:       o.TTY,
 		}, scheme.ParameterCodec)
 
-	exec, err := newExecutor(cfg, req.URL())
-	if err != nil {
-		return err
-	}
-	stderr := o.Stderr
-	if o.TTY {
-		stderr = nil // a TTY merges stderr into stdout
-	}
-	return exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	return stream(ctx, cfg, req.URL(), remotecommand.StreamOptions{
 		Stdin:             o.Stdin,
 		Stdout:            o.Stdout,
-		Stderr:            stderr,
+		Stderr:            o.Stderr,
 		Tty:               o.TTY,
 		TerminalSizeQueue: o.Sizes,
 	})
+}
+
+// AttachOptions describe a connection to a running container's console.
+type AttachOptions struct {
+	Namespace string
+	Pod       string
+	Container string
+
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+	TTY    bool
+	// Sizes reports terminal resizes when TTY is set.
+	Sizes remotecommand.TerminalSizeQueue
+}
+
+// Attach connects to the console of a running container, as kubectl attach
+// does, over WebSockets with a SPDY fallback. The session guard sees it as a
+// write.
+func Attach(ctx context.Context, cfg *rest.Config, cs kubernetes.Interface, o AttachOptions) error {
+	req := cs.CoreV1().RESTClient().Post().
+		Resource("pods").Namespace(o.Namespace).Name(o.Pod).SubResource("attach").
+		VersionedParams(&corev1.PodAttachOptions{
+			Container: o.Container,
+			Stdin:     o.Stdin != nil,
+			Stdout:    o.Stdout != nil,
+			Stderr:    o.Stderr != nil && !o.TTY,
+			TTY:       o.TTY,
+		}, scheme.ParameterCodec)
+	return stream(ctx, cfg, req.URL(), remotecommand.StreamOptions{
+		Stdin:             o.Stdin,
+		Stdout:            o.Stdout,
+		Stderr:            o.Stderr,
+		Tty:               o.TTY,
+		TerminalSizeQueue: o.Sizes,
+	})
+}
+
+// stream connects local streams to an exec or attach URL.
+func stream(ctx context.Context, cfg *rest.Config, u *url.URL, o remotecommand.StreamOptions) error {
+	exec, err := newExecutor(cfg, u)
+	if err != nil {
+		return err
+	}
+	if o.Tty {
+		o.Stderr = nil // a TTY merges stderr into stdout
+	}
+	return exec.StreamWithContext(ctx, o)
 }
 
 func newExecutor(cfg *rest.Config, u *url.URL) (remotecommand.Executor, error) {
@@ -97,4 +138,21 @@ func ExitCode(err error) (int, bool) {
 		return ee.ExitStatus(), true
 	}
 	return 0, false
+}
+
+// NoShell reports whether Exec failed because the container has no /bin/sh
+// to run, as in distroless images. Container runtimes say so only in the
+// error's text ("stat /bin/sh: no such file or directory" from runc,
+// "executable file `/bin/sh` not found" from crun), so this is the one
+// place tug reads an error message.
+func NoShell(err error) bool {
+	if err == nil {
+		return false
+	}
+	if _, ok := ExitCode(err); ok {
+		return false // the shell ran and exited
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "/bin/sh") &&
+		(strings.Contains(msg, "no such file or directory") || strings.Contains(msg, "not found"))
 }

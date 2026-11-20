@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""tug-provider-pyexample: a minimal tug provider plugin built with the Python
+SDK, the counterpart of the Go SDK's examples/tug-provider-example.
+
+It lists the clusters named in its account's clusters setting and hands out
+the account's api_token as a bearer token. Its accounts operation offers one
+account when PYEXAMPLE_CLUSTERS is set, as a real plugin offers the profiles
+of a vendor CLI.
+
+Try it from a shell:
+
+    echo '{"kind":"ListRequest","account":{"id":"demo","config":{"clusters":"dev=https://127.0.0.1:6443"}},"secrets":{"api_token":"ex_demo"}}' \\
+      | ./tug-provider-pyexample list
+
+Check it against the protocol with `tug plugin link .` and
+`TUG_SECRET_API_TOKEN=ex_test tug plugin test pyexample --set clusters=dev=https://127.0.0.1:6443`.
+"""
+
+import os
+import sys
+
+try:
+    import tug_provider
+except ImportError:
+    # Not installed: run from a checkout of tugcli, with the SDK two
+    # directories up. A plugin of your own installs the SDK or bundles it.
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, os.pardir))
+
+from tug_provider import (
+    INVALID_CONFIG,
+    NO_EXPIRY,
+    UNAUTHENTICATED,
+    Account,
+    Cluster,
+    Endpoints,
+    Info,
+    Provider,
+    ProviderError,
+    SecretSpec,
+    main,
+    token,
+)
+
+# TOKEN_PREFIX marks this provider's tokens. Checking it lets the plugin
+# answer Unauthenticated for an obviously wrong token without calling an
+# API, as a real provider would after its API returned 401.
+TOKEN_PREFIX = "ex_"
+
+
+def check_token(secrets):
+    api_token = secrets.get("api_token", "")
+    if not api_token:
+        raise ProviderError(UNAUTHENTICATED, "no api_token")
+    if not api_token.startswith(TOKEN_PREFIX):
+        raise ProviderError(UNAUTHENTICATED, "api_token is not an example token", hint="example tokens start with " + TOKEN_PREFIX)
+
+
+class Example(Provider):
+    def info(self):
+        return Info(
+            name="pyexample",
+            version="0.1.0",
+            description="Example clusters, for learning the Python SDK",
+            secrets=[SecretSpec("api_token", prompt="Example API token (starts with ex_)")],
+        )
+
+    def accounts(self):
+        # Offers the clusters in PYEXAMPLE_CLUSTERS, which plugin.yaml lets
+        # through tug's scrubbed environment.
+        clusters = os.environ.get("PYEXAMPLE_CLUSTERS", "")
+        if not clusters:
+            return []
+        return [Account("env", description="clusters from PYEXAMPLE_CLUSTERS", config={"clusters": clusters})]
+
+    def list(self, request):
+        """Reads "name=url,name=url" from the account's clusters setting."""
+        check_token(request.secrets)
+        spec = request.account.config_string("clusters")
+        if not spec:
+            raise ProviderError(
+                INVALID_CONFIG,
+                "account %r has no clusters setting" % request.account.id,
+                hint="tug import pyexample --account demo --set clusters=dev=https://127.0.0.1:6443",
+            )
+        clusters = []
+        for entry in spec.split(","):
+            name, sep, server = entry.strip().partition("=")
+            if not sep:
+                raise ProviderError(INVALID_CONFIG, "bad cluster entry %r; want name=url" % entry)
+            clusters.append(Cluster(id=name, name=name, endpoints=Endpoints(public=server), labels={"example": "true"}))
+        return clusters
+
+    def credential(self, request):
+        """Returns the account's token, which does not expire. A provider that
+        mints short-lived tokens passes their expiry instead."""
+        check_token(request.secrets)
+        return token(request.secrets["api_token"], NO_EXPIRY)
+
+
+if __name__ == "__main__":
+    sys.exit(main(Example()))

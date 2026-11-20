@@ -560,8 +560,14 @@ passes `tug doctor --egress-ip <address>`. Return one finding per conclusion,
 with severity `info`, `warning` or `error`, and a `fix` for anything the user
 can act on.
 
-The protocol also names a `serve` operation and capability, reserved for a
-future long-running mode. Do not declare it: the SDK answers `Unimplemented`.
+### serve
+
+Every plugin built with the SDK can also run in serve mode, where one
+process answers many requests ([section 6](#serve-mode)). Add `serve` to
+`capabilities` in `plugin.yaml` and tug uses it: tugd and commands that make
+several calls then skip starting a process for each. Nothing in your code
+changes, but state kept in package variables now lives across requests, and
+requests run concurrently, so guard it.
 
 ## 6. Protocol reference
 
@@ -577,7 +583,8 @@ tug-provider-<name> <operation>
 ```
 
 - The operation is the only argument: `describe`, `accounts`, `list`,
-  `credential`, `rotate` or `checkAccess` (`serve` is reserved).
+  `credential`, `rotate`, `checkAccess`, or `serve`
+  ([serve mode](#serve-mode)).
 - tug writes one JSON request to stdin and closes it.
 - The plugin writes one JSON object to stdout, then exits: 0 for a response,
   non-zero for an `Error`. The SDK uses 1 for errors and 2 for usage errors
@@ -691,6 +698,38 @@ Without `expiresAt`, the credential does not expire.
 `code` is one of the codes in [section 4](#errors); tug treats a missing code
 as `Internal`. `hint` and `retryAfterSeconds` are optional.
 
+### Serve mode
+
+`tug-provider-<name> serve` keeps running and answers many requests, when
+the manifest lists the `serve` capability. The SDK implements it for every
+plugin.
+
+- stdin carries one JSON object per line:
+  `{"id": "<string>", "op": "<operation>", "request": <request message>}`.
+  `request` is the message one-shot mode would read, and is left out for
+  `describe` and `accounts`.
+- stdout carries one line per request:
+  `{"id": "<same id>", "response": <response or Error message>}`, exactly
+  what one-shot mode would write for it. Requests run concurrently, so
+  responses may come out of order; lines must not interleave.
+- `{"id": "<id>", "cancel": true}` asks the plugin to stop working on that
+  request; it should answer it soon, usually with an error.
+- An unknown operation gets an `Error` with that request's id. A line that
+  is not JSON, or has no id, gets an `Error` with an empty id, and serving
+  goes on.
+- When stdin closes, the plugin finishes what is in flight and exits 0. On
+  SIGTERM it stops at once.
+- Each line is at most 16 MiB plus 64 KiB. tug applies each operation's
+  timeout per request, sends `cancel` when one runs out, and starts the
+  process again if it exits.
+
+```text
+→ {"id":"1","op":"describe"}
+→ {"id":"2","op":"list","request":{"apiVersion":"provider/v1alpha1","kind":"ListRequest",...}}
+← {"id":"2","response":{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[...]}}
+← {"id":"1","response":{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse",...}}
+```
+
 ### Limits
 
 | Limit | Value |
@@ -762,7 +801,7 @@ spec:
 | `metadata.publisher` | no | Who publishes the plugin. Shown before install. |
 | `metadata.homepage` | no | Where users can read about it. Shown before install. |
 | `spec.protocols` | yes | Protocol versions the plugin speaks; must include `provider/v1alpha1`. |
-| `spec.capabilities` | no | `list` and `credential`, plus any of `accounts`, `rotate`, `checkAccess`. tug assumes `list` and `credential` even when they are missing, and calls optional operations only when they are listed here. |
+| `spec.capabilities` | no | `list` and `credential`, plus any of `accounts`, `rotate`, `checkAccess` and `serve`. tug assumes `list` and `credential` even when they are missing, calls optional operations only when they are listed here, and runs the plugin in [serve mode](#serve-mode) when `serve` is. |
 | `spec.platforms` | yes | One entry per OS and architecture: `os` and `arch` as in Go (`darwin`, `linux`, `windows`; `amd64`, `arm64`), and `bin`, the executable's path relative to the manifest. tug runs the entry for its own platform. |
 | `spec.platforms[].sha256` | no | Leave it out: `tug plugin package` fills it in the archived manifest, and installed plugins must match it. |
 | `spec.secrets` | no | Secrets tug asks for once per account and keeps in the keychain: `name`, `prompt` (what tug asks), and `optional: true` for ones the plugin can do without. The plugin receives these and no others. |
@@ -947,7 +986,7 @@ is the plugin's whole environment; leave it nil to inherit the test's.
 | `accounts is valid` | When `describe` declares `accounts`, the operation returns accounts that each have an `id`. | |
 | `SIGTERM stops the plugin promptly` | A plugin waiting for its request exits within 2 seconds of SIGTERM. Skipped on Windows. | Ignoring the context; a script that traps SIGTERM and carries on. |
 | `stdout carries only one JSON object` | Every call above wrote exactly one JSON object to stdout and nothing else. | Debug output on stdout; two JSON documents. |
-| `serve answers like one-shot mode` | Always skipped in this version. | |
+| `serve answers like one-shot mode` | When describe lists `serve`: concurrent requests, an unknown operation, an empty request and an unreadable line are each answered by id, and the plugin exits once stdin closes. Skipped otherwise. | Writing lines from several requests at once without a lock; exiting on the first error; waiting forever after stdin closes. |
 
 The whole suite takes a few seconds, and skips are not failures. Run it with
 real data (`--account`, or `--set` and `TUG_SECRET_*`) before you release, so
@@ -1038,7 +1077,45 @@ plugin directory or a directory of them, separated like `PATH`. Run
 `tug plugin unlink acme` to use the installed copy. `tug plugin remove acme`
 removes every installed version.
 
+### Publish to an index
+
+A plugin index lets users install by name, `tug plugin install acme`, with
+everything checked: the index is signed with ed25519, it pins each
+archive's sha256, and each archive's manifest pins every binary's. Whoever
+runs an index adds released archives and signs it:
+
+```bash
+tug plugin index keygen                      # once; prints the public key users configure
+tug plugin index add index.yaml dist/tug-provider-acme_0.1.0.tar.gz \
+  --url https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz \
+  --description "Acme Kubernetes clusters"
+tug plugin index sign index.yaml             # writes index.yaml.sig; set TUG_INDEX_KEY in CI
+```
+
+Publish `index.yaml` and `index.yaml.sig` side by side over https. Users
+add the index to `config.yaml`:
+
+```yaml
+plugins:
+  indexes:
+  - name: acme
+    url: https://plugins.acme.example/index.yaml
+    publicKey: <the key keygen printed>
+```
+
+and then `tug plugin search` and `tug plugin install <name>[@version]` use
+it. The signing key lives in tug's credential store; keep a copy somewhere
+safe, since an index signed with a lost key can only be replaced by a new
+key that every user configures again.
+
 ## 11. Plugins without the SDK
+
+The Python SDK, [sdk/python](../sdk/python), the `tug_provider` package, gives
+Python plugins the same shape as the Go SDK: a `Provider` class with `list`
+and `credential`, typed clusters and credentials, `ProviderError` with the
+codes above, and `main()`. It has no dependencies, and its README shows how
+to ship it inside a plugin with `zipapp`. The rest of this section is for
+plugins with no SDK at all.
 
 ### Python
 

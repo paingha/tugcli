@@ -6,6 +6,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -54,6 +55,10 @@ func objects() []runtime.Object {
 		pod("api-server-7d9f-aaaaa", "api-server", "ReplicaSet", false, time.Minute),
 		pod("api-server-7d9f-bbbbb", "api-server", "ReplicaSet", true, time.Hour),
 		pod("api-server-7d9f-ccccc", "api-server", "ReplicaSet", true, time.Second),
+		&batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Name: "migrate", Namespace: "web"},
+			Spec:       batchv1.JobSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "migrate"}}},
+		},
 		pod("debug", "debug", "", true, time.Minute),
 		pod("migrate-x1", "migrate", "Job", false, time.Minute),
 	}
@@ -66,8 +71,9 @@ func TestWorkloadResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 3 deployments, 1 statefulset, 2 standalone pods (debug, the Job's pod).
-	if len(all) != 6 {
+	// 3 deployments, 1 statefulset, 1 job and 2 standalone pods (debug, the
+	// Job's pod).
+	if len(all) != 7 {
 		t.Fatalf("got %d candidates: %v", len(all), all)
 	}
 
@@ -80,7 +86,9 @@ func TestWorkloadResolution(t *testing.T) {
 		{"server", []string{"deploy/api-server"}},
 		{"db", []string{"sts/db"}},
 		{"debug", []string{"pod/debug"}},
-		{"migrate", []string{"pod/migrate-x1"}},
+		{"migrate", []string{"job/migrate"}},
+		{"migrate-x", []string{"pod/migrate-x1"}},
+		{"job/m", []string{"job/migrate"}},
 		{"wrk", []string{"deploy/worker"}},
 		{"deploy/db", nil},
 		{"sts/d", []string{"sts/db"}},
@@ -148,6 +156,10 @@ func TestParseQuery(t *testing.T) {
 	q, err := ParseQuery("statefulsets/db")
 	if err != nil || q.Kind != KindStatefulSet || q.Name != "db" {
 		t.Fatalf("got %+v %v", q, err)
+	}
+	q, err = ParseQuery("jobs/migrate")
+	if err != nil || q.Kind != KindJob || q.Name != "migrate" {
+		t.Fatalf("ParseQuery(jobs/migrate) = %+v, %v, want job migrate", q, err)
 	}
 }
 

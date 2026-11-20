@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -434,5 +436,65 @@ func TestRotateNeedsTheCapability(t *testing.T) {
 	prov := NewProvider(p, &Runner{Bin: p.Bin, Name: p.Name()})
 	if _, err := prov.Rotate(context.Background(), provider.CredentialRequest{ClusterID: "a"}); provider.CodeOf(err) != provider.Unimplemented {
 		t.Fatalf("Rotate = %v, want Unimplemented without the rotate capability", err)
+	}
+}
+
+// TestServeModeKeepsOneProcess runs the example plugin in serve mode:
+// concurrent calls share one process, a dead process is started again, and
+// Close stops it.
+func TestServeModeKeepsOneProcess(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+	dir := buildExample(t)
+	p, err := Load(dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Manifest.Spec.Capabilities.Has(provider.CapServe) {
+		t.Fatal("the example manifest should declare serve")
+	}
+	r := &Runner{Bin: p.Bin, Name: p.Name(), Serve: true}
+	prov := NewProvider(p, r)
+	t.Cleanup(func() { _ = prov.Close() })
+	ctx := context.Background()
+	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443"}}
+	token := map[string]string{"api_token": "ex_t0k"}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 8)
+	for i := range errs {
+		wg.Go(func() {
+			if i%2 == 0 {
+				_, errs[i] = prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
+			} else {
+				_, errs[i] = prov.Credential(ctx, provider.CredentialRequest{Account: acct, ClusterID: "dev", Secrets: token})
+			}
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	cmd, done := r.srv.process()
+	pid := cmd.Process.Pid
+	if _, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: map[string]string{"api_token": "bad"}}); provider.CodeOf(err) != provider.Unauthenticated {
+		t.Fatalf("a provider error through serve mode = %v, want Unauthenticated", err)
+	}
+	if again, _ := r.srv.process(); again.Process.Pid != pid {
+		t.Fatal("serve mode started a second process for a later call")
+	}
+
+	// The process dies; the next call starts a new one.
+	_ = cmd.Process.Kill()
+	<-done
+	if _, err := prov.Describe(ctx); err != nil {
+		t.Fatalf("describe after the process died: %v", err)
+	}
+	if err := prov.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prov.Describe(ctx); err == nil {
+		t.Fatal("a call after Close succeeded")
 	}
 }

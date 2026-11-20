@@ -1,13 +1,24 @@
 # tug shell integration for bash. Add this to the end of ~/.bashrc:
 #   eval "$(tug init bash)"
 # Set TUG_PROMPT_DISABLE=1 to keep your prompt unchanged and use $TUG_PROMPT yourself.
+# Set TUG_PIN_DISABLE=1 to ignore .tug.yaml pin files.
 _tug_bin={{.Bin}}
 
 if [ "${TUG_SESSION_PID:-}" != "$$" ]; then
   eval "$("$_tug_bin" session new --shell bash --pid $$ --parent "${TUG_SESSION:-}")"
 fi
 
+# _tug_pin applies the .tug.yaml of a new directory, if it is allowed. bash
+# has no hook for cd, so the prompt checks whether the directory changed.
+_tug_pin() {
+  if [ "${TUG_PIN_DISABLE:-}" != 1 ] && [ "$PWD" != "${_tug_pin_pwd:-}" ]; then
+    _tug_pin_pwd=$PWD
+    "$_tug_bin" session pin --dir "$PWD"
+  fi
+}
+
 _tug_sync() {
+  _tug_pin
   local f="${TUG_SESSION_DIR:-}/kubeconfig" style text
   if [ -n "${TUG_SESSION_DIR:-}" ] && [ -f "$f" ]; then
     export KUBECONFIG="$f"

@@ -100,6 +100,9 @@ type Config struct {
 
 	Resolver Resolver
 	Dial     DialFunc
+	// Tunnel, when set, is how Dial reaches the cluster; names are then
+	// resolved at the far end, so the DNS check is left to it.
+	Tunnel string
 	// Proxy picks a proxy for a request; defaults to the environment's.
 	Proxy func(*http.Request) (*url.URL, error)
 	// Timeout bounds each network check; defaults to 5 seconds.

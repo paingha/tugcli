@@ -20,6 +20,7 @@ import (
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/resolve"
 	"github.com/paingha/tugcli/internal/session"
+	"github.com/paingha/tugcli/internal/tunnel"
 	"github.com/paingha/tugcli/internal/version"
 )
 
@@ -69,27 +70,16 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	if err != nil {
 		return err
 	}
-	readOnly := guard.ReadOnlyFor(cl.EffectiveLabels(), a.cfg.Guard.ReadOnlyLabels)
-	switch {
-	case o.readOnly:
-		readOnly = true
-	case o.readWrite:
-		readOnly = false
-	}
-	auth := session.AuthCommand{Command: selfPath()}
-	if o.proxy {
-		c, err := a.ensureDaemon(ctx)
-		if err != nil {
-			return err
-		}
-		reg, err := c.Register(ctx, s.State.ID)
-		if err != nil {
-			return err
-		}
-		auth.ProxyURL, auth.ProxyCA = reg.ProxyURL, reg.ProxyCA
-	}
-	if err := s.Connect(cl, o.namespace, readOnly, auth); err != nil {
+	readOnly, auth, err := a.connectTo(ctx, s, cl, o)
+	if err != nil {
 		return err
+	}
+	// Connecting by hand ends any pin: leaving the pinned directory must
+	// not undo the user's own choice.
+	if s.State.Pin != nil {
+		if err := s.SetPin(nil); err != nil {
+			return err
+		}
 	}
 
 	c := a.colors()
@@ -98,7 +88,7 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 		mode = c.Red("read-only") + c.Dim(" (tug unlock 15m to allow writes)")
 	}
 	fmt.Fprintf(a.stdout, "Connected to %s, namespace %s, %s\n", c.Bold(cl.Name), s.State.Namespace, mode)
-	if o.proxy {
+	if auth.ProxyURL != "" {
 		fmt.Fprintln(a.stdout, c.Dim("Every client goes through tugd at "+auth.ProxyURL+", so the guard applies to kubectl, helm and k9s too"))
 	}
 	if cl.Stale {
@@ -114,6 +104,36 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 		fmt.Fprintf(a.stderr, "%s %v\n", c.Yellow("warning: credentials are not ready:"), err)
 	}
 	return nil
+}
+
+// connectTo points session s at cl: read-only by its labels unless o says
+// otherwise, and through tugd when o asks or the cluster has a tunnel.
+func (a *app) connectTo(ctx context.Context, s *session.Session, cl *catalog.Cluster, o connectOptions) (bool, session.AuthCommand, error) {
+	readOnly := guard.ReadOnlyFor(cl.EffectiveLabels(), a.cfg.Guard.ReadOnlyLabels)
+	switch {
+	case o.readOnly:
+		readOnly = true
+	case o.readWrite:
+		readOnly = false
+	}
+	auth := session.AuthCommand{Command: selfPath()}
+	if cl.Tunnel != "" && !o.proxy {
+		// kubectl cannot open tug's tunnels; tugd can, and keeps them open.
+		fmt.Fprintln(a.stderr, a.colors().Dim(cl.Name+" is reached through "+tunnel.Redacted(cl.Tunnel)+", so this session goes through tugd"))
+		o.proxy = true
+	}
+	if o.proxy {
+		c, err := a.ensureDaemon(ctx)
+		if err != nil {
+			return false, auth, err
+		}
+		reg, err := c.Register(ctx, s.State.ID)
+		if err != nil {
+			return false, auth, err
+		}
+		auth.ProxyURL, auth.ProxyCA = reg.ProxyURL, reg.ProxyCA
+	}
+	return readOnly, auth, s.Connect(cl, o.namespace, readOnly, auth)
 }
 
 // chooseCluster resolves a target and label filters to one cluster.
@@ -344,6 +364,7 @@ func (a *app) factory(s *session.Session) (*kube.Factory, error) {
 		Guard:     policy,
 		CacheDir:  a.paths.Cache,
 		UserAgent: "tug/" + version.String(),
+		Tunnels:   a.tunnels(),
 	}, nil
 }
 

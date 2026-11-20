@@ -147,6 +147,26 @@ func (s *Session) Lock() error {
 	})
 }
 
+// SetPin records the pin that chose the connection, or clears it when p is
+// nil, for example when the user connects by hand.
+func (s *Session) SetPin(p *Pin) error {
+	return s.update(func() (bool, error) {
+		s.State.Pin = p
+		return true, nil
+	})
+}
+
+// NotePin records the pin file the user was told about.
+func (s *Session) NotePin(noticed string) error {
+	return s.update(func() (bool, error) {
+		if s.State.PinNoticed == noticed {
+			return false, nil
+		}
+		s.State.PinNoticed = noticed
+		return true, nil
+	})
+}
+
 // Disconnect forgets the cluster. The shell hook then restores the original
 // KUBECONFIG.
 func (s *Session) Disconnect() error {

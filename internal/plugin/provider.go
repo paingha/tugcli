@@ -35,6 +35,9 @@ func NewProvider(p *Plugin, r *Runner) *Provider {
 	return &Provider{plugin: p, runner: r}
 }
 
+// Close stops the plugin's serve-mode process, if it has one.
+func (p *Provider) Close() error { return p.runner.Close() }
+
 // Plugin returns the plugin behind the provider.
 func (p *Provider) Plugin() *Plugin { return p.plugin }
 

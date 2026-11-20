@@ -51,7 +51,8 @@ type AccessChecker interface {
 // Capabilities returns p's capabilities, including the ones implied by the
 // optional interfaces it implements.
 func Capabilities(p Provider) Capability {
-	c := p.Info().Capabilities | CapList | CapCredential
+	// Every SDK plugin can serve; the host uses it when the manifest says so.
+	c := p.Info().Capabilities | CapList | CapCredential | CapServe
 	if _, ok := p.(AccountLister); ok {
 		c |= CapAccounts
 	}
@@ -79,13 +80,16 @@ func Main(p Provider) int {
 // embed a provider.
 func Run(ctx context.Context, p Provider, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprintf(stderr, "usage: %s <describe|accounts|list|credential|rotate|checkAccess>\n", progName())
+		fmt.Fprintf(stderr, "usage: %s <describe|accounts|list|credential|rotate|checkAccess|serve>\n", progName())
 		return ExitUsage
 	}
 	op := args[0]
 	if !IsKnownOp(op) {
 		writeError(stdout, stderr, op, Errorf(InvalidConfig, "unknown operation %q", op))
 		return ExitUsage
+	}
+	if op == OpServe {
+		return serve(ctx, p, stdin, stdout, stderr)
 	}
 	resp, err := dispatch(ctx, p, op, stdin)
 	if err != nil {
@@ -184,7 +188,7 @@ func dispatch(ctx context.Context, p Provider, op string, stdin io.Reader) (any,
 		return checkAccessResponseMsg{typeMeta: meta(kindCheckAccessResponse), Findings: nonNil(findings)}, nil
 
 	case OpServe:
-		return nil, Errorf(Unimplemented, "serve mode is not supported by this SDK version")
+		return nil, Errorf(InvalidConfig, "serve is a mode, not a request")
 
 	default:
 		return nil, Errorf(InvalidConfig, "unknown operation %q", op)

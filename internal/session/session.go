@@ -47,9 +47,39 @@ type State struct {
 	ReadOnly      bool      `json:"readOnly,omitempty"`
 	UnlockedUntil time.Time `json:"unlockedUntil,omitempty"`
 	// ProxyURL is set when the session goes through tugd's API proxy.
-	ProxyURL string    `json:"proxyURL,omitempty"`
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
+	ProxyURL string `json:"proxyURL,omitempty"`
+	// Pin is set while a .tug.yaml chose the connection.
+	Pin *Pin `json:"pin,omitempty"`
+	// PinNoticed is the pin file, path and hash, the user was last told
+	// is not allowed, so moving around its tree does not repeat it.
+	PinNoticed string    `json:"pinNoticed,omitempty"`
+	Created    time.Time `json:"created"`
+	Updated    time.Time `json:"updated"`
+}
+
+// Pin records a connection a .tug.yaml made, and the one to go back to
+// when the shell leaves the file's directory.
+type Pin struct {
+	File string `json:"file"`
+	Hash string `json:"hash"`
+	// Previous is the connection before the pin; nil when there was none.
+	Previous *Connection `json:"previous,omitempty"`
+}
+
+// Connection is enough of a session's state to connect it again.
+type Connection struct {
+	ClusterID string `json:"clusterID"`
+	Namespace string `json:"namespace,omitempty"`
+	ReadOnly  bool   `json:"readOnly,omitempty"`
+	Proxy     bool   `json:"proxy,omitempty"`
+}
+
+// Current returns the session's connection, or nil when it has none.
+func (s *State) Current() *Connection {
+	if !s.Connected() {
+		return nil
+	}
+	return &Connection{ClusterID: s.ClusterID, Namespace: s.Namespace, ReadOnly: s.ReadOnly, Proxy: s.ProxyURL != ""}
 }
 
 // Connected reports whether the session points at a cluster.

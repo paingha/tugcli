@@ -1,0 +1,24 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: vultr
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/vultr
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-vultr}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-vultr}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-vultr}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-vultr}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-vultr.exe}
+  secrets:
+  - {name: api_key, prompt: "Vultr API key"}
+  env: []
+  network: [api.vultr.com]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "API endpoint override (https)"}

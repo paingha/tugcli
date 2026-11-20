@@ -1,0 +1,27 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: crusoe
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/crusoe
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-crusoe}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-crusoe}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-crusoe}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-crusoe}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-crusoe.exe}
+  secrets:
+  - {name: access_key_id, prompt: "Crusoe Cloud API access key ID"}
+  - {name: secret_key, prompt: "Crusoe Cloud API secret key"}
+  env: []
+  network: [api.cloud.crusoe.ai]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "API endpoint override (https)"}
+      auth: {type: string, enum: [auto, oidc, admin_cert], description: "auto (default) uses OIDC for clusters set up for it and the admin certificate for the rest; oidc uses OIDC only; admin_cert uses the admin certificate only"}
+      project: {type: string, description: "ID or name of the project to list clusters in (default: the only project the API key can see)"}

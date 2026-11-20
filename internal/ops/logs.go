@@ -1,6 +1,7 @@
-// Package ops does the work behind tug's daily commands: logs, exec,
-// port-forward and rollouts. It has no presentation, so the CLI and a later
-// TUI share it.
+// Package ops does the work behind tug's daily commands: logs, exec and
+// debug containers, port-forward, rollouts, and explaining a workload: why
+// it is not ready and what it is made of. It has no presentation, so the CLI
+// and a later TUI share it.
 package ops
 
 import (
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -106,13 +108,33 @@ type streamer struct {
 	streams int
 }
 
+// containers returns the containers of a pod to stream: every app
+// container, or the one asked for, which may also be an init or ephemeral
+// container.
+func (s *streamer) containers(p *corev1.Pod) []string {
+	var names []string
+	for _, c := range p.Spec.Containers {
+		names = append(names, c.Name)
+	}
+	if s.opts.Container == "" {
+		return names
+	}
+	for _, c := range p.Spec.InitContainers {
+		names = append(names, c.Name)
+	}
+	for _, c := range p.Spec.EphemeralContainers {
+		names = append(names, c.Name)
+	}
+	if slices.Contains(names, s.opts.Container) {
+		return []string{s.opts.Container}
+	}
+	return nil
+}
+
 // startPod starts one stream per selected container that has not started yet.
 func (s *streamer) startPod(ctx context.Context, p *corev1.Pod) {
-	for _, c := range p.Spec.Containers {
-		if s.opts.Container != "" && c.Name != s.opts.Container {
-			continue
-		}
-		key := p.Name + "/" + c.Name
+	for _, name := range s.containers(p) {
+		key := p.Name + "/" + name
 		s.mu.Lock()
 		if s.started[key] {
 			s.mu.Unlock()
@@ -128,7 +150,7 @@ func (s *streamer) startPod(ctx context.Context, p *corev1.Pod) {
 			if err := s.stream(ctx, pod, container); err != nil && !errors.Is(err, context.Canceled) {
 				s.sink.Error(pod, container, err)
 			}
-		}(p.Name, c.Name)
+		}(p.Name, name)
 	}
 }
 
