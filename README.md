@@ -91,11 +91,15 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 
 A plugin is an executable named `tug-provider-<name>` that reads one JSON
 request on stdin and writes one JSON response on stdout, in any language.
+[docs/plugins.md](docs/plugins.md) is the guide to writing, testing,
+packaging and installing one, with the protocol and manifest reference. While
+this repository is private, a Go plugin gets the SDK from a local checkout:
+`tug plugin new acme --sdk-replace <path to tugcli>`.
 
 ```bash
 tug plugin new acme                    # Go, with the SDK, tests and a release workflow
 tug plugin new acme --lang python      # one stdlib-only script, no SDK needed
-cd tug-provider-acme && make conformance
+cd tug-provider-acme && go mod tidy && make conformance
 
 tug plugin package . -o dist           # archive with each binary's sha256 in the manifest
 tug plugin install ./dist/tug-provider-acme_0.1.0.tar.gz
@@ -104,10 +108,11 @@ tug plugin test acme --account prod    # protocol conformance suite
 tug plugin ls | describe | link | unlink | remove
 ```
 
-Install verifies every binary against the manifest, refuses archives with
-links or paths outside the plugin directory, and shows the plugin's
-publisher, secrets and network hosts before asking to confirm. Plugins run
-with a scrubbed environment and receive only the secrets they declare.
+Install verifies this platform's binary against the manifest, refuses
+archives with links or paths outside the plugin directory, and shows the
+plugin's publisher, secrets and network hosts before asking to confirm.
+Plugins run with a scrubbed environment and receive only the secrets they
+declare.
 
 With the Go SDK, a plugin is mostly two methods:
 
