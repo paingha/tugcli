@@ -2,6 +2,7 @@ package iap
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,10 @@ const (
 	// maxUnwritten is how many bytes Write takes ahead of the WebSocket
 	// before it blocks.
 	maxUnwritten = 256 << 10
+	// maxUnconfirmed is how many written bytes the tunnel keeps for
+	// resending until the relay acknowledges them. Past it the oldest go,
+	// and the session can no longer resume from before them.
+	maxUnconfirmed = 4 << 20
 	// flushTimeout is how long Close waits for buffered bytes to reach the
 	// relay, as gcloud waits for all data to be sent.
 	flushTimeout = 10 * time.Second
@@ -37,14 +42,17 @@ const (
 var errRelayClosed = errors.New("the IAP relay closed the tunnel")
 
 // conn is an IAP relay session as a net.Conn. One goroutine, run, owns the
-// session: it starts a reader and a writer on the WebSocket and stops them
-// when either fails or Close is called.
+// session: for each WebSocket it starts a reader and a writer, and when the
+// WebSocket drops it resumes the session on a new one. Close stops it.
 //
 // The bytes written are a stream. out holds the part from offset base that
-// the writer has not sent yet; wrote is the offset it has reached.
+// the relay has not acknowledged; wrote is the offset the writer has
+// reached on the current WebSocket, and goes back to what the relay says it
+// received when a session resumes.
 type conn struct {
-	cl *client
-	t  target
+	cl     *client
+	t      target
+	cancel context.CancelFunc // ends a resume in progress
 
 	closing   chan struct{} // closed by Close
 	closeOnce sync.Once
@@ -73,18 +81,21 @@ type conn struct {
 
 	out       []byte
 	base      uint64 // stream offset of out[0]
-	wrote     uint64 // stream offset written to the WebSocket
+	wrote     uint64 // stream offset written to the current WebSocket
 	writing   bool   // the writer is sending a DATA frame
 	confirmed uint64 // stream bytes the relay has acknowledged
 }
 
 var _ net.Conn = (*conn)(nil)
 
-// newConn starts the session that ws opened.
-func newConn(cl *client, t target, ws *websocket.Conn, sid string) *conn {
+// newConn starts the session that ws opened. ctx gives the session's
+// context its values but not its cancellation, which is Close's.
+func newConn(ctx context.Context, cl *client, t target, ws *websocket.Conn, sid string) *conn {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	c := &conn{
 		cl:       cl,
 		t:        t,
+		cancel:   cancel,
 		closing:  make(chan struct{}),
 		done:     make(chan struct{}),
 		failed:   make(chan struct{}),
@@ -98,16 +109,32 @@ func newConn(cl *client, t target, ws *websocket.Conn, sid string) *conn {
 		sid:      sid,
 		local:    ws.LocalAddr(),
 	}
-	go c.run(ws)
+	go c.run(ctx, ws)
 	return c
 }
 
-// run serves the session until it ends or Close is called.
-func (c *conn) run(ws *websocket.Conn) {
+// run serves the session until it ends or Close is called, resuming it
+// each time its WebSocket drops.
+func (c *conn) run(ctx context.Context, ws *websocket.Conn) {
 	defer close(c.done)
-	err := c.serve(ws)
-	if !isDone(c.closing) {
-		c.fail(c.streamError(err))
+	defer c.cancel()
+	for {
+		err := c.serve(ws)
+		if isDone(c.closing) {
+			return
+		}
+		if c.cl.reconnectTimeout <= 0 || !resumable(err) {
+			c.fail(c.streamError(err))
+			return
+		}
+		c.cl.logger.Debug("resuming the IAP tunnel", "target", c.t.String(), "error", err)
+		ws, err = c.resume(ctx)
+		if err != nil {
+			if !isDone(c.closing) {
+				c.fail(err)
+			}
+			return
+		}
 	}
 }
 
@@ -280,6 +307,7 @@ func (c *conn) confirm(n uint64) error {
 		return fmt.Errorf("%w: ACK of %d bytes when %d were sent", errProtocol, n, c.wrote)
 	}
 	c.confirmed = n
+	c.trim(n)
 	return nil
 }
 
@@ -300,10 +328,13 @@ func (c *conn) writeLoop(ws *websocket.Conn, stop <-chan struct{}) error {
 			msg = appendData(msg, c.out[i:i+n])
 			// Count the bytes as written before they are, so an ACK
 			// that overtakes this goroutine is not mistaken for one of
-			// bytes never sent. If the write fails, the tunnel ends.
+			// bytes never sent. If the write fails, resuming sets wrote
+			// back to what the relay received.
 			c.wrote += n
 			c.writing = true
-			c.trim(c.wrote)
+			if c.wrote-c.base > maxUnconfirmed {
+				c.trim(c.wrote - maxUnconfirmed)
+			}
 		}
 		c.mu.Unlock()
 		if len(msg) == 0 {
@@ -339,7 +370,24 @@ func (c *conn) fail(err error) {
 	}
 }
 
-// streamError is what Read and Write return after serve stopped with err.
+// resumable reports whether the session may continue on a new WebSocket
+// after serve stopped with err: the relay asked for new credentials, or
+// the connection broke without a close frame. A message too large to read
+// would only come again.
+func resumable(err error) bool {
+	var ce *websocket.CloseError
+	switch {
+	case errors.As(err, &ce):
+		return ce.Code == closeReauthRequired || ce.Code == websocket.CloseAbnormalClosure
+	case errors.Is(err, errProtocol), errors.Is(err, websocket.ErrReadLimit):
+		return false
+	default:
+		return true
+	}
+}
+
+// streamError is what Read and Write return after serve stopped with err
+// and the session did not resume.
 func (c *conn) streamError(err error) error {
 	var ce *websocket.CloseError
 	if errors.As(err, &ce) {
@@ -445,12 +493,15 @@ func (c *conn) writeError() error {
 // it within flushTimeout, then closes the session and stops its goroutines
 // before it returns. Calling it again does nothing.
 func (c *conn) Close() error {
-	c.closeOnce.Do(func() { close(c.closing) })
+	c.closeOnce.Do(func() {
+		close(c.closing)
+		c.cancel()
+	})
 	<-c.done
 	return nil
 }
 
-// LocalAddr returns this end of the WebSocket to the relay.
+// LocalAddr returns this end of the current WebSocket to the relay.
 func (c *conn) LocalAddr() net.Addr {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -6,7 +6,10 @@
 // Each connection is a WebSocket to the IAP relay carrying a small framed
 // protocol. The protocol facts here come from the Cloud SDK's
 // iap_tunnel_websocket modules and Google's IAP TCP forwarding
-// documentation.
+// documentation. When the relay drops the WebSocket, or closes it with code
+// 4004 to ask for fresh credentials, the connection resumes the session on a
+// new WebSocket and resends what the relay had not received, so a long
+// stream survives token expiry and short network faults.
 package iap
 
 import (
@@ -186,6 +189,21 @@ func (t target) connectQuery() url.Values {
 	q.Set("zone", t.cfg.Zone)
 	q.Set("instance", t.cfg.Instance)
 	q.Set("interface", iface)
+	return q
+}
+
+// reconnectQuery is the query of the relay's reconnect endpoint: the
+// session, the stream bytes received so far, and where the session lives.
+func (t target) reconnectQuery(sid string, received uint64) url.Values {
+	q := url.Values{}
+	q.Set("sid", sid)
+	q.Set("ack", strconv.FormatUint(received, 10))
+	q.Set("newWebsocket", "True")
+	if t.cfg.groupMode() {
+		q.Set("region", t.cfg.Region)
+	} else {
+		q.Set("zone", t.cfg.Zone)
+	}
 	return q
 }
 

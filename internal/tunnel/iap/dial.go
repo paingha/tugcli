@@ -25,6 +25,10 @@ import (
 // reconnect endpoints are under it.
 const DefaultRelayURL = "wss://tunnel.cloudproxy.app/v4"
 
+// DefaultReconnectTimeout is how long a tunnel keeps trying to resume its
+// session after the relay drops it, as gcloud does.
+const DefaultReconnectTimeout = 15 * time.Minute
+
 // Settings from gcloud's iap_tunnel_websocket*.py.
 const (
 	// origin is the Origin header gcloud's tunnel sends.
@@ -34,12 +38,16 @@ const (
 	// openTimeout bounds the WebSocket handshake and the wait for the
 	// relay's first frame.
 	openTimeout = 60 * time.Second
+	// reconnectWait and maxReconnectWait shape the back-off between
+	// attempts to resume; each wait is 1.1 times the one before.
+	reconnectWait    = 1500 * time.Millisecond
+	maxReconnectWait = 20 * time.Second
 )
 
 // Close codes the relay sends, from Google's IAP FAQ and gcloud.
 const (
 	closeBackendUnreachable = 4003 // the relay could not connect to the port
-	closeReauthRequired     = 4004 // the relay wants new credentials
+	closeReauthRequired     = 4004 // the session lives on, with new credentials
 	closeDestinationClosed  = 4010 // the destination closed the connection
 	closeNotAuthorized      = 4033 // no permission, or the instance is not there or not running
 	closeInstanceNotFound   = 4047 // the instance does not exist or is stopped
@@ -60,11 +68,14 @@ const maxMessage = 1 << 20
 type Option func(*options)
 
 type options struct {
-	tokens    oauth2.TokenSource
-	relayURL  string
-	tlsConfig *tls.Config
-	userAgent string
-	logger    *slog.Logger
+	tokens           oauth2.TokenSource
+	relayURL         string
+	tlsConfig        *tls.Config
+	userAgent        string
+	logger           *slog.Logger
+	reconnectTimeout time.Duration
+	reconnectWait    time.Duration
+	maxReconnectWait time.Duration
 }
 
 // WithTokenSource sets where access tokens come from. The default is
@@ -91,10 +102,23 @@ func WithUserAgent(ua string) Option {
 	return func(o *options) { o.userAgent = ua }
 }
 
-// WithLogger logs frames the tunnel skips, at Debug. The default discards
-// them.
+// WithLogger logs resumed sessions and frames the tunnel skips, at Debug.
+// The default discards them.
 func WithLogger(l *slog.Logger) Option {
 	return func(o *options) { o.logger = l }
+}
+
+// WithReconnectTimeout sets how long a tunnel keeps trying to resume its
+// session after the relay drops it. Zero or less turns resuming off, so the
+// first drop ends the tunnel. The default is DefaultReconnectTimeout.
+func WithReconnectTimeout(d time.Duration) Option {
+	return func(o *options) { o.reconnectTimeout = d }
+}
+
+// withReconnectBackoff shortens the waits between attempts to resume, for
+// tests.
+func withReconnectBackoff(first, most time.Duration) Option {
+	return func(o *options) { o.reconnectWait, o.maxReconnectWait = first, most }
 }
 
 // DefaultTokenSource returns access tokens from Application Default
@@ -114,17 +138,23 @@ func noCredentials(err error) error {
 
 // client opens WebSockets to the relay for one tunnel.
 type client struct {
-	relay     *url.URL
-	tokens    oauth2.TokenSource
-	dialer    *websocket.Dialer
-	userAgent string
-	logger    *slog.Logger
+	relay            *url.URL
+	tokens           oauth2.TokenSource
+	dialer           *websocket.Dialer
+	userAgent        string
+	logger           *slog.Logger
+	reconnectTimeout time.Duration
+	reconnectWait    time.Duration
+	maxReconnectWait time.Duration
 }
 
 func newClient(ctx context.Context, opts []Option) (*client, error) {
 	o := options{
-		relayURL:  DefaultRelayURL,
-		userAgent: "tug/" + version.String(),
+		relayURL:         DefaultRelayURL,
+		userAgent:        "tug/" + version.String(),
+		reconnectTimeout: DefaultReconnectTimeout,
+		reconnectWait:    reconnectWait,
+		maxReconnectWait: maxReconnectWait,
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -151,8 +181,11 @@ func newClient(ctx context.Context, opts []Option) (*client, error) {
 			TLSClientConfig: o.tlsConfig,
 			Subprotocols:    []string{subprotocol},
 		},
-		userAgent: o.userAgent,
-		logger:    o.logger,
+		userAgent:        o.userAgent,
+		logger:           o.logger,
+		reconnectTimeout: o.reconnectTimeout,
+		reconnectWait:    o.reconnectWait,
+		maxReconnectWait: o.maxReconnectWait,
 	}, nil
 }
 
@@ -207,7 +240,7 @@ func Dial(ctx context.Context, cfg Config, address string, opts ...Option) (net.
 	if err != nil {
 		return nil, fmt.Errorf("opening an IAP tunnel to %s: %w", t, err)
 	}
-	return newConn(cl, t, ws, string(f.data)), nil
+	return newConn(ctx, cl, t, ws, string(f.data)), nil
 }
 
 // open dials the relay endpoint and waits for its first frame, which must

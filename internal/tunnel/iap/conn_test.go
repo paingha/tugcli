@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -468,6 +470,9 @@ func TestRelayCloses(t *testing.T) {
 			if _, err := c.Write([]byte("more")); err == nil {
 				t.Error("Write after the relay closed succeeded")
 			}
+			if n := len(get(r, func() []*http.Request { return r.requests })); n != 1 {
+				t.Errorf("the relay had %d requests, want 1: a closed tunnel must not resume", n)
+			}
 		})
 	}
 }
@@ -479,6 +484,9 @@ func TestProtocolFaultEndsTunnel(t *testing.T) {
 	c := dial(t, r)
 	if err := readErr(t, c); !errors.Is(err, errProtocol) {
 		t.Errorf("Read = %v, want errProtocol", err)
+	}
+	if n := len(get(r, func() []*http.Request { return r.requests })); n != 1 {
+		t.Errorf("the relay had %d requests, want 1: a protocol fault must not resume", n)
 	}
 }
 
@@ -545,5 +553,123 @@ func TestWriteDeadline(t *testing.T) {
 	}
 	if err := <-sent; err != nil {
 		t.Errorf("Write: %v", err)
+	}
+}
+
+// countingTokens is a token source that counts its tokens.
+type countingTokens struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingTokens) Token() (*oauth2.Token, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return &oauth2.Token{AccessToken: testToken}, nil
+}
+
+func (c *countingTokens) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func TestResume(t *testing.T) {
+	tests := []struct {
+		name string
+		code int
+	}{
+		{"after the connection is cut", 0},
+		{"after close code 4004", 4004},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newFakeRelay(t)
+			tokens := &countingTokens{}
+			c := dial(t, r, WithTokenSource(tokens))
+			s := r.session()
+			r.set(func() { s.dropAt, s.dropCode = 100<<10, tt.code })
+
+			const n = 400 << 10
+			sent := writeAsync(c, stream(0, n))
+			if got := readN(t, c, n); !bytes.Equal(got, stream(0, n)) {
+				t.Fatal("the echo differs from what was written")
+			}
+			if err := <-sent; err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			if got := get(r, func() []byte { return s.stream }); !bytes.Equal(got, stream(0, n)) {
+				t.Errorf("the relay received %d bytes that differ from the %d written", len(got), n)
+			}
+
+			req := r.request(1)
+			q := req.URL.Query()
+			if req.URL.Path != "/v4/reconnect" || q.Get("sid") != s.sid || q.Get("zone") != "europe-west2-a" || q.Has("project") {
+				t.Errorf("second request = %s?%s, want /v4/reconnect with sid %s and the zone", req.URL.Path, req.URL.RawQuery, s.sid)
+			}
+			if ack, err := strconv.ParseUint(q.Get("ack"), 10, 64); err != nil || ack > n {
+				t.Errorf("reconnect ack = %q, want a count of bytes received", q.Get("ack"))
+			}
+			if got := tokens.count(); got < 2 {
+				t.Errorf("the tunnel took %d access tokens, want a fresh one to resume", got)
+			}
+			if got := get(r, func() int { return len(r.sessions) }); got != 1 {
+				t.Errorf("the relay has %d sessions, want 1", got)
+			}
+		})
+	}
+}
+
+func TestResumeFails(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		opts   []Option
+		check  func(error) bool
+	}{
+		{
+			name:   "session gone",
+			status: http.StatusNotFound,
+			check:  func(err error) bool { return provider.CodeOf(err) == provider.NotFound },
+		},
+		{
+			name:   "relay unavailable",
+			status: http.StatusServiceUnavailable,
+			opts:   []Option{WithReconnectTimeout(200 * time.Millisecond)},
+			check: func(err error) bool {
+				return provider.CodeOf(err) == provider.Unavailable && strings.Contains(err.Error(), "gave up after")
+			},
+		},
+		{
+			name: "resuming off",
+			opts: []Option{WithReconnectTimeout(0)},
+			check: func(err error) bool {
+				return strings.Contains(err.Error(), "the IAP tunnel to port 22 of instance bastion")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newFakeRelay(t)
+			c := dial(t, r, tt.opts...)
+			s := r.session()
+			r.set(func() {
+				s.dropAt = 1
+				r.refuseResume = tt.status
+			})
+			if _, err := c.Write([]byte("x")); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			err := readErr(t, c)
+			if !tt.check(err) {
+				t.Errorf("Read after a failed resume = %v", err)
+			}
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				if _, werr := c.Write([]byte("y")); werr == nil {
+					t.Error("Write after a failed resume succeeded")
+				}
+			}
+		})
 	}
 }

@@ -73,32 +73,36 @@ func TestTargetQueries(t *testing.T) {
 	instance := Config{Project: "p1", Zone: "europe-west2-a", Instance: "bastion"}
 	group := Config{Project: "p1", Region: "europe-west2", Network: "default", Group: "gke-masters"}
 	tests := []struct {
-		name    string
-		cfg     Config
-		address string
-		connect string
-		addr    string
+		name      string
+		cfg       Config
+		address   string
+		connect   string
+		reconnect string
+		addr      string
 	}{
 		{
-			name:    "instance",
-			cfg:     instance,
-			address: "ignored.example:22",
-			connect: "instance=bastion&interface=nic0&newWebsocket=True&port=22&project=p1&zone=europe-west2-a",
-			addr:    "bastion:22",
+			name:      "instance",
+			cfg:       instance,
+			address:   "ignored.example:22",
+			connect:   "instance=bastion&interface=nic0&newWebsocket=True&port=22&project=p1&zone=europe-west2-a",
+			reconnect: "ack=12345&newWebsocket=True&sid=s1&zone=europe-west2-a",
+			addr:      "bastion:22",
 		},
 		{
-			name:    "instance with interface",
-			cfg:     Config{Project: "p1", Zone: "z", Instance: "vm", Interface: "nic2"},
-			address: ":8080",
-			connect: "instance=vm&interface=nic2&newWebsocket=True&port=8080&project=p1&zone=z",
-			addr:    "vm:8080",
+			name:      "instance with interface",
+			cfg:       Config{Project: "p1", Zone: "z", Instance: "vm", Interface: "nic2"},
+			address:   ":8080",
+			connect:   "instance=vm&interface=nic2&newWebsocket=True&port=8080&project=p1&zone=z",
+			reconnect: "ack=12345&newWebsocket=True&sid=s1&zone=z",
+			addr:      "vm:8080",
 		},
 		{
-			name:    "group",
-			cfg:     group,
-			address: "172.16.0.2:443",
-			connect: "group=gke-masters&host=172.16.0.2&network=default&newWebsocket=True&port=443&project=p1&region=europe-west2",
-			addr:    "172.16.0.2:443",
+			name:      "group",
+			cfg:       group,
+			address:   "172.16.0.2:443",
+			connect:   "group=gke-masters&host=172.16.0.2&network=default&newWebsocket=True&port=443&project=p1&region=europe-west2",
+			reconnect: "ack=12345&newWebsocket=True&region=europe-west2&sid=s1",
+			addr:      "172.16.0.2:443",
 		},
 	}
 	for _, tt := range tests {
@@ -109,6 +113,9 @@ func TestTargetQueries(t *testing.T) {
 			}
 			if got := tg.connectQuery().Encode(); got != tt.connect {
 				t.Errorf("connectQuery() = %s, want %s", got, tt.connect)
+			}
+			if got := tg.reconnectQuery("s1", 12345).Encode(); got != tt.reconnect {
+				t.Errorf("reconnectQuery() = %s, want %s", got, tt.reconnect)
 			}
 			if got := tg.addr(); got.String() != tt.addr || got.Network() != "iap" {
 				t.Errorf("addr() = %s %s, want iap %s", got.Network(), got, tt.addr)

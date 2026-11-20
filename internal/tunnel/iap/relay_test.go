@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -35,12 +36,13 @@ type fakeRelay struct {
 	socks    []*websocket.Conn
 
 	// Behaviour, set before dialling.
-	refuse     int      // answer the upgrade with this HTTP status
-	closeFirst int      // close new sessions with this code instead of opening them
-	firstFrame []byte   // send this instead of CONNECT_SUCCESS_SID
-	wrongProto bool     // agree to no subprotocol
-	afterOpen  [][]byte // frames to send after CONNECT_SUCCESS_SID
-	paused     chan struct{}
+	refuse       int      // answer the upgrade with this HTTP status
+	refuseResume int      // answer reconnects with this HTTP status
+	closeFirst   int      // close new sessions with this code instead of opening them
+	firstFrame   []byte   // send this instead of CONNECT_SUCCESS_SID
+	wrongProto   bool     // agree to no subprotocol
+	afterOpen    [][]byte // frames to send after CONNECT_SUCCESS_SID
+	paused       chan struct{}
 }
 
 // fakeSession is one relay session: the stream from the client, which is
@@ -95,6 +97,7 @@ func (r *fakeRelay) options(extra ...Option) []Option {
 	opts := []Option{
 		WithRelayURL(r.url()),
 		WithTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: testToken})),
+		withReconnectBackoff(10*time.Millisecond, 50*time.Millisecond),
 	}
 	if r.srv.TLS != nil {
 		opts = append(opts, WithTLSConfig(r.srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()))
@@ -167,7 +170,7 @@ func (r *fakeRelay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	defer r.wg.Done()
 	r.mu.Lock()
 	r.requests = append(r.requests, req)
-	refuse, closeFirst, firstFrame, wrongProto, afterOpen := r.refuse, r.closeFirst, r.firstFrame, r.wrongProto, r.afterOpen
+	refuse, refuseResume, closeFirst, firstFrame, wrongProto, afterOpen := r.refuse, r.refuseResume, r.closeFirst, r.firstFrame, r.wrongProto, r.afterOpen
 	r.mu.Unlock()
 
 	if got := req.Header.Get("Authorization"); got != "Bearer "+testToken {
@@ -187,12 +190,38 @@ func (r *fakeRelay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "refused by the test", refuse)
 		return
 	}
-	if req.URL.Path != "/v4/connect" {
+	q := req.URL.Query()
+	var s *fakeSession
+	var from uint64
+	switch req.URL.Path {
+	case "/v4/connect":
+		if err := checkConnectQuery(q); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	case "/v4/reconnect":
+		if refuseResume != 0 {
+			http.Error(w, "refused by the test", refuseResume)
+			return
+		}
+		r.mu.Lock()
+		s = r.sessions[q.Get("sid")]
+		r.mu.Unlock()
+		if s == nil {
+			http.Error(w, "no such session", http.StatusNotFound)
+			return
+		}
+		ack, err := strconv.ParseUint(q.Get("ack"), 10, 64)
+		if err != nil || q.Get("newWebsocket") != "True" || (q.Get("zone") == "") == (q.Get("region") == "") {
+			http.Error(w, "bad reconnect query "+q.Encode(), http.StatusBadRequest)
+			return
+		}
+		if n := get(r, func() int { return len(s.stream) }); ack > uint64(n) {
+			r.t.Errorf("reconnect ack = %d, but the relay sent only %d", ack, n)
+		}
+		from = ack
+	default:
 		http.NotFound(w, req)
-		return
-	}
-	if err := checkConnectQuery(req.URL.Query()); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -221,21 +250,27 @@ func (r *fakeRelay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		_ = ws.WriteMessage(websocket.BinaryMessage, firstFrame)
 		_, _, _ = ws.ReadMessage()
 		return
-	}
-	r.mu.Lock()
-	r.nextSID++
-	s := &fakeSession{sid: fmt.Sprintf("sid-%d", r.nextSID)}
-	r.sessions[s.sid] = s
-	r.mu.Unlock()
-	if err := ws.WriteMessage(websocket.BinaryMessage, relayFrame(tagConnectSuccessSID, []byte(s.sid))); err != nil {
-		return
-	}
-	for _, f := range afterOpen {
-		if err := ws.WriteMessage(websocket.BinaryMessage, f); err != nil {
+	case s == nil:
+		r.mu.Lock()
+		r.nextSID++
+		s = &fakeSession{sid: fmt.Sprintf("sid-%d", r.nextSID)}
+		r.sessions[s.sid] = s
+		r.mu.Unlock()
+		if err := ws.WriteMessage(websocket.BinaryMessage, relayFrame(tagConnectSuccessSID, []byte(s.sid))); err != nil {
+			return
+		}
+		for _, f := range afterOpen {
+			if err := ws.WriteMessage(websocket.BinaryMessage, f); err != nil {
+				return
+			}
+		}
+	default:
+		received := get(r, func() uint64 { return uint64(len(s.stream)) })
+		if err := ws.WriteMessage(websocket.BinaryMessage, relayCount(tagReconnectSuccessAck, received)); err != nil {
 			return
 		}
 	}
-	r.serve(s, ws)
+	r.serve(s, ws, from)
 }
 
 // checkConnectQuery checks a connect URL's query for either mode.
@@ -258,9 +293,15 @@ func checkConnectQuery(q url.Values) error {
 	return nil
 }
 
-// serve echoes the session's stream on ws and acknowledges every DATA
-// frame.
-func (r *fakeRelay) serve(s *fakeSession, ws *websocket.Conn) {
+// serve echoes the session's stream on ws, after resending it from offset
+// from, and acknowledges every DATA frame.
+func (r *fakeRelay) serve(s *fakeSession, ws *websocket.Conn, from uint64) {
+	r.mu.Lock()
+	resend := append([]byte(nil), s.stream[from:]...)
+	r.mu.Unlock()
+	if !writeStream(ws, resend) {
+		return
+	}
 	for {
 		r.waitIfPaused()
 		mt, msg, err := ws.ReadMessage()
