@@ -82,9 +82,11 @@ func WithGetenv(f func(string) string) Option { return func(p *Provider) { p.get
 // New returns the GKE provider.
 func New(opts ...Option) *Provider {
 	p := &Provider{
-		apiURL:   DefaultAPIURL,
-		base:     http.DefaultTransport,
-		tokens:   func(ctx context.Context) (oauth2.TokenSource, error) { return googleauth.DefaultTokenSource(ctx, scopes...) },
+		apiURL: DefaultAPIURL,
+		base:   http.DefaultTransport,
+		tokens: func(ctx context.Context) (oauth2.TokenSource, error) {
+			return googleauth.DefaultTokenSource(ctx, scopes...)
+		},
 		lookPath: exec.LookPath,
 		getenv:   os.Getenv,
 	}

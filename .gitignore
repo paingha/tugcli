@@ -3,5 +3,6 @@
 /coverage.out
 /coverage.html
 /examples/*/bin/
+/plugins/*/bin/
 *.test
 .DS_Store
