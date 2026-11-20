@@ -6,9 +6,8 @@ points each terminal at one cluster without touching `~/.kube/config`.
 
 > Status: early development. Phase 0 (foundations) and most of Phase 1 are in
 > place: sessions, catalog, credentials, the plugin protocol and host,
-> guardrails, the daily commands, the plugin tooling, `doctor`, and the EKS,
-> GKE, Akamai LKE and CoreWeave CKS providers. Local clusters (kind, k3d,
-> minikube) as their own provider are next.
+> guardrails, the daily commands, the plugin tooling, `doctor`, and the local,
+> EKS, GKE, Akamai LKE and CoreWeave CKS providers.
 
 ## Quick start
 
@@ -47,12 +46,14 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 | Provider | Ships as | Accounts | Credentials |
 | --- | --- | --- | --- |
 | `kubeconfig` | built-in | `~/.kube/config`, `$KUBECONFIG`, files you name | as in the file; embedded tokens and keys move to the keychain |
+| `local` | built-in | one per tool found: kind and k3d (through their CLIs), minikube, Docker Desktop, OrbStack, Rancher Desktop (through their contexts) | the tool's client certificate, read fresh after a recreate; labelled `local=true`, `distro=<tool>`, `env=dev` |
 | `aws` (EKS) | built-in | `~/.aws` profiles; `--set regions=us-east-1,eu-west-1` | short-lived token from a presigned STS request; no AWS CLI needed |
 | `google` (GKE) | built-in | gcloud configurations (one account per project) | short-lived OAuth token from Application Default Credentials, else `gke-gcloud-auth-plugin` |
 | `akamai` (LKE) | plugin, [plugins/akamai](plugins/akamai) | personal access token with Kubernetes read/write | the kubeconfig's token, kept in the keychain; `rotate` regenerates it |
 | `coreweave` (CKS) | plugin, [plugins/coreweave](plugins/coreweave) | API access token | the API token (managed auth), or the cluster's OIDC issuer with `--set auth=oidc` |
 
 ```bash
+tug import local --account kind           # every kind cluster, even ones no kubeconfig mentions
 tug import aws --account work --set regions=eu-west-1
 tug import google --account my-project
 make plugins && tug plugin link plugins/akamai

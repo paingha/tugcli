@@ -32,6 +32,14 @@ tug doctor
 echo "--- the built-in provider passes the plugin conformance suite"
 tug plugin test kubeconfig --account kind
 
+echo "--- the local provider finds the cluster through the kind CLI"
+(
+  export TUG_HOME="$work/home-local"
+  tug import local --account kind
+  tug ls -l distro=kind -o name | grep -qx "kind-$KIND_CLUSTER"
+  tug plugin test local --account kind
+)
+
 echo "--- passthrough"
 tug get pods -A
 tug get nodes -o name

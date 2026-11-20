@@ -19,6 +19,7 @@ import (
 	"github.com/paingha/tugcli/internal/builtin/aws"
 	"github.com/paingha/tugcli/internal/builtin/google"
 	"github.com/paingha/tugcli/internal/builtin/kubeconfig"
+	"github.com/paingha/tugcli/internal/builtin/local"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/credentials"
@@ -147,6 +148,7 @@ func (a *app) registry() *registry.Registry {
 	r := registry.New(a.cfg.Plugins.AllowOverride)
 	builtins := []registry.Provider{
 		kubeconfig.New(kubeconfig.WithSkipDirs(a.paths.Runtime)),
+		local.New(),
 		aws.New(),
 		google.New(),
 	}
