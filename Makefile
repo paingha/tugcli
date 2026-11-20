@@ -26,12 +26,13 @@ example-plugin: ## Build the example provider plugin
 
 PLUGINS        := akamai coreweave
 PLUGIN_HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
+PLUGIN_EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
 PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64
 
 .PHONY: plugins
 plugins: ## Build the first-party plugins for this machine
 	@for p in $(PLUGINS); do \
-		CGO_ENABLED=0 go build -trimpath -o plugins/$$p/bin/$(PLUGIN_HOST)/tug-provider-$$p ./plugins/$$p/cmd/tug-provider-$$p || exit 1; \
+		CGO_ENABLED=0 go build -trimpath -o plugins/$$p/bin/$(PLUGIN_HOST)/tug-provider-$$p$(PLUGIN_EXT) ./plugins/$$p/cmd/tug-provider-$$p || exit 1; \
 	done
 
 .PHONY: plugins-dist
