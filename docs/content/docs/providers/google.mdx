@@ -1,0 +1,57 @@
+---
+title: Google GKE
+description: List GKE clusters for each Google Cloud project, with short-lived OAuth tokens.
+icon: CloudCog
+---
+
+The `google` provider lists Google Kubernetes Engine clusters through the GKE
+API, in every location of a project.
+
+## Accounts are projects
+
+tug reads your gcloud configurations and makes one account per project they
+name:
+
+```bash
+tug import google                         # pick from projects in your gcloud configurations
+tug import google --account acme-ml       # one project, by ID
+```
+
+gcloud itself is optional: you can import any project ID you have access to.
+tug finds gcloud's configurations in `~/.config/gcloud`, or wherever
+`CLOUDSDK_CONFIG` points.
+
+## Credentials
+
+tug uses **Application Default Credentials** to get short-lived OAuth tokens.
+If you haven't set them up:
+
+```bash
+gcloud auth application-default login
+```
+
+Without Application Default Credentials, tug falls back to Google's own
+`gke-gcloud-auth-plugin` if it's installed.
+
+## Labels
+
+| Label | From |
+| --- | --- |
+| `gcp-project` | the project |
+| `region` | the cluster's location |
+| `gpu` | `true` when a node pool has GPUs |
+| every resource label | as set on the cluster; `environment` becomes `env` |
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `project` | The project ID. Defaults to the account name. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `gcloud auth application-default login` | Set up Application Default Credentials, then `tug sync`. |
+| `enable the Kubernetes Engine API` | The project doesn't have GKE turned on. Run the command in the hint. |
+| `try tug sync again shortly` | A location didn't answer. tug fails the whole listing rather than wrongly mark clusters as stale. |

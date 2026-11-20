@@ -1,0 +1,48 @@
+---
+title: Providers overview
+description: Where tug looks for clusters, and how each provider gets credentials.
+icon: Compass
+---
+
+A **provider** is a place that knows about Kubernetes clusters. Each one can
+list clusters for an **account** and hand out credentials for them. Four
+providers are built into tug; plugins add more.
+
+| Provider | Ships as | An account is… | Credentials come from… |
+| --- | --- | --- | --- |
+| [`kubeconfig`](/docs/providers/kubeconfig) | built in | one kubeconfig file | the file; embedded tokens and keys move to the keychain |
+| [`local`](/docs/providers/local) | built in | one local tool: kind, k3d, minikube, Docker Desktop, OrbStack, Rancher Desktop | the tool's client certificate, read fresh each time |
+| [`aws`](/docs/providers/aws) | built in | one AWS profile | short-lived EKS tokens; no AWS CLI needed |
+| [`google`](/docs/providers/google) | built in | one Google Cloud project | short-lived OAuth tokens from Application Default Credentials |
+| [`akamai`](/docs/providers/akamai) | plugin | one Akamai Cloud (Linode) token | the LKE kubeconfig's token, kept in the keychain; `tug auth rotate` regenerates it |
+| [`coreweave`](/docs/providers/coreweave) | plugin | one CoreWeave API token | the API token, or an ID token from your OIDC issuer (`tug auth login`) |
+
+See every provider tug can use, built in or plugin, with:
+
+```console
+$ tug plugin ls
+NAME         VERSION   KIND         CAPABILITIES                         LOCATION
+akamai       0.1.0     dev plugin   list,credential,rotate,checkAccess   /Users/sam/src/tugcli/plugins/akamai
+aws          0.1.0     built-in     accounts,list,credential             -
+google       0.1.0     built-in     accounts,list,credential             -
+kubeconfig   0.1.0     built-in     accounts,list,credential             -
+local        0.1.0     built-in     accounts,list,credential             -
+```
+
+## Settings
+
+Some providers take settings, passed with `--set key=value` when you import:
+
+```bash
+tug import aws --account work --set regions=eu-west-1,us-east-1
+tug import coreweave --account acme --set auth=oidc --set zone=US-EAST-04A
+```
+
+Settings are saved with the source, so `tug sync` uses them again. To change
+them, `tug forget` the source and import it again.
+
+## Need another provider?
+
+Anything with an API that lists clusters can become a provider.
+[Write a plugin](/docs/plugins/writing) in Go, Python or any language that can
+read and write JSON.

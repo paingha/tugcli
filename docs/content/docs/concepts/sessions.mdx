@@ -1,0 +1,93 @@
+---
+title: Sessions
+description: Why each terminal has its own cluster, and how that works without touching ~/.kube/config.
+icon: AppWindow
+---
+
+A **session** is tug's memory of one terminal window: which cluster it's
+connected to, which namespace it's in, and whether changes are allowed. Every
+terminal gets its own session, so they never interfere with each other.
+
+## The problem with one shared config
+
+kubectl keeps a "current context" in `~/.kube/config`. When you run
+`kubectl config use-context prod` in one terminal, **every** terminal switches,
+including the one where you were about to delete a test deployment.
+
+tug avoids this by giving each terminal its own small kubeconfig file and
+pointing that terminal, and only that terminal, at it.
+
+<Flow>
+  <FlowStep title="Terminal 1" tone="harbour">
+    `KUBECONFIG` → session A's kubeconfig → **staging-us**
+  </FlowStep>
+  <FlowStep title="Terminal 2" tone="tug">
+    `KUBECONFIG` → session B's kubeconfig → **prod-eu**
+  </FlowStep>
+  <FlowStep title="~/.kube/config">
+    Untouched. Other tools that read it see no change.
+  </FlowStep>
+</Flow>
+
+## What happens when you connect
+
+When you run `tug connect staging`:
+
+1. tug finds the cluster in its [catalog](/docs/concepts/catalog).
+2. It writes a kubeconfig for this session only. The kubeconfig holds the
+   cluster's address and certificate, but **no secrets**: it asks
+   `tug auth token` for a credential whenever a client needs one (see
+   [Credentials](/docs/concepts/credentials)).
+3. It checks the credential straight away, so a problem shows up now rather
+   than in your next kubectl command.
+4. The shell hook notices the change and updates `KUBECONFIG` and your prompt.
+
+```console
+$ tug connect staging
+Connected to staging-us, namespace default, read-write
+```
+
+## Looking at your session
+
+```console
+$ tug status
+cluster:    staging-us
+namespace:  default
+mode:       read-write
+kubeconfig: /var/folders/…/tug-501/sessions/7f3a9c41d2e8/kubeconfig
+```
+
+`tug status -o json` gives the same as JSON for scripts, and `-o name` prints
+just the cluster name. `tug current` is another name for `tug status`.
+
+## Changing and leaving
+
+| You want to… | Run |
+| --- | --- |
+| Switch cluster in this terminal | `tug connect <cluster>` |
+| Switch namespace in this terminal | `tug ns <namespace>` |
+| Connect with a namespace already chosen | `tug connect prod -n payments` |
+| Stop using a cluster in this terminal | `tug disconnect` |
+
+Disconnecting, or closing the terminal, puts back whatever `KUBECONFIG` the
+terminal had before tug. tug's own commands then behave like plain kubectl
+with your normal config.
+
+## New terminals start where their parent was
+
+A shell started **from** a connected terminal (a tmux pane, a split in your
+terminal app, or `tug shell`) starts connected to the same cluster and
+namespace, and in the same read-only mode. From then on the two sessions are
+independent.
+
+An unlock is not copied: a new terminal opened from an unlocked production
+session starts read-only again.
+
+## Housekeeping
+
+Sessions live in a private temporary folder (see
+[Files and folders](/docs/reference/files)). The hook removes a session when
+its terminal closes. If a terminal crashes, tug cleans up sessions whose shell
+has gone the next time a terminal starts, and removes any session unused for
+seven days. You can change that with
+[`sessions.maxAge`](/docs/reference/configuration).

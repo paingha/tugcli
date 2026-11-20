@@ -1,0 +1,112 @@
+---
+title: Connect commands
+description: connect, disconnect, status, ns, shell, init, ui and doctor.
+---
+
+## tug connect
+
+Point this terminal at a cluster. Other terminals and `~/.kube/config` are not
+touched. Alias: `tug c`.
+
+```bash
+tug connect [cluster] [label=value...] [flags]
+```
+
+The cluster can be a full name, a prefix or a [fuzzy match](/docs/concepts/targets).
+`label=value` arguments filter first. With no arguments, tug shows a list.
+Clusters labelled `env=prod` open [read-only](/docs/concepts/read-only).
+
+| Flag | Meaning |
+| --- | --- |
+| `-n`, `--namespace <name>` | Namespace for this session. |
+| `--read-only` | Open read-only, whatever the cluster's labels. |
+| `--read-write` | Open read-write, even on a production cluster. |
+| `--proxy` | Go through [tugd](/docs/guides/proxy), so the guard applies to every client. |
+
+```bash
+tug connect staging
+tug connect prod -n payments --proxy
+tug connect gpu=true
+```
+
+## tug disconnect
+
+Stop pointing this terminal at a cluster. `KUBECONFIG` goes back to what it
+was before.
+
+```bash
+tug disconnect
+```
+
+## tug status
+
+Show this terminal's cluster, namespace and mode. Alias: `tug current`.
+
+```bash
+tug status [-o table|json|yaml|name]
+```
+
+`-o name` prints just the cluster name, which is handy in prompts and scripts.
+JSON fields: `session`, `cluster`, `clusterID`, `namespace`, `readOnly`,
+`writable`, `unlockedUntil`, `kubeconfig`, `proxyURL`.
+
+## tug ns
+
+Switch this session's namespace. The name is matched fuzzily.
+
+```bash
+tug ns [namespace]
+```
+
+With no name, tug shows a list in a terminal, or prints all namespaces (the
+current one marked `*`) in a script. If you aren't allowed to list namespaces,
+tug trusts the name you give.
+
+## tug shell
+
+Start a subshell with its own session, for shells or environments without the
+hook. Takes the same cluster arguments as `connect`. Type `exit` to leave.
+
+```bash
+tug shell [cluster] [label=value...] [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-n`, `--namespace <name>` | Namespace for the new session. |
+| `--read-only` | Open read-only, whatever the cluster's labels. |
+| `--read-write` | Open read-write, even on a production cluster. |
+
+## tug init
+
+Print the shell hook. See [Set up your shell](/docs/getting-started/shell-setup).
+
+```bash
+tug init <zsh|bash|fish|powershell>
+```
+
+Set `TUG_PROMPT_DISABLE=1` to keep your prompt unchanged.
+
+## tug ui
+
+Open [k9s](https://k9scli.io) on this session's cluster. k9s must be installed.
+
+```bash
+tug ui
+```
+
+## tug doctor
+
+Check tug's setup and one cluster: DNS, TCP, TLS, credentials, the API server,
+clock and version skew, identity, permissions and the provider's access list.
+It only reads, and exits 1 when a check fails. See the
+[troubleshooting guide](/docs/guides/doctor).
+
+```bash
+tug doctor [cluster] [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--egress-ip <ip>` | Your public IP, for providers that check access lists. |
+| `-o`, `--output <format>` | `table`, `json` or `yaml`. |

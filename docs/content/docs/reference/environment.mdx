@@ -1,0 +1,45 @@
+---
+title: Environment variables
+description: Variables that change how tug behaves, and the ones its shell hook sets.
+icon: Variable
+---
+
+## Variables you can set
+
+| Variable | What it does |
+| --- | --- |
+| `TUG_HOME` | Put all of tug's folders under one directory (`config/`, `data/`, `cache/`, `run/`). Great for CI, tests and trying things out. |
+| `TUG_KEYRING_BACKEND` | `auto`, `keychain` or `file`. Overrides `keyring.backend` in config. |
+| `TUG_KEYRING_PASSPHRASE` | The passphrase for the encrypted file store. Needed by the `file` backend, and lets `auto` fall back to it. |
+| `TUG_SECRET_<NAME>` | A provider secret, used when there's no terminal to ask in. `<NAME>` is the secret's name in capitals: `TUG_SECRET_API_TOKEN`. |
+| `TUG_KUBECTL` | The kubectl to run. Overrides `kubectl` in config. |
+| `TUG_PLUGIN_PATH` | Plugin folders under development, searched first. Separated like `PATH`. |
+| `TUG_PROMPT_DISABLE` | Set to `1` before the hook line to leave your prompt unchanged. |
+| `NO_COLOR` | Turn off colour. `TERM=dumb` does too. |
+
+## Standard variables tug honours
+
+| Variable | What it does |
+| --- | --- |
+| `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME` | Where tug keeps config, data and cache, on every platform. |
+| `XDG_RUNTIME_DIR` | Where sessions live. Without it, a private folder in the system temp directory. |
+| `KUBECONFIG` | Files the kubeconfig provider imports. The hook also sets it per terminal. |
+| `KUBERC`, `KUBECTL_KUBERC` | Where `tug doctor` looks for kubectl's `kuberc`, or whether it's turned off. |
+| `CLOUDSDK_CONFIG` | Where the Google provider finds gcloud's configurations. |
+| `BROWSER` | A command `tug auth login` runs to open the sign-in page, instead of your system's browser. |
+| `SSH_CONNECTION` | When set, `tug auth login` uses a device code instead of a local browser. |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | Passed to plugins so they can reach their APIs through your proxy. |
+
+## Set by the shell hook
+
+The hook sets these for each terminal. Read them if you like, but don't set
+them yourself.
+
+| Variable | Meaning |
+| --- | --- |
+| `TUG_SESSION` | This terminal's session ID. |
+| `TUG_SESSION_PID` | The process ID of the shell that owns the session. |
+| `TUG_SESSION_DIR` | The session's folder. |
+| `TUG_ORIG_KUBECONFIG` | Your `KUBECONFIG` from before tug, restored when you disconnect. |
+| `TUG_PROMPT` | The coloured prompt text (a shell variable, not exported). `$global:TugPrompt` in PowerShell. |
+| `KUBECONFIG` | The session's kubeconfig, while connected. |

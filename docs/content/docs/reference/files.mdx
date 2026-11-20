@@ -1,0 +1,71 @@
+---
+title: Files and folders
+description: Where tug keeps its settings, catalog, secrets, plugins and sessions.
+icon: FolderTree
+---
+
+tug keeps everything in four folders, following the XDG conventions on every
+platform. None of them ever holds a plain-text secret.
+
+| Folder | macOS and Linux | Windows | Holds |
+| --- | --- | --- | --- |
+| Config | `~/.config/tug` | `%AppData%\tug` | Settings you edit |
+| Data | `~/.local/share/tug` | `%LocalAppData%\tug` | State tug owns |
+| Cache | `~/.cache/tug` | `%LocalAppData%\cache\tug` | Safe to delete at any time |
+| Runtime | `$XDG_RUNTIME_DIR/tug`, else `$TMPDIR/tug-<uid>` | `%TEMP%\tug-<user>` | Sessions and tugd |
+
+The `XDG_*` variables move these on any platform. `TUG_HOME` puts all four
+under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
+
+## What's inside
+
+<Files>
+  <Folder name="~/.config/tug" defaultOpen>
+    <File name="config.yaml" />
+  </Folder>
+  <Folder name="~/.local/share/tug" defaultOpen>
+    <File name="catalog.yaml" />
+    <File name="secrets.enc" />
+    <Folder name="plugins" defaultOpen>
+      <File name="links.yaml" />
+      <Folder name="acme">
+        <Folder name="0.1.0">
+          <File name="plugin.yaml" />
+          <Folder name="bin" />
+        </Folder>
+      </Folder>
+    </Folder>
+  </Folder>
+  <Folder name="~/.cache/tug">
+    <Folder name="discovery" />
+    <Folder name="http" />
+  </Folder>
+  <Folder name="$XDG_RUNTIME_DIR/tug" defaultOpen>
+    <Folder name="sessions" defaultOpen>
+      <Folder name="7f3a9c41d2e8" defaultOpen>
+        <File name="state.json" />
+        <File name="kubeconfig" />
+        <File name="prompt" />
+      </Folder>
+    </Folder>
+    <File name="tugd.sock" />
+    <File name="tugd.log" />
+  </Folder>
+</Files>
+
+| File | What it is |
+| --- | --- |
+| `config.yaml` | Your [settings](/docs/reference/configuration). Optional. |
+| `catalog.yaml` | Imported sources and their clusters, with labels. No secrets. |
+| `secrets.enc` | The encrypted secret store, only if you use the `file` backend. |
+| `plugins/<name>/<version>/` | Installed plugins. `links.yaml` lists linked ones. |
+| cache | API discovery data, to make commands faster. |
+| `sessions/<id>/` | One folder per terminal: its kubeconfig (no secrets), prompt text and state. |
+| `tugd.sock`, `tugd.log` | tugd's private control socket and its log. |
+
+## Permissions
+
+Files in these folders are readable only by you (`0600`), and folders are
+`0700`. tug writes state files atomically, so a crash never leaves a
+half-written catalog. It refuses to use a runtime folder that other users
+could change.

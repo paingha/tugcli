@@ -1,0 +1,86 @@
+---
+title: Signing in with OpenID Connect
+description: Sign in through your browser for clusters that trust an identity provider, and let tug keep the token fresh.
+icon: LogIn
+---
+
+Some clusters don't use a token from your cloud provider. Instead, they trust an
+**identity provider** (an OpenID Connect issuer, such as Okta, Azure AD,
+Google, Dex or Keycloak) and accept the ID token it gives you after you sign
+in. CoreWeave clusters imported with `--set auth=oidc` work this way, and so
+can clusters from any plugin.
+
+tug handles the whole sign-in for you: it opens your browser, keeps the tokens
+in your keychain, and refreshes them before they expire.
+
+## Sign in
+
+```console
+$ tug auth login cks-train
+Sign in to https://login.acme.example in your browser. If it does not open, visit:
+  https://login.acme.example/authorize?client_id=…
+Signed in to https://login.acme.example as sam@acme.example; the ID token is valid until 2026-11-20 18:04 GMT
+```
+
+Without a cluster name, tug signs in for this terminal's cluster:
+
+```bash
+tug auth login
+```
+
+tug uses the authorization code flow with PKCE, the same as `kubelogin`. Your
+browser comes back to `http://localhost:8000`, or `http://localhost:18000` if
+that port is busy.
+
+<Callout title="You often don't need to run it">
+  When kubectl needs a token and you haven't signed in yet, tug starts the
+  sign-in by itself, as long as it can show you the address (its error output
+  is a terminal). `tug auth login` is for signing in ahead of time.
+</Callout>
+
+## Signing in over SSH, or without a browser
+
+On a remote machine, a browser can't come back to `localhost`. Use a
+**device code** instead: tug shows a short code to enter on any device, such as
+your laptop or phone.
+
+```console
+$ tug auth login --device
+To sign in to https://login.acme.example, open https://login.acme.example/device on any device and enter the code WDJB-MJHT
+```
+
+tug uses a device code automatically when it sees it's running over SSH. If
+the issuer doesn't offer device codes, tug tells you to forward the port
+first:
+
+```bash
+ssh -L 8000:localhost:8000 devbox
+```
+
+## How tokens are kept
+
+- The **refresh token** and the **ID token** go into your
+  [keychain](/docs/concepts/credentials), never a file.
+- tug refreshes the ID token as it expires, so you sign in again only when the
+  refresh token stops working.
+- Clusters that share the same issuer, client and scopes share one sign-in.
+  Sign in once and they all work.
+- `tug doctor` reports a missing sign-in, but never starts one.
+
+## Sign out
+
+```console
+$ tug auth logout cks-train
+Signed out of https://login.acme.example
+```
+
+This removes the tokens tug keeps. Every cluster that shared the sign-in needs
+`tug auth login` again. The issuer isn't told, so if a token may have leaked,
+also end the session in your identity provider.
+
+## Settings
+
+| Setting | Where | What it does |
+| --- | --- | --- |
+| `oidc.listenAddresses` | [`config.yaml`](/docs/reference/configuration#oidc) | The local addresses tried for the browser's return, in order. Default: `127.0.0.1:8000`, then `127.0.0.1:18000`. Change it if your issuer allows other redirect URLs. |
+| `BROWSER` | environment | A command to open addresses with, instead of your system's browser. |

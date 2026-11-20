@@ -1,0 +1,141 @@
+---
+title: Contributing
+description: Report a bug, improve these docs, write a plugin or send a pull request. Every bit helps.
+icon: HeartHandshake
+---
+
+tug is open source under the MIT License, and it gets better with every bug
+report, docs fix, plugin and pull request. You don't need to be a Go or
+Kubernetes expert to make a difference.
+
+<Cards>
+  <Card icon={<Icon name="Bug" />} title="Report a bug" href="#reporting-a-bug">
+    Something broke, or tug said something confusing.
+  </Card>
+  <Card icon={<Icon name="BookOpenText" />} title="Improve the docs" href="#improving-these-docs">
+    A page was unclear, out of date or missing.
+  </Card>
+  <Card icon={<Icon name="Puzzle" />} title="Write a plugin" href="/docs/plugins/writing">
+    Teach tug about a platform it doesn't know yet.
+  </Card>
+  <Card icon={<Icon name="GitPullRequest" />} title="Send a pull request" href="#changing-the-code">
+    Fix a bug or build a feature.
+  </Card>
+</Cards>
+
+## Reporting a bug
+
+Open an issue on [GitHub](https://github.com/paingha/tugcli/issues) and
+include:
+
+1. what you ran, and what happened, with the full output;
+2. what you expected instead;
+3. the output of `tug version`;
+4. the output of `tug doctor -o json`, if the problem is reaching a cluster.
+
+<Callout type="warn" title="Tidy up before you paste">
+  tug never prints secrets, but cluster addresses, account IDs and user names
+  can still be sensitive. Replace them with placeholders before posting.
+</Callout>
+
+**Found a security problem?** Please don't open a public issue. Report it
+privately with the **Report a vulnerability** button on the repository's
+Security tab.
+
+## Suggesting a feature
+
+Open an issue that describes the problem you're trying to solve, not just the
+feature you have in mind. Knowing *why* helps find the best fix, and sometimes
+the answer is already in tug.
+
+## Improving these docs
+
+Every page has an **Open → Open on GitHub** menu at the top that takes you to
+its source. Small fixes can be made right there in GitHub's editor.
+
+To work on the docs locally:
+
+```bash
+git clone https://github.com/paingha/tugcli.git
+cd tugcli/docs
+npm install
+npm run dev          # http://localhost:3000
+```
+
+Pages are MDX files in `docs/content/docs`, and each folder's `meta.json` sets
+the order in the sidebar. A few things to keep in mind:
+
+- **Write plainly.** Short sentences, everyday words, and an example wherever
+  one helps. Use British spelling (colour, organise), as the rest of tug does.
+- **Show real output.** Sample output is copied from real runs of tug, so run
+  the command and paste what it prints.
+- **Use ` ```console ` for transcripts**, with commands starting `$ `. Output
+  is dimmed, and the copy button copies only the commands. Use ` ```text ` for
+  output on its own.
+
+## Changing the code
+
+You'll need Go (at the version in `go.mod`), `make` and
+[golangci-lint](https://golangci-lint.run/) v2.
+
+```bash
+make build           # bin/tug
+make test            # all tests, with the race detector
+make lint
+```
+
+<Callout title="Keep your own setup safe">
+  When you try a development build by hand, point it at a scratch folder and
+  the encrypted file store, so it can't touch your real keychain or catalog:
+
+  ```bash
+  export TUG_HOME="$(mktemp -d)" TUG_KEYRING_BACKEND=file TUG_KEYRING_PASSPHRASE=dev
+  ```
+</Callout>
+
+For anything bigger than a small fix, open an issue first so we can agree on
+the approach. Then:
+
+<Steps>
+<Step>
+
+### Branch from main
+
+</Step>
+<Step>
+
+### Follow the standards
+
+[AGENTS.md](https://github.com/paingha/tugcli/blob/main/AGENTS.md) holds the
+Go and CLI standards: how packages are laid out, how errors are written, how
+commands and flags behave, and how tests are structured.
+
+</Step>
+<Step>
+
+### Test it
+
+A bug fix comes with a test that fails without it. Run `make lint test`
+before pushing; CI runs on Linux and Windows, so run `make test` on a Mac if
+you changed platform-specific code.
+
+</Step>
+<Step>
+
+### Open a pull request
+
+Keep commits small, with an imperative subject such as
+`Add tug auth rotate for providers that can rotate`. Explain the problem, the
+fix and how you tested it. A maintainer reviews every pull request.
+
+</Step>
+</Steps>
+
+The full process, including commit conventions and protocol changes, is in
+[CONTRIBUTING.md](https://github.com/paingha/tugcli/blob/main/CONTRIBUTING.md).
+
+## Licence
+
+tug is released under the
+[MIT License](https://github.com/paingha/tugcli/blob/main/LICENSE). By
+contributing, you agree that your contributions are licensed under it too.

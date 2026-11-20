@@ -1,0 +1,116 @@
+---
+title: The catalog
+description: tug's list of every cluster it knows about, where each one came from, and its labels.
+icon: Library
+---
+
+The **catalog** is tug's address book of clusters. `tug import` fills it,
+`tug sync` keeps it fresh, and `tug ls` shows it. Everything else, such as
+`tug connect`, picks clusters from it.
+
+## Providers, accounts and sources
+
+Three words come up often:
+
+- A **provider** is a kind of place that knows about clusters: `kubeconfig`
+  files, `local` tools such as kind, `aws` for EKS, `google` for GKE, and
+  plugins such as `akamai` and `coreweave`.
+- An **account** is one set of access within a provider: one kubeconfig file,
+  one AWS profile, one Google Cloud project, one API token.
+- A **source** is an account you have imported, written
+  `provider/account`. For example `kubeconfig/default` is your
+  `~/.kube/config`, and `aws/work` is the AWS profile called `work`.
+
+```console
+$ tug import
+✓ kubeconfig/default: 3 clusters, 3 new, 2 credentials moved to keychain
+✓ aws/work: 4 clusters, 4 new
+```
+
+Each line is one source. The [providers](/docs/providers) section explains
+what each provider finds.
+
+## Clusters
+
+Each cluster in the catalog has:
+
+| Field | Example | Notes |
+| --- | --- | --- |
+| Name | `prod-eu` | What you type and see. Unique across the catalog. |
+| ID | `aws/work/prod-eu` | `provider/account/` plus the provider's own ID for the cluster. Never changes. |
+| Provider and account | `aws`, `work` | The source it came from. |
+| Region and version | `eu-west-1`, `1.32` | When the provider knows them. |
+| Server | `https://…eks.amazonaws.com` | The API server address. |
+| Labels | `env=prod`, `team=payments` | See below. |
+
+The catalog never holds a secret. Tokens and keys live in your
+[keychain](/docs/concepts/credentials).
+
+### When two clusters share a name
+
+Two sources can both have a cluster called `prod`. The first one imported
+keeps `prod`; the next gets the account added, as in `prod@work`, then
+`prod@aws-work` if that's taken too. A name never changes once given, so
+your scripts and muscle memory keep working after a sync. Use
+[`tug label`](/docs/guides/labels) to tell similar clusters apart.
+
+## Labels
+
+Labels are `key=value` tags. They let you filter (`tug ls -l env=prod`),
+connect by tag (`tug connect gpu=true`) and decide which clusters open
+[read-only](/docs/concepts/read-only).
+
+Labels come from three places:
+
+1. **tug itself** adds `provider`, `account` and `region`.
+2. **The provider** adds what it knows: EKS tags, GKE resource labels,
+   `gpu=true` for GKE clusters with GPU node pools, `local=true` and
+   `distro=kind` for local clusters, and so on.
+3. **You** add your own with [`tug label`](/docs/guides/labels). Yours win
+   when the key is the same.
+
+### The `env` label
+
+`env` gets special care, because it decides whether a cluster opens read-only.
+
+- Values from providers are tidied up: `production`, `prd` and `live` become
+  `prod`; `stage` and `stg` become `staging`; `development` becomes `dev`;
+  `qa` becomes `test`. A tag called `environment` counts as `env`.
+- If the provider doesn't say, tug **guesses from the name**. It splits the
+  name on `-`, `_`, `.`, `/`, `@` and `:` and looks for one of those words. So
+  `prod-eu` gets `env=prod`, `api-staging` gets `env=staging`, and
+  `production.us` gets `env=prod`.
+
+<Callout type="warn" title="Labels you set are used as written">
+  Only provider labels are tidied. If you set `env` yourself, write exactly
+  `prod`: `tug label payments env=prod`. A label of `env=production` that you
+  set by hand does **not** open read-only with the default settings.
+</Callout>
+
+## Keeping the catalog fresh
+
+Clusters come and go. `tug sync` asks every imported source again:
+
+```console
+$ tug sync
+✓ kubeconfig/default: 3 clusters
+✓ aws/work: 4 clusters, 1 new, 1 stale
+```
+
+- **New** clusters are added.
+- Clusters the provider no longer lists are marked **stale** rather than
+  deleted, in case the provider was only briefly unreachable. They show
+  `stale` in `tug ls`, and `tug connect` warns you.
+- Your own labels survive every sync.
+
+If a source fails (say, Docker isn't running for kind), its clusters stay in
+the catalog unchanged and tug tells you why, with a hint when it has one.
+
+## Removing a source
+
+```bash
+tug forget aws/work
+```
+
+This removes the source, its clusters and their stored credentials from the
+keychain. It doesn't touch the cloud account or the kubeconfig file itself.

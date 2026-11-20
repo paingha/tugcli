@@ -1,0 +1,4 @@
+{
+  "title": "Guides",
+  "pages": ["importing", "labels", "workloads", "proxy", "doctor", "sign-in", "rotating", "scripting"]
+}

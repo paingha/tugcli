@@ -1,0 +1,72 @@
+---
+title: Fuzzy names
+description: How tug turns a few typed letters into the cluster, namespace or workload you meant.
+icon: ScanSearch
+---
+
+You rarely need to type a full name in tug. `tug connect prod`,
+`tug ns pay` and `tug logs api` all work, because tug **matches** what you
+type against the names it knows.
+
+## How matches are ranked
+
+tug sorts every candidate into one of six levels. Only the best level counts:
+if one name sits alone at the top, tug uses it; if several tie, it asks.
+
+<MatchLadder />
+
+So with clusters `prod-eu`, `prod-us` and `preprod`, typing `prod` gives a tie
+between `prod-eu` and `prod-us` (both start with it) and you pick one.
+`preprod` only contains `prod`, which ranks lower, so it isn't offered.
+
+## When there's a tie
+
+In a terminal, tug shows a numbered list:
+
+```console
+$ tug connect prod
+Clusters:
+   1) prod-eu
+   2) prod-us
+Choose [1-2]: 1
+Connected to prod-eu, namespace default, read-only (tug unlock 15m to allow writes)
+```
+
+In a script, with no terminal to ask in, tug doesn't guess. It stops with an
+error that lists the matches and asks you to be more specific, and exits
+with status 1.
+
+## Workloads
+
+Commands that act on a workload (`logs`, `sh`, `pf`, `restart`, `scale`,
+`rollback`, `top`) look at deployments, statefulsets, daemonsets and pods in
+the session's namespace.
+
+- **Workloads win over bare pods.** `tug logs api` means `deploy/api-server`,
+  not one of its pods.
+- **Add a kind to be exact.** Prefix the name with the kind, using kubectl's
+  short names:
+
+| You type | Means |
+| --- | --- |
+| `deploy/api` or `deployment/api` | a deployment |
+| `sts/db` or `statefulset/db` | a statefulset |
+| `ds/agent` or `daemonset/agent` | a daemonset |
+| `pod/debug` or `po/debug` | a single pod |
+
+```bash
+tug logs sts/db -c postgres   # the db statefulset, postgres container
+tug sh pod/debug              # exactly this pod
+```
+
+- **Another namespace?** Add `-n`: `tug logs api -n payments`.
+
+## Clusters and labels together
+
+`tug connect` and `tug shell` also take `key=value` filters. Labels narrow the
+list first, then the name is matched among what's left:
+
+```bash
+tug connect gpu=true          # pick from clusters labelled gpu=true
+tug connect env=prod eu       # production clusters whose name matches "eu"
+```

@@ -1,0 +1,72 @@
+---
+title: Plugins overview
+description: Add new providers to tug with small programs that speak JSON, in any language.
+icon: Puzzle
+---
+
+A **provider plugin** teaches tug about a new place to find clusters: a cloud,
+an internal platform, a team's inventory service. Once installed, it works
+exactly like a built-in provider: `tug import <name>`, `tug sync`,
+`tug connect` and the rest.
+
+## What a plugin is
+
+A plugin is just a program called `tug-provider-<name>`, plus a small
+manifest file called `plugin.yaml`. For each job, tug runs the program with
+the job's name as its only argument, writes one JSON request to its input, and
+reads one JSON response from its output.
+
+```console
+$ echo '{"apiVersion":"provider/v1alpha1","kind":"DescribeRequest"}' | ./tug-provider-acme describe
+{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse","name":"acme","protocols":["provider/v1alpha1"],"capabilities":["list","credential"]}
+```
+
+That's the whole interface, so you can write a plugin in any language. tug
+ships a Go SDK and a Python template to make it quick.
+
+## How tug keeps plugins in check
+
+Plugins handle your credentials, so tug is careful with them:
+
+- **You see what it gets before you install.** `tug plugin install` shows the
+  publisher, the secrets the plugin will receive, the environment variables
+  it reads and the hosts it talks to, then asks you to confirm.
+- **Checksums are verified.** The binary for your platform must match the
+  SHA-256 in its manifest, at install time and every time it's loaded.
+- **Version checks.** A plugin that needs a newer tug (its `minTugVersion`) is
+  refused, rather than failing in odd ways later.
+- **Archives are checked.** tug refuses archives with links or paths that
+  point outside the plugin's folder.
+- **A clean environment.** Plugins run with a scrubbed environment: only basics
+  such as `PATH`, `HOME` and proxy settings, plus variables the manifest
+  declares.
+- **Only their own secrets.** A plugin receives only the secrets it declares,
+  for the account it's working on.
+- **Built-ins can't be replaced by accident.** A plugin named `aws` is ignored
+  unless you allow it in [`plugins.allowOverride`](/docs/reference/configuration).
+- **Timeouts.** Each call has a time limit (30 seconds to list, 10 seconds for a
+  credential), after which tug stops the plugin.
+
+## Where to next
+
+<Cards>
+  <Card title="Install and manage" href="/docs/plugins/managing">
+    Install, link, list, inspect and remove plugins.
+  </Card>
+  <Card title="Write a plugin" href="/docs/plugins/writing">
+    Scaffold one in Go or Python and make it real.
+  </Card>
+  <Card title="Protocol reference" href="/docs/plugins/protocol">
+    Every message, field and error code.
+  </Card>
+  <Card title="Test it" href="/docs/plugins/testing">
+    Run the conformance suite, locally and in CI.
+  </Card>
+</Cards>
+
+<Callout title="The complete authors' guide">
+  These pages get you going. For every detail (optional operations, limits,
+  versioning, releasing and troubleshooting), read the full
+  [plugin authors' guide](https://github.com/paingha/tugcli/blob/main/docs/plugins.md)
+  in tug's repository.
+</Callout>

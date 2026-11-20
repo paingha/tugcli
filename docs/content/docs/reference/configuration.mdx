@@ -1,0 +1,134 @@
+---
+title: Configuration file
+description: Every setting in config.yaml, with its default.
+icon: Settings
+---
+
+tug works without any configuration. When you want to change a default, create
+`config.yaml` in tug's config folder:
+
+| Platform | Path |
+| --- | --- |
+| macOS and Linux | `~/.config/tug/config.yaml` (or `$XDG_CONFIG_HOME/tug/config.yaml`) |
+| Windows | `%AppData%\tug\config.yaml` |
+| With `TUG_HOME` set | `$TUG_HOME/config/config.yaml` |
+
+tug reads the file strictly: a misspelt key is an error, so you'll know
+straight away rather than wondering why a setting does nothing.
+
+## A complete example
+
+```yaml title="~/.config/tug/config.yaml"
+# Where secrets live: auto, keychain or file.
+keyring:
+  backend: auto
+
+# The kubectl to run for passthrough commands and tug top.
+kubectl: kubectl
+
+guard:
+  # A cluster matching ANY of these label sets opens read-only.
+  readOnlyLabels:
+    - env: prod
+    - team: payments
+      tier: critical
+
+plugins:
+  # Built-in provider names a plugin may replace.
+  allowOverride: []
+  # Time limits per plugin operation.
+  timeouts:
+    list: 60s
+    credential: 15s
+    rotate: 2m
+
+sessions:
+  # Remove sessions untouched for this long.
+  maxAge: 168h
+
+oidc:
+  # Where the browser comes back to after an OpenID Connect sign-in.
+  listenAddresses: [127.0.0.1:8000, 127.0.0.1:18000]
+```
+
+## keyring
+
+<TypeTable
+  type={{
+    backend: {
+      type: '"auto" | "keychain" | "file"',
+      default: '"auto"',
+      description: 'auto uses the OS keychain when it works, and the encrypted file when it doesn’t and TUG_KEYRING_PASSPHRASE is set. TUG_KEYRING_BACKEND overrides this.',
+    },
+  }}
+/>
+
+## kubectl
+
+<TypeTable
+  type={{
+    kubectl: {
+      type: 'string',
+      default: '"kubectl"',
+      description: 'The kubectl program to run, by name or path. TUG_KUBECTL overrides this.',
+    },
+  }}
+/>
+
+## guard
+
+<TypeTable
+  type={{
+    readOnlyLabels: {
+      type: 'list of label sets',
+      default: '[{env: prod}]',
+      description:
+        'A cluster opens read-only when it has every label in at least one set. Setting this replaces the default, so include env: prod if you still want it.',
+    },
+  }}
+/>
+
+## plugins
+
+<TypeTable
+  type={{
+    allowOverride: {
+      type: 'string[]',
+      default: '[]',
+      description: 'Built-in provider names (aws, google, kubeconfig, local) that a plugin of the same name may replace.',
+    },
+    timeouts: {
+      type: 'map of operation to duration',
+      default: '{list: 30s, credential: 10s, rotate: 60s, others: 30s}',
+      description:
+        'Per-operation time limits: describe, accounts, list, credential, rotate, checkAccess. Operations left out keep the default. A call that runs out of time fails as Unavailable.',
+    },
+  }}
+/>
+
+## sessions
+
+<TypeTable
+  type={{
+    maxAge: {
+      type: 'duration',
+      default: '"168h" (7 days)',
+      description: 'Sessions not updated for this long are removed when a new terminal starts, even if their shell looks alive.',
+    },
+  }}
+/>
+
+## oidc
+
+<TypeTable
+  type={{
+    listenAddresses: {
+      type: 'string[]',
+      default: '["127.0.0.1:8000", "127.0.0.1:18000"]',
+      description:
+        'Loopback addresses tried, in order, for the browser’s return after tug auth login (it comes back to http://localhost:<port>). Change them only if your identity provider allows other redirect URLs.',
+    },
+  }}
+/>
+
+Durations are written as strings such as `"30s"`, `"15m"` or `"168h"`.

@@ -1,0 +1,272 @@
+---
+title: Protocol reference
+description: The provider/v1alpha1 wire protocol, the manifest format, and every message and error.
+icon: Braces
+---
+
+This page is the full contract between tug and a provider plugin. If you use
+the Go SDK (`github.com/paingha/tugcli/pkg/provider`), it handles all of this
+for you; read on if you're writing a plugin from scratch or want to know
+exactly what goes over the wire.
+
+## How a call works
+
+1. tug starts `tug-provider-<name> <operation>`, for example
+   `tug-provider-acme list`.
+2. It writes **one JSON request** to the plugin's stdin and closes it.
+3. The plugin writes **one JSON response** to stdout and exits.
+4. Anything on stderr goes to tug's debug log (`tug --debug`).
+
+Rules worth knowing:
+
+- stdout must carry **only** the JSON response. Print logs to stderr.
+- Each message is at most **16 MiB**.
+- Exit `0` on success. On failure, write an `Error` message to stdout and exit
+  non-zero (the SDK uses `1`, and `2` for a bad command line).
+- When a call times out, tug sends SIGTERM and waits two seconds before
+  killing the process. Stop promptly when you get it.
+- Every message carries `"apiVersion": "provider/v1alpha1"` and a `kind`.
+
+## Operations
+
+| Operation | Request | Response | Required? |
+| --- | --- | --- | --- |
+| `describe` | `DescribeRequest` | `DescribeResponse` | Yes |
+| `list` | `ListRequest` | `ListResponse` | Yes |
+| `credential` | `CredentialRequest` | `CredentialResponse` | Yes |
+| `accounts` | `AccountsRequest` | `AccountsResponse` | With the `accounts` capability |
+| `rotate` | `RotateRequest` | `CredentialResponse` | With the `rotate` capability |
+| `checkAccess` | `CheckAccessRequest` | `CheckAccessResponse` | With the `checkAccess` capability |
+| `serve` | | | Reserved for a future long-running mode |
+
+### Default time limits
+
+| Operation | Limit |
+| --- | --- |
+| `list` | 30 s |
+| `credential` | 10 s |
+| `rotate` | 60 s |
+| everything else | 30 s |
+
+A call that runs out of time fails as `Unavailable`. People can change these
+with [`plugins.timeouts`](/docs/reference/configuration#plugins).
+
+### Versioning
+
+Within `provider/v1alpha1`, changes are additive: new optional fields,
+operations and capabilities. Ignore JSON fields you don't know rather than
+rejecting the request, and tug does the same for capability names.
+
+## describe
+
+Tells tug who you are and what you can do.
+
+```json title="response"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "DescribeResponse",
+  "name": "acme",
+  "version": "0.1.0",
+  "protocols": ["provider/v1alpha1"],
+  "capabilities": ["list", "credential"],
+  "secrets": [{ "name": "api_token", "prompt": "Acme API token" }]
+}
+```
+
+`name` must match the manifest. Unknown capability names are ignored, so newer
+plugins keep working with older versions of tug.
+
+## accounts
+
+Finds accounts already set up on this machine (say, profiles in your vendor's
+CLI config), so `tug import` can offer them.
+
+```json title="response"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "AccountsResponse",
+  "accounts": [
+    { "id": "work", "description": "Acme profile work", "config": { "region": "eu" } }
+  ]
+}
+```
+
+## list
+
+Returns the clusters in one account.
+
+```json title="request"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "ListRequest",
+  "account": { "id": "work", "config": { "region": "eu" } },
+  "secrets": { "api_token": "…" }
+}
+```
+
+```json title="response"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "ListResponse",
+  "clusters": [
+    {
+      "id": "c-7f3a9",
+      "name": "prod-eu",
+      "region": "eu-west",
+      "version": "1.32.4",
+      "endpoints": { "public": "https://203.0.113.10:6443" },
+      "caData": "LS0tLS1CRUdJTi…",
+      "labels": { "env": "prod", "team": "payments" }
+    }
+  ]
+}
+```
+
+### Cluster fields
+
+<TypeTable
+  type={{
+    id: { type: 'string', required: true, description: 'Stable for the life of the cluster within its account. Never reuse one.' },
+    name: { type: 'string', required: true, description: 'What people type. tug adds a suffix if it clashes with another cluster.' },
+    region: { type: 'string' },
+    version: { type: 'string', description: 'Kubernetes version.' },
+    endpoints: { type: '{ public?: string, private?: string }', required: true, description: 'API server URLs (https).' },
+    caData: { type: 'base64 PEM', description: "The cluster's CA certificate." },
+    tlsServerName: { type: 'string', description: 'Server name to verify, when it differs from the URL.' },
+    insecureSkipTLSVerify: { type: 'boolean', description: 'Avoid. tug doctor warns about it.' },
+    proxyURL: { type: 'string', description: 'A proxy to reach the API server through.' },
+    defaultNamespace: { type: 'string', description: 'Namespace a new session starts in.' },
+    labels: { type: 'object', description: 'Keys are lower-cased. Set env so production opens read-only.' },
+    credential: { type: 'Credential', description: 'A credential you already hold at list time. tug moves it to the keychain.' },
+  }}
+/>
+
+## credential and rotate
+
+`credential` returns a credential for one cluster. `rotate` issues a new one
+and revokes the old where possible; [`tug auth rotate`](/docs/guides/rotating)
+calls it after asking the user. If `rotate` fails, tug drops its cached
+credential anyway, since the old one may already be revoked, and the next
+request calls `credential`. So when you revoke first and the replacement
+isn't ready in time, return an error whose `hint` says when it will be.
+
+```json title="request"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "CredentialRequest",
+  "account": { "id": "work" },
+  "clusterID": "c-7f3a9",
+  "secrets": { "api_token": "…" }
+}
+```
+
+```json title="response"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "CredentialResponse",
+  "credential": { "type": "token", "token": "…", "expiresAt": "2026-11-20T18:04:05Z" }
+}
+```
+
+### Credential shapes
+
+`type` says which fields are filled. Leave out `expiresAt` for credentials
+that don't expire.
+
+| `type` | Fields |
+| --- | --- |
+| `token` | `token` |
+| `clientCert` | `certData`, `keyData` (base64 PEM) |
+| `oidc` | `issuer`, `clientID`, optional `clientSecret`, `scopes` |
+| `delegate` | `exec`: `{ command, args, env, apiVersion, interactiveMode, installHint }`, a kubectl exec plugin tug runs unchanged |
+
+## checkAccess
+
+Explains why someone may not reach a cluster, for example a control-plane
+firewall. `tug doctor` calls it.
+
+```json title="request"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "CheckAccessRequest",
+  "account": { "id": "work" },
+  "cluster": { "id": "c-7f3a9", "name": "prod-eu", "endpoints": { "public": "https://…" } },
+  "egressIP": "198.51.100.9",
+  "secrets": { "api_token": "…" }
+}
+```
+
+```json title="response"
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "CheckAccessResponse",
+  "findings": [
+    {
+      "severity": "error",
+      "message": "198.51.100.9 is not in the control plane's access list",
+      "fix": "add it in Cloud Manager under the cluster's Control Plane ACL"
+    }
+  ]
+}
+```
+
+`severity` is `info`, `warning` or `error`.
+
+## Errors
+
+On failure, write an `Error` message to stdout and exit non-zero:
+
+```json
+{
+  "apiVersion": "provider/v1alpha1",
+  "kind": "Error",
+  "code": "Unauthenticated",
+  "message": "invalid api_token",
+  "hint": "create a new token at https://console.acme.example/tokens"
+}
+```
+
+| Code | Use it when | tug's reaction |
+| --- | --- | --- |
+| `Unauthenticated` | Secrets are missing, wrong or expired. | Suggests signing in again. **Required** for invalid secrets. |
+| `PermissionDenied` | The identity is valid but not allowed. | Reports it. |
+| `NotFound` | The account or cluster doesn't exist. | Reports it. |
+| `RateLimited` | Slow down. Set `retryAfterSeconds` if you know. | Waits before retrying. |
+| `Unavailable` | The provider's API can't be reached. | Keeps the catalog as it was. |
+| `InvalidConfig` | Account settings or the request are wrong. | Reports it. |
+| `Unimplemented` | The operation isn't supported. | Treats the capability as absent. |
+| `Internal` | Anything else. | Reports it. |
+
+`hint` is for people: say what to do next. tug prints it on its own line.
+
+## The manifest
+
+Every plugin folder has a `plugin.yaml`:
+
+<TypeTable
+  type={{
+    'apiVersion': { type: 'string', required: true, description: 'tug.plugin/v1alpha1' },
+    'kind': { type: 'string', required: true, description: 'ProviderPlugin' },
+    'metadata.name': { type: 'string', required: true, description: 'Lower-case letters, digits and dashes. The binary is tug-provider-<name>.' },
+    'metadata.version': { type: 'string', required: true },
+    'metadata.publisher': { type: 'string', description: 'Shown before install.' },
+    'metadata.homepage': { type: 'string', description: 'Shown before install.' },
+    'spec.protocols': { type: 'string[]', required: true, description: 'Must include provider/v1alpha1.' },
+    'spec.minTugVersion': { type: 'string', description: 'The oldest tug this plugin works with.' },
+    'spec.capabilities': { type: 'string[]', description: 'list, credential, accounts, rotate, checkAccess.' },
+    'spec.platforms': { type: '{ os, arch, bin, sha256? }[]', required: true, description: 'One entry per OS and architecture. bin is a path inside the plugin folder. tug plugin package fills in sha256.' },
+    'spec.secrets': { type: '{ name, prompt?, optional? }[]', description: 'Secrets tug asks for and sends in requests.' },
+    'spec.env': { type: 'string[]', description: 'Host environment variables passed through, such as AWS_PROFILE.' },
+    'spec.network': { type: 'string[]', description: 'Hosts the plugin talks to. Shown before install.' },
+    'spec.accountConfig': { type: 'JSON Schema', description: 'Describes the settings people pass with --set.' },
+  }}
+/>
+
+### The plugin's environment
+
+Plugins don't inherit your shell's environment. They get `PATH`, `HOME`,
+`LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, `USER`, the TLS certificate
+variables `SSL_CERT_FILE` and `SSL_CERT_DIR`, the proxy variables
+(`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` in either case), a few Windows system
+variables, and whatever `spec.env` lists. Secrets arrive in the request, never
+in the environment.

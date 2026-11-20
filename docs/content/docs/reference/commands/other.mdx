@@ -1,0 +1,96 @@
+---
+title: Other commands
+description: auth, daemon, version and completion.
+---
+
+## tug auth
+
+Sign in, rotate credentials, and serve them to kubectl and other clients.
+
+### tug auth login
+
+Sign in to the OpenID Connect issuer a cluster trusts, in your browser or with
+a device code. Without a cluster, signs in for this terminal's cluster. See
+[Signing in with OpenID Connect](/docs/guides/sign-in).
+
+```bash
+tug auth login [cluster] [label=value...] [--device]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--device` | Show a code to enter on another device instead of opening a browser here. Automatic over SSH. |
+
+### tug auth logout
+
+Forget the OpenID Connect sign-in a cluster uses. Every cluster sharing that
+sign-in needs `tug auth login` again. The issuer isn't told.
+
+```bash
+tug auth logout [cluster] [label=value...]
+```
+
+### tug auth rotate
+
+Replace a cluster's credential with a new one, which the provider issues while
+revoking the old. Only providers with the `rotate` capability can do this. See
+[Rotating a credential](/docs/guides/rotating).
+
+```bash
+tug auth rotate [cluster] [label=value...] [--yes]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-y`, `--yes` | Rotate without asking. Read-only clusters still ask. |
+
+The commands below are what kubectl and other clients call through the
+kubeconfigs tug writes. You won't usually run them yourself.
+
+### tug auth token
+
+Print a `client.authentication.k8s.io/v1` ExecCredential for a cluster. It
+answers from the cache, or asks the cluster's provider on a miss.
+
+```bash
+tug auth token --cluster <id> [--refresh]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--cluster <id>` | Catalog cluster ID or name. Required. |
+| `--refresh` | Ignore the cache and ask the provider. |
+
+### tug auth proxy-token
+
+Print an ExecCredential for a session's [tugd](/docs/guides/proxy) proxy. Used
+by sessions connected with `--proxy`.
+
+## tug daemon
+
+Run tugd, the background process behind the [local API proxy](/docs/guides/proxy).
+tug starts it when a session needs it, and it stops after 30 minutes without a
+live session.
+
+| Command | Meaning |
+| --- | --- |
+| `tug daemon start` | Start tugd in the background if it isn't running. |
+| `tug daemon status [-o table\|json\|yaml]` | Show whether it's running and what it serves. |
+| `tug daemon stop` | Stop tugd. |
+
+## tug version
+
+Print tug's version, commit, Go version and platform.
+
+```bash
+tug version [-o table|json|yaml]
+```
+
+## tug completion
+
+Generate a tab-completion script. See
+[Installation](/docs/getting-started/installation#turn-on-tab-completion-optional).
+
+```bash
+tug completion <bash|zsh|fish|powershell>
+```

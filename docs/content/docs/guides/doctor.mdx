@@ -1,0 +1,131 @@
+---
+title: Troubleshooting with tug doctor
+description: When a cluster won't answer, tug doctor finds out why and tells you how to fix it.
+icon: Stethoscope
+---
+
+"Unable to connect to the server" could mean a dozen things: a typo in the
+address, a VPN that's off, an expired token, a clock that's drifted, or a
+firewall that doesn't know your IP. `tug doctor` checks them all, in order,
+and tells you what to do about each problem it finds.
+
+```bash
+tug doctor              # this terminal's cluster
+tug doctor prod-eu      # any cluster in the catalog
+```
+
+doctor only **reads**. It never changes the cluster, whatever your session's
+mode.
+
+## What you'll see
+
+```console
+$ tug doctor
+tug setup
+RESULT  CHECK                       DETAIL
+ok      shell session               session 7f3a9c, connected to prod-eu (read-only)
+ok      credential store            keychain
+ok      kubectl                     v1.33.2 at /opt/homebrew/bin/kubectl
+ok      kubectl credential plugins  no kuberc, so kubectl runs any credential plugin
+ok      catalog                     9 clusters from 3 sources
+
+cluster prod-eu
+RESULT  CHECK         DETAIL
+ok      DNS           4f2a….gr7.eu-west-1.eks.amazonaws.com is 10.20.1.4, 10.20.2.9
+FAIL    TCP           cannot connect to 4f2a….gr7.eu-west-1.eks.amazonaws.com:443: i/o timeout
+                      fix: check your VPN, proxy or firewall
+…
+
+9 ok, 0 warnings, 1 failed
+```
+
+Each check is **ok**, **warn**, **FAIL** or **skip**. When something isn't ok,
+the line underneath starts with `fix:` and says what to try. doctor exits
+with status 1 if any check failed, so you can use it in scripts.
+
+## The checks
+
+### Your setup
+
+| Check | What it looks at |
+| --- | --- |
+| shell session | Is the [shell hook](/docs/getting-started/shell-setup) loaded? Is `KUBECONFIG` pointing at this session, so kubectl and helm follow `tug connect`? |
+| credential store | Can tug open the keychain (or the encrypted file)? |
+| kubectl | Is kubectl installed, and which version? |
+| kubectl credential plugins | Does a `kuberc` file stop kubectl from running `tug auth token`? If so, doctor tells you what to add. |
+| catalog | How many clusters you have, whether any are stale, and whether a source's last sync failed. |
+
+### The cluster
+
+These run in order, from the network up, so the first failure is usually the
+one to fix.
+
+| Check | What it looks at |
+| --- | --- |
+| endpoint | Is the stored address a proper `https://` URL? |
+| DNS | Does the API server's name resolve? |
+| TCP | Can this machine open a connection to it? |
+| TLS | Does the server's certificate match the stored CA? Is verification turned off? |
+| credentials | Can tug get a credential, what kind, and when does it expire? |
+| API server | Does the server answer, and does it accept the credential? |
+| clock | Is your clock close to the server's? Tokens and certificates fail when clocks drift. |
+| version skew | Is kubectl within one minor version of the server? |
+| identity | Who does the cluster think you are, and in which groups? |
+| permissions | In the namespace, can you list pods, read logs, exec, port-forward, patch deployments and delete pods? |
+| provider access list | For providers that support it: is your IP allowed through the control plane's firewall? |
+
+## Checking an access list
+
+Some providers, such as [Akamai LKE](/docs/providers/akamai), can restrict
+which IP addresses may reach a cluster's control plane. Tell doctor your
+public IP and it asks the provider whether you're allowed in:
+
+```bash
+tug doctor lke-prod --egress-ip 198.51.100.9
+```
+
+## For scripts and bug reports
+
+```bash
+tug doctor -o json
+```
+
+Each result has a `group` (`setup` or `cluster`), `name`, `status`, `detail`
+and, when something's wrong, a `fix`. Pasting this into an issue is the
+quickest way to get help.
+
+## Common fixes
+
+<Accordions>
+  <Accordion title="shell session: this terminal has no tug session">
+    The hook isn't loaded. Add the `tug init` line for your shell (see
+    [Set up your shell](/docs/getting-started/shell-setup)) and open a new terminal.
+  </Accordion>
+  <Accordion title="shell session: KUBECONFIG points elsewhere">
+    Something in your startup files sets `KUBECONFIG` after tug's hook. Move the
+    `tug init` line to the end of the file.
+  </Accordion>
+  <Accordion title="kubectl credential plugins: kuberc denies tug">
+    Your `~/.kube/kuberc` (or the file in `$KUBERC`) only allows listed
+    credential plugins. Add tug's full path, which doctor prints, to the allowlist.
+  </Accordion>
+  <Accordion title="DNS or TCP fails">
+    The cluster may only be reachable on a private network. Connect your VPN or
+    bastion and try again. If the cluster was recreated, run `tug sync`.
+  </Accordion>
+  <Accordion title="TLS: the stored CA is not valid, or verification fails">
+    The cluster's certificate changed. Run `tug sync` to fetch it again.
+  </Accordion>
+  <Accordion title="credentials or API server: 401">
+    The credential expired or was revoked. For cloud providers, sign in again
+    with their CLI (for example `aws sso login`), then `tug sync`. For a
+    kubeconfig file, import the new file.
+  </Accordion>
+  <Accordion title="clock: this machine's clock is off">
+    Turn on automatic time synchronisation in your system settings.
+  </Accordion>
+  <Accordion title="permissions: cannot list pods">
+    Your identity works but has no access in this namespace. Try another with
+    `tug ns`, or ask the cluster's administrator.
+  </Accordion>
+</Accordions>

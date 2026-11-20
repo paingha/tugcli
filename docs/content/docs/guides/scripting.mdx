@@ -1,0 +1,125 @@
+---
+title: Scripts and CI
+description: Use tug without a terminal, in shell scripts, cron jobs and CI pipelines.
+icon: Bot
+---
+
+Every tug command works without a person at the keyboard. This page covers
+what changes when there's no terminal, and the switches scripts need.
+
+## What changes without a terminal
+
+tug only asks questions when both its input and its error output are a
+terminal. Otherwise:
+
+| Situation | In a terminal | In a script |
+| --- | --- | --- |
+| A name matches several things | Shows a list to pick from | Fails with the list of matches; be more specific |
+| `tug import` finds accounts | Asks which to import | Fails unless you pass `--yes` |
+| A provider needs a secret | Asks for it (hidden) | Reads `TUG_SECRET_<NAME>`, or fails saying which to set |
+| A change on a read-only session | Asks `[y/N]` | Refused. Run `tug unlock` first, on purpose |
+| `tug plugin install` | Shows what the plugin gets, asks to confirm | Needs `--yes` |
+
+## Output for machines
+
+Results go to **stdout**; questions, progress, warnings and hints go to
+**stderr**. So you can pipe tug's output safely.
+
+Most listing commands take `-o`:
+
+| Format | Example |
+| --- | --- |
+| `table` (default) | `tug ls` |
+| `json` | `tug ls -o json \| jq '.[].name'` |
+| `yaml` | `tug status -o yaml` |
+| `name` | `tug ls -l env=prod -o name` |
+
+JSON and YAML output is a **stable interface**: new fields may be added, but
+existing ones aren't renamed or removed.
+
+Colour is turned off automatically when output isn't a terminal, when
+`NO_COLOR` is set, or when `TERM=dumb`.
+
+## Exit codes
+
+- `0` means success.
+- `1` means tug hit an error. It prints `tug: <what went wrong>` on stderr,
+  and often a `hint:` line saying what to do.
+- When tug runs another program (kubectl through passthrough, or a command in
+  a pod with `tug sh api -- …`), it exits with **that program's** code.
+
+## Secrets from the environment
+
+When a provider needs a secret and there's no terminal, tug reads it from
+`TUG_SECRET_<NAME>`, where `<NAME>` is the secret's name in capitals. Most
+plugins call theirs `api_token`:
+
+```bash
+TUG_SECRET_API_TOKEN="$CW_TOKEN" tug import coreweave --account ci
+```
+
+Secrets never come from command-line flags, because those end up in shell
+history and process lists.
+
+## Keeping CI isolated
+
+On a CI runner you want tug to keep its state in the job's workspace and use
+an encrypted file rather than a keychain:
+
+```bash
+export TUG_HOME="$RUNNER_TEMP/tug"            # all of tug's folders go here
+export TUG_KEYRING_BACKEND=file
+export TUG_KEYRING_PASSPHRASE="$TUG_PASSPHRASE"
+```
+
+[`TUG_HOME`](/docs/reference/environment) puts tug's config, data, cache and
+sessions under one folder, so nothing touches the runner's home directory.
+
+## Sessions in a script
+
+`tug connect` needs a session, which the shell hook creates. The hook works
+in scripts too: load it at the top, and every `tug` command keeps
+`KUBECONFIG` in step, exactly as in a terminal.
+
+```bash title="deploy-check.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+eval "$(tug init bash)"
+
+tug connect staging-us
+kubectl rollout status deploy/api-server --timeout 2m
+tug logs api --since 5m
+```
+
+The session ends when the script exits.
+
+## Example: GitHub Actions
+
+```yaml title=".github/workflows/smoke.yml"
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      TUG_HOME: ${{ runner.temp }}/tug
+      TUG_KEYRING_BACKEND: file
+      TUG_KEYRING_PASSPHRASE: ${{ secrets.TUG_PASSPHRASE }}
+    steps:
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - run: go install github.com/paingha/tugcli/cmd/tug@latest
+      - name: Check staging
+        env:
+          KUBECONFIG_DATA: ${{ secrets.STAGING_KUBECONFIG }}
+        run: |
+          eval "$(tug init bash)"
+          printf '%s' "$KUBECONFIG_DATA" > "$RUNNER_TEMP/staging.yaml"
+          tug import kubeconfig "$RUNNER_TEMP/staging.yaml" --account staging
+          rm "$RUNNER_TEMP/staging.yaml"      # the token now lives in tug's encrypted file
+          tug connect staging
+          kubectl get deploy
+          tug doctor -o json > doctor.json
+```
+
+Each `run:` step is a new shell, so load the hook in every step that uses
+`tug connect`. The catalog and secrets carry over between steps because they
+live in `TUG_HOME`.

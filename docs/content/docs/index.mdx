@@ -1,0 +1,97 @@
+---
+title: What is tug?
+description: A short tour of tug, the friendlier way to reach and work with your Kubernetes clusters.
+icon: Sailboat
+---
+
+tug is a command-line tool that makes Kubernetes clusters easy to reach. It finds
+the clusters you have access to, keeps their passwords and tokens safe in your
+computer's keychain, and lets each terminal window work with a different cluster
+at the same time.
+
+If you have ever typed a command into the wrong cluster, hunted for a kubeconfig
+file, or copied a pod name just to read its logs, tug is for you.
+
+## The problems tug solves
+
+<Cards>
+  <Card icon={<Icon name="Compass" />} title="“Which cluster am I on?”">
+    With plain kubectl, switching context in one terminal switches it everywhere.
+    tug gives every terminal its own cluster, and shows it in your prompt.
+  </Card>
+  <Card icon={<Icon name="KeyRound" />} title="“Where did that token go?”">
+    Kubeconfig files often hold tokens in plain text. tug moves them into your
+    keychain and writes kubeconfigs that hold no secrets at all.
+  </Card>
+  <Card icon={<Icon name="LifeBuoy" />} title="“Oops, that was production.”">
+    Clusters labelled `env=prod` open read-only. tug asks before anything that
+    could change them, until you unlock writes for a while.
+  </Card>
+  <Card icon={<Icon name="Zap" />} title="“Why is this command so long?”">
+    `tug logs api -f` follows every pod of `deploy/api-server`. Type a few letters
+    and tug works out the rest.
+  </Card>
+</Cards>
+
+## How it fits together
+
+tug sits between you and your clusters. It never replaces kubectl: it gets
+kubectl, helm and k9s pointed at the right place with the right credentials.
+
+<Flow caption="From “I have access somewhere” to “I'm working in the cluster”.">
+  <FlowStep title="Providers" tone="harbour">
+    Places that know about clusters: kubeconfig files, kind, EKS, GKE and more.
+  </FlowStep>
+  <FlowStep title="Catalog">
+    tug's list of every cluster it found, with labels such as `env=prod`.
+  </FlowStep>
+  <FlowStep title="Session" tone="tug">
+    This terminal's cluster and namespace. Each terminal has its own.
+  </FlowStep>
+  <FlowStep title="Your tools" tone="safe">
+    `kubectl`, `helm`, `k9s` and tug's own commands all follow the session.
+  </FlowStep>
+</Flow>
+
+## A sixty-second tour
+
+```bash
+tug import            # find clusters on this machine and in your cloud accounts
+tug ls                # list them
+tug connect prod      # point this terminal at prod-eu (read-only, as it is production)
+tug ns payments       # switch namespace, in this terminal only
+tug logs api -f       # follow logs from every pod of deploy/api-server
+tug sh api            # open a shell in one of its pods
+tug pf api 8080       # forward localhost:8080 to it
+tug unlock 15m        # allow changes on this production cluster for 15 minutes
+tug auth login        # sign in through your browser, for clusters that use SSO
+tug get pods          # anything tug doesn't know runs as kubectl
+```
+
+<Callout title="Your existing setup is safe">
+  tug only ever **reads** `~/.kube/config` and other kubeconfig files. It never
+  changes them, so everything you use today keeps working exactly as before.
+</Callout>
+
+## Where to go next
+
+<Cards>
+  <Card title="Install tug" href="/docs/getting-started/installation">
+    Get the `tug` command on your machine.
+  </Card>
+  <Card title="Quick start" href="/docs/getting-started/quick-start">
+    Import your clusters and connect to one in five minutes.
+  </Card>
+  <Card title="How sessions work" href="/docs/concepts/sessions">
+    Understand the idea that makes tug tick.
+  </Card>
+  <Card title="All commands" href="/docs/reference/commands">
+    Every command and flag, in one place.
+  </Card>
+</Cards>
+
+<Callout type="warn" title="Early days">
+  tug is in early development. The core is in place (sessions, the catalog,
+  credentials, guardrails, the daily commands, `tug doctor`, plugins and the
+  built-in providers), but details may change before version 1.
+</Callout>
