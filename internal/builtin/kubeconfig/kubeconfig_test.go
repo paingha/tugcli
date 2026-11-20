@@ -4,7 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/paingha/tugcli/pkg/provider"
 )
@@ -151,5 +154,85 @@ func TestAccounts(t *testing.T) {
 		if ids[i] != want[i] {
 			t.Fatalf("accounts = %v, want %v", ids, want)
 		}
+	}
+}
+
+func TestLocalDistro(t *testing.T) {
+	cfg, err := clientcmd.Load([]byte(`apiVersion: v1
+kind: Config
+clusters:
+- {name: kind-dev, cluster: {server: "https://127.0.0.1:52001"}}
+- {name: kind-remote, cluster: {server: "https://kind.example.com"}}
+- {name: k3d-dev, cluster: {server: "https://0.0.0.0:6550"}}
+- {name: docker-desktop, cluster: {server: "https://kubernetes.docker.internal:6443"}}
+- name: work-minikube
+  cluster:
+    server: https://192.168.49.2:8443
+    extensions:
+    - name: cluster_info
+      extension: {provider: minikube.sigs.k8s.io, version: v1.34.0}
+- {name: prod, cluster: {server: "https://prod.example.com"}}
+contexts:
+- {name: kind-dev, context: {cluster: kind-dev}}
+- {name: kind-remote, context: {cluster: kind-remote}}
+- {name: k3d-dev, context: {cluster: k3d-dev}}
+- {name: docker-desktop, context: {cluster: docker-desktop}}
+- {name: work-minikube, context: {cluster: work-minikube}}
+- {name: prod, context: {cluster: prod}}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := map[string]string{
+		"kind-dev":       DistroKind,
+		"kind-remote":    "", // the name alone is not enough; kind serves on loopback
+		"k3d-dev":        DistroK3d,
+		"docker-desktop": DistroDockerDesktop,
+		"work-minikube":  DistroMinikube, // found by minikube's extension, not its name
+		"prod":           "",
+		"missing":        "",
+	}
+	for name, want := range tests {
+		if got := LocalDistro(cfg, name); got != want {
+			t.Errorf("LocalDistro(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestSkipLocal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config")
+	body := `apiVersion: v1
+kind: Config
+clusters:
+- {name: kind-dev, cluster: {server: "https://127.0.0.1:52001"}}
+- {name: prod, cluster: {server: "https://prod.example.com"}}
+users:
+- {name: u, user: {token: t}}
+contexts:
+- {name: kind-dev, context: {cluster: kind-dev, user: u}}
+- {name: prod, context: {cluster: prod, user: u}}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := New(WithHome(t.TempDir()))
+	ids := func(cfg map[string]any) string {
+		clusters, err := p.List(context.Background(), provider.ListRequest{Account: provider.Account{ID: "x", Config: cfg}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, c := range clusters {
+			out = append(out, c.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	// Discovered files leave local clusters to the local provider; a file
+	// named on the command line imports everything.
+	if got := ids(map[string]any{ConfigPath: path, ConfigSkipLocal: true}); got != "prod" {
+		t.Errorf("with skipLocal: %s, want prod", got)
+	}
+	if got := ids(map[string]any{ConfigPath: path}); got != "kind-dev,prod" {
+		t.Errorf("without skipLocal: %s, want kind-dev,prod", got)
 	}
 }
