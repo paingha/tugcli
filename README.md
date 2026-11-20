@@ -88,6 +88,10 @@ make lint      # golangci-lint
 make e2e-kind  # build, create a kind cluster, run scripts/e2e-kind.sh
 ```
 
+CI runs the tests on Linux and Windows. macOS is not in CI to save Actions
+minutes, so run `make test` on a Mac before pushing changes that touch
+platform-specific code (keychain, sessions, process handling).
+
 Tests never touch your keychain: they set `TUG_HOME` to a temporary directory
 and use the encrypted file store (`TUG_KEYRING_BACKEND=file`,
 `TUG_KEYRING_PASSPHRASE`). The same variables work in CI and on servers without

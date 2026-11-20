@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -48,8 +49,14 @@ func TestConnectWritesNoSecrets(t *testing.T) {
 	if got := strings.Join(user.Exec.Args, " "); got != "auth token --cluster kubeconfig/default/prod-eu" {
 		t.Fatalf("exec args = %q", got)
 	}
-	if st, err := os.Stat(s.KubeconfigPath()); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("kubeconfig mode: %v %v", st.Mode(), err)
+	st, err := os.Stat(s.KubeconfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows has no Unix permission bits (Go reports 0666); access there is
+	// governed by the ACLs of the user's profile directory.
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
+		t.Fatalf("kubeconfig mode = %v, want 0600", st.Mode().Perm())
 	}
 
 	prompt, _ := os.ReadFile(filepath.Join(s.Dir(), promptFileName))
