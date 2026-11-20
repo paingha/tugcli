@@ -89,6 +89,23 @@ func TestList(t *testing.T) {
 	}
 }
 
+func TestListReturnsTheCredentialForTheAuthMode(t *testing.T) {
+	srv := fakeCKS(t)
+	clusters, err := New().List(context.Background(), provider.ListRequest{Account: account(srv, map[string]any{ConfigAuth: "oidc"}), Secrets: secrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With auth=oidc the inline credential must be the OIDC issuer, so that
+	// re-importing a managed-auth account replaces its cached API token.
+	train := clusters[0]
+	if c := train.Credential; c == nil || c.Type != provider.CredentialOIDC || c.Issuer != "https://idp.example.com" || c.Token != "" {
+		t.Fatalf("oidc account, cluster with OIDC: %+v", c)
+	}
+	if priv := clusters[1]; priv.Credential != nil {
+		t.Fatalf("oidc account, cluster without OIDC: %+v", priv.Credential)
+	}
+}
+
 func TestCredential(t *testing.T) {
 	srv := fakeCKS(t)
 	ctx := context.Background()

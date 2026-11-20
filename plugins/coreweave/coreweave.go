@@ -148,11 +148,13 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 			// no gpu label.
 			Labels: map[string]string{"zone": strings.ToLower(cl.Zone)},
 		}
-		if managed(req.Account) {
-			// Returning the token inline lets import and sync refresh the
-			// cached credential when the token changes.
-			cred := provider.Token(c.Token, provider.NoExpiry)
+		// Returning the credential inline lets import and sync replace the
+		// cached one, both when the token changes and when an account
+		// switches between managed auth and OIDC.
+		if cred, ok := inlineCredential(req.Account, c.Token, cl); ok {
 			pc.Credential = &cred
+		} else {
+			fmt.Fprintf(os.Stderr, "coreweave: %s has no OIDC configuration; its credential is fetched on demand\n", cl.Name)
 		}
 		if !cl.Public {
 			pc.Endpoints = provider.Endpoints{Private: pc.Endpoints.Public}
@@ -168,6 +170,19 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 func managed(acct provider.Account) bool {
 	mode := acct.ConfigString(ConfigAuth)
 	return mode == "" || mode == "managed"
+}
+
+// inlineCredential returns the credential a listed cluster uses: the API
+// token for managed auth, or the cluster's OIDC issuer. It reports false for
+// an OIDC account whose cluster has no OIDC configuration.
+func inlineCredential(acct provider.Account, token string, cl cksCluster) (provider.Credential, bool) {
+	if managed(acct) {
+		return provider.Token(token, provider.NoExpiry), true
+	}
+	if o := cl.OIDC; o != nil && o.IssuerURL != "" && o.ClientID != "" {
+		return provider.OIDC(o.IssuerURL, o.ClientID, "openid", "groups"), true
+	}
+	return provider.Credential{}, false
 }
 
 // endpointURL adds https:// to a bare host name.
