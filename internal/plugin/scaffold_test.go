@@ -135,3 +135,39 @@ func TestGoIdent(t *testing.T) {
 		}
 	}
 }
+
+func TestScaffoldGoFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tug-provider-acme")
+	if _, err := Scaffold(ScaffoldOptions{Name: "acme", Dir: dir, SDKVersion: "v0.4.0"}); err != nil {
+		t.Fatal(err)
+	}
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	tests := []struct {
+		file, want, why string
+	}{
+		{"go.mod", "require github.com/paingha/tugcli v0.4.0", "a release of tug pins its SDK"},
+		{"Makefile", "bin/$(HOST)/$(BIN)$(EXT)", "Windows builds need .exe to match plugin.yaml"},
+		{filepath.Join(".github", "workflows", "release.yml"), "does not match plugin.yaml", "the tag must match the manifest version"},
+		{filepath.Join(".github", "workflows", "release.yml"), "${{ secrets.TUGCLI_TOKEN }}", "the SDK can be fetched while its repository is private"},
+	}
+	for _, tt := range tests {
+		if !strings.Contains(read(tt.file), tt.want) {
+			t.Errorf("%s lacks %q (%s)", tt.file, tt.want, tt.why)
+		}
+	}
+
+	bare := filepath.Join(t.TempDir(), "tug-provider-bare")
+	if _, err := Scaffold(ScaffoldOptions{Name: "bare", Dir: bare}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(bare, "go.mod")); strings.Contains(string(b), "require") {
+		t.Errorf("a development build should leave the SDK version to go mod tidy:\n%s", b)
+	}
+}

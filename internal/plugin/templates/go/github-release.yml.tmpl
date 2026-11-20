@@ -7,11 +7,27 @@ on:
 permissions:
   contents: write
 
+env:
+  # While github.com/paingha/tugcli is private, add a repository secret
+  # TUGCLI_TOKEN with read access to it; the module is then fetched with git.
+  GOPRIVATE: github.com/paingha/tugcli
+  TUGCLI_TOKEN: ${{ secrets.TUGCLI_TOKEN }}
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Check the tag matches plugin.yaml
+        run: |
+          want="v$(sed -n 's/^  version: *//p' plugin.yaml | head -n 1)"
+          if [ "$want" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match plugin.yaml's version ($want)" >&2
+            exit 1
+          fi
+      - name: Allow access to the tug SDK
+        if: env.TUGCLI_TOKEN != ''
+        run: git config --global url."https://x-access-token:${TUGCLI_TOKEN}@github.com/paingha/tugcli".insteadOf "https://github.com/paingha/tugcli"
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod

@@ -16,6 +16,7 @@ import (
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
 )
@@ -262,6 +263,7 @@ func newPluginNewCmd(a *app) *cobra.Command {
 			}
 			files, err := plugin.Scaffold(plugin.ScaffoldOptions{
 				Name: args[0], Lang: l, Dir: dir, Module: module, SDKReplace: sdkReplace,
+				SDKVersion: sdkVersion(),
 			})
 			if err != nil {
 				return err
@@ -273,6 +275,11 @@ func newPluginNewCmd(a *app) *cobra.Command {
 			fmt.Fprintf(a.stdout, "\nNext:\n  cd %s\n", root)
 			if l == plugin.LangGo {
 				fmt.Fprintln(a.stdout, "  go mod tidy && make test && make conformance")
+				if sdkReplace == "" {
+					// The SDK lives in this repository, which may not be
+					// reachable from everywhere yet.
+					fmt.Fprintln(a.stderr, a.colors().Dim("go mod tidy fetches the SDK, github.com/paingha/tugcli. If you cannot reach it, set GOPRIVATE=github.com/paingha/tugcli with access to the repository, or scaffold again with --sdk-replace <tugcli checkout>."))
+				}
 			} else {
 				fmt.Fprintf(a.stdout, "  python3 -m unittest && tug plugin link . && TUG_SECRET_API_TOKEN=demo_test tug plugin test %s --set clusters=dev=https://127.0.0.1:6443\n", args[0])
 			}
@@ -285,6 +292,15 @@ func newPluginNewCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&sdkReplace, "sdk-replace", "", "use a local tugcli checkout for the SDK")
 	_ = cmd.Flags().MarkHidden("sdk-replace")
 	return cmd
+}
+
+// sdkVersion pins new plugins to this tug's SDK when tug is a release;
+// development builds leave the version to `go mod tidy`.
+func sdkVersion() string {
+	if v := version.String(); version.IsRelease(v) {
+		return v
+	}
+	return ""
 }
 
 func newPluginPackageCmd(a *app) *cobra.Command {

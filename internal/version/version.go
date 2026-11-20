@@ -5,6 +5,7 @@
 package version
 
 import (
+	"regexp"
 	"runtime"
 	"runtime/debug"
 )
@@ -56,3 +57,9 @@ func Get() Info {
 
 // String returns the version alone.
 func String() string { return Get().Version }
+
+var release = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
+// IsRelease reports whether v is a tagged release such as "v0.4.0", rather
+// than "dev" or a pseudo-version from a local build.
+func IsRelease(v string) bool { return release.MatchString(v) }
