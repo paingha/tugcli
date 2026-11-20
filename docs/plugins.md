@@ -504,7 +504,7 @@ manifest, so an operation the manifest does not declare is never called.
 | Operation | Interface | Capability | What tug does with it |
 | --- | --- | --- | --- |
 | `accounts` | `provider.AccountLister` | `accounts` | `tug import` with no arguments, and `tug import <name>` without `--account`, offer the accounts found on this machine to import. |
-| `rotate` | `provider.Rotator` | `rotate` | Part of the protocol, with a 60-second timeout. tug does not call it from any command yet. |
+| `rotate` | `provider.Rotator` | `rotate` | `tug auth rotate <cluster>` calls it and stores the credential it returns in place of the cached one. |
 | `checkAccess` | `provider.AccessChecker` | `checkAccess` | `tug doctor` calls it to explain an access list that blocks the caller. |
 
 ### accounts
@@ -531,6 +531,13 @@ runs `tug import <name>` without `--account`.
 credential, revoke the old one where the API allows, and return the new one.
 If you revoke first, poll for the replacement with waits that respect `ctx`,
 as the Akamai plugin does, and stay well inside the 60 seconds.
+
+`tug auth rotate` asks before it calls `rotate`, since anything still using
+the old credential loses access. If `rotate` fails, tug drops the cached
+credential anyway, because the old one may already be revoked; the next
+request calls `credential`. So when you revoke first and the replacement is
+not ready in time, return an error whose hint says when `credential` will
+work again.
 
 ### checkAccess
 

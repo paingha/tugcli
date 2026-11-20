@@ -210,3 +210,92 @@ func TestPluginHostFollowsConfigAndManifest(t *testing.T) {
 		t.Fatalf("unlink should say what it removed: %q", out)
 	}
 }
+
+const rotatePluginScript = `#!/bin/sh
+cat >/dev/null
+reply() { printf '{"apiVersion":"provider/v1alpha1","kind":"%s",%s}\n' "$1" "$2"; }
+case "$1" in
+  list) reply ListResponse '"clusters":[{"id":"r1","name":"rot-dev","endpoints":{"public":"https://127.0.0.1:1"}},{"id":"r2","name":"rot-prod","endpoints":{"public":"https://127.0.0.1:2"},"labels":{"env":"prod"}}]' ;;
+  credential) reply CredentialResponse '"credential":{"type":"token","token":"old-token"}' ;;
+  rotate) reply CredentialResponse '"credential":{"type":"token","token":"new-token"}' ;;
+  *) exit 2 ;;
+esac
+`
+
+const rotatePluginManifest = `apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata: {name: rot, version: 1.0.0}
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, rotate]
+  platforms:
+  - {os: GOOS, arch: GOARCH, bin: tug-provider-rot}
+`
+
+func TestAuthRotate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plugin")
+	}
+	isolate(t)
+	dir := t.TempDir()
+	manifest := strings.NewReplacer("GOOS", runtime.GOOS, "GOARCH", runtime.GOARCH).Replace(rotatePluginManifest)
+	if err := os.WriteFile(filepath.Join(dir, "plugin.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tug-provider-rot"), []byte(rotatePluginScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustTug(t, "plugin", "link", dir)
+	mustTug(t, "import", "rot", "--account", "a")
+	token := func(cluster string) string {
+		t.Helper()
+		return mustTug(t, "auth", "token", "--cluster", cluster)
+	}
+	if ec := token("rot-dev"); !strings.Contains(ec, `"token":"old-token"`) {
+		t.Fatalf("token before rotating: %s", ec)
+	}
+
+	// Without a terminal, rotating needs --yes.
+	if r := tug(t, "auth", "rotate", "rot-dev"); r.code == 0 || !strings.Contains(r.stderr, "--yes") {
+		t.Fatalf("rotate without --yes: %+v", r)
+	}
+	r := tug(t, "auth", "rotate", "rot-dev", "--yes")
+	if r.code != 0 || !strings.Contains(r.stdout, "Rotated the credential for rot-dev") {
+		t.Fatalf("rotate --yes: %+v", r)
+	}
+	// The cache now holds the rotated token; the credential operation would
+	// still answer old-token.
+	if ec := token("rot-dev"); !strings.Contains(ec, `"token":"new-token"`) {
+		t.Fatalf("token after rotating: %s", ec)
+	}
+
+	// A read-only cluster is not rotated without a terminal, even with --yes...
+	if r := tug(t, "auth", "rotate", "rot-prod", "--yes"); r.code == 0 || !strings.Contains(r.stderr, "rot-prod is read-only") {
+		t.Fatalf("rotate a read-only cluster: %+v", r)
+	}
+	if ec := token("rot-prod"); !strings.Contains(ec, `"token":"old-token"`) {
+		t.Fatalf("read-only cluster rotated anyway: %s", ec)
+	}
+	// ...unless this terminal is connected to it and unlocked.
+	newSession(t)
+	mustTug(t, "connect", "rot-prod")
+	mustTug(t, "unlock", "5m")
+	if out := mustTug(t, "auth", "rotate", "--yes"); !strings.Contains(out, "Rotated the credential for rot-prod") {
+		t.Fatalf("rotate the unlocked session's cluster: %s", out)
+	}
+	if ec := token("rot-prod"); !strings.Contains(ec, `"token":"new-token"`) {
+		t.Fatalf("token after rotating the unlocked cluster: %s", ec)
+	}
+}
+
+func TestAuthRotateUnsupportedProvider(t *testing.T) {
+	isolate(t)
+	srv, _ := fakeAPIServer(t)
+	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, srv))
+	if r := tug(t, "auth", "rotate", "prod", "--yes"); r.code == 0 || !strings.Contains(r.stderr, "cannot rotate credentials") {
+		t.Fatalf("rotate through the kubeconfig provider: %+v", r)
+	}
+	if r := tug(t, "auth", "rotate", "--yes"); r.code == 0 || !strings.Contains(r.stderr, "name a cluster") {
+		t.Fatalf("rotate with no cluster and no session: %+v", r)
+	}
+}

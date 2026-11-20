@@ -424,3 +424,15 @@ spec:
 		t.Errorf("UnknownSettings without a schema = %v, want none", got)
 	}
 }
+
+func TestRotateNeedsTheCapability(t *testing.T) {
+	dir := writeScriptPlugin(t) // declares list, credential and checkAccess only
+	p, err := Load(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := NewProvider(p, &Runner{Bin: p.Bin, Name: p.Name()})
+	if _, err := prov.Rotate(context.Background(), provider.CredentialRequest{ClusterID: "a"}); provider.CodeOf(err) != provider.Unimplemented {
+		t.Fatalf("Rotate = %v, want Unimplemented without the rotate capability", err)
+	}
+}

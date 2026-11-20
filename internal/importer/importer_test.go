@@ -676,3 +676,114 @@ func TestFetcherErrors(t *testing.T) {
 		})
 	}
 }
+
+// rotatingProvider is a fakeProvider that can rotate credentials.
+type rotatingProvider struct {
+	*fakeProvider
+	rotateErr error
+	rotated   []provider.CredentialRequest
+}
+
+var _ Rotator = (*rotatingProvider)(nil)
+
+func (r *rotatingProvider) Rotate(_ context.Context, req provider.CredentialRequest) (provider.Credential, error) {
+	r.rotated = append(r.rotated, req)
+	if r.rotateErr != nil {
+		return provider.Credential{}, r.rotateErr
+	}
+	return provider.Token("rotated-"+req.ClusterID, provider.NoExpiry), nil
+}
+
+func newRotating(name string) *rotatingProvider {
+	f := newFake(name, provider.SecretSpec{Name: "api_token"})
+	f.info.Capabilities = provider.CapList | provider.CapCredential | provider.CapRotate
+	f.clusters = []provider.Cluster{{ID: "c-1", Name: "a", Credential: tokenPtr(inlineToken)}}
+	return &rotatingProvider{fakeProvider: f}
+}
+
+func TestRotate(t *testing.T) {
+	clearSecretEnv(t, "api_token")
+	id := catalog.ClusterID("fake", "work", "c-1")
+	cached := func(t *testing.T, svc *Service) string {
+		t.Helper()
+		c, err := svc.Broker.Credential(context.Background(), id, false)
+		if err != nil {
+			return ""
+		}
+		return c.Token
+	}
+
+	tests := []struct {
+		name       string
+		rotateErr  error
+		wantErr    bool
+		wantCached string // what the broker serves afterwards; "" when nothing is cached
+	}{
+		{name: "replaces the cached credential", wantCached: "rotated-c-1"},
+		{name: "failure drops the cached credential", rotateErr: provider.Errorf(provider.Unavailable, "not ready"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newRotating("fake")
+			p.rotateErr = tt.rotateErr
+			svc, _, _ := newService(t, p)
+			if err := svc.SetSecret("fake", "work", "api_token", "s3cret"); err != nil {
+				t.Fatal(err)
+			}
+			cat := importOne(t, svc, catalog.Source{Provider: "fake", Account: "work"})
+			if got := cached(t, svc); got != inlineToken {
+				t.Fatalf("before rotate the broker serves %q, want %q", got, inlineToken)
+			}
+			cl, _ := cat.Get(id)
+			if !svc.CanRotate(cl) {
+				t.Fatal("CanRotate = false for a provider with CapRotate")
+			}
+
+			err := svc.Rotate(context.Background(), cat, id)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Rotate = %v, want error %v", err, tt.wantErr)
+			}
+			want := provider.CredentialRequest{Account: provider.Account{ID: "work"}, ClusterID: "c-1", Secrets: map[string]string{"api_token": "s3cret"}}
+			if len(p.rotated) != 1 || !reflect.DeepEqual(p.rotated[0], want) {
+				t.Fatalf("rotate requests = %+v, want [%+v]", p.rotated, want)
+			}
+			if got := cached(t, svc); got != tt.wantCached {
+				t.Fatalf("after rotate the broker serves %q, want %q", got, tt.wantCached)
+			}
+		})
+	}
+}
+
+func TestRotateUnsupported(t *testing.T) {
+	clearSecretEnv(t, "api_token")
+	id := catalog.ClusterID("fake", "work", "c-1")
+	tests := []struct {
+		name string
+		p    registry.Provider
+	}{
+		{"no Rotate method", func() registry.Provider {
+			f := newFake("fake")
+			f.clusters = []provider.Cluster{{ID: "c-1", Name: "a"}}
+			return f
+		}()},
+		{"Rotate without the capability", func() registry.Provider {
+			r := newRotating("fake")
+			r.info.Capabilities = provider.CapList | provider.CapCredential
+			r.info.Secrets = nil
+			return r
+		}()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _, _ := newService(t, tt.p)
+			cat := importOne(t, svc, catalog.Source{Provider: "fake", Account: "work"})
+			cl, _ := cat.Get(id)
+			if svc.CanRotate(cl) {
+				t.Error("CanRotate = true, want false")
+			}
+			if err := svc.Rotate(context.Background(), cat, id); provider.CodeOf(err) != provider.Unimplemented {
+				t.Errorf("Rotate = %v, want Unimplemented", err)
+			}
+		})
+	}
+}

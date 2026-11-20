@@ -104,6 +104,20 @@ func (p *Provider) Credential(ctx context.Context, req provider.CredentialReques
 	return provider.DecodeCredential(out)
 }
 
+// Rotate runs the plugin's rotate operation, which replaces a cluster's
+// credential and revokes the old one.
+func (p *Provider) Rotate(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) {
+	if !p.plugin.Manifest.Spec.Capabilities.Has(provider.CapRotate) {
+		return provider.Credential{}, provider.Errorf(provider.Unimplemented, "%s cannot rotate credentials", p.plugin.Name())
+	}
+	req.Secrets = p.declared(req.Secrets)
+	out, err := p.call(ctx, provider.OpRotate, req)
+	if err != nil {
+		return provider.Credential{}, err
+	}
+	return provider.DecodeCredential(out)
+}
+
 func (p *Provider) call(ctx context.Context, op string, payload any) ([]byte, error) {
 	req, err := provider.EncodeRequest(op, payload)
 	if err != nil {

@@ -174,26 +174,79 @@ func (s *Service) secret(providerName, account, name string) (string, bool) {
 // for a credential.
 func (s *Service) Fetcher(cat *catalog.Catalog) credentials.Fetcher {
 	return func(ctx context.Context, clusterID string) (provider.Credential, error) {
-		cl, err := cat.Get(clusterID)
+		p, req, err := s.credentialRequest(cat, clusterID)
 		if err != nil {
 			return provider.Credential{}, err
 		}
-		src, ok := cat.Source(cl.Provider, cl.Account)
-		if !ok {
-			return provider.Credential{}, fmt.Errorf("cluster %s has no source in the catalog; run `tug import`", cl.Name)
-		}
-		p, err := s.Registry.Get(cl.Provider)
-		if err != nil {
-			return provider.Credential{}, err
-		}
-		secrets, err := s.Secrets(p.Info(), cl.Account)
-		if err != nil {
-			return provider.Credential{}, err
-		}
-		return p.Credential(ctx, provider.CredentialRequest{
-			Account:   src.ProviderAccount(),
-			ClusterID: cl.ProviderID,
-			Secrets:   secrets,
-		})
+		return p.Credential(ctx, req)
 	}
+}
+
+// Rotator is a provider that can replace a cluster's credential, revoking
+// the old one.
+type Rotator interface {
+	Rotate(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error)
+}
+
+// CanRotate reports whether a cluster's provider can rotate its credential.
+func (s *Service) CanRotate(cl *catalog.Cluster) bool {
+	p, err := s.Registry.Get(cl.Provider)
+	if err != nil {
+		return false
+	}
+	_, ok := p.(Rotator)
+	return ok && p.Info().Capabilities.Has(provider.CapRotate)
+}
+
+// Rotate asks a cluster's provider for a new credential, which revokes the
+// old one, and stores it in place of the cached credential. When rotate
+// fails, the cached credential is dropped anyway: the provider may already
+// have revoked it, and the next request then asks the provider afresh.
+func (s *Service) Rotate(ctx context.Context, cat *catalog.Catalog, clusterID string) error {
+	p, req, err := s.credentialRequest(cat, clusterID)
+	if err != nil {
+		return err
+	}
+	r, ok := p.(Rotator)
+	if !ok || !p.Info().Capabilities.Has(provider.CapRotate) {
+		return provider.Errorf(provider.Unimplemented, "%s cannot rotate credentials", p.Info().Name)
+	}
+	c, err := r.Rotate(ctx, req)
+	if err == nil {
+		err = c.Validate()
+		if err != nil {
+			err = fmt.Errorf("provider returned an invalid credential: %w", err)
+		}
+	}
+	if err != nil {
+		_ = s.Broker.Forget(clusterID) // best effort; the error below matters more
+		return err
+	}
+	if err := s.Broker.Put(clusterID, c); err != nil {
+		_ = s.Broker.Forget(clusterID)
+		return fmt.Errorf("storing the new credential in %s: %w; the next request asks the provider again", s.Store.Name(), err)
+	}
+	return nil
+}
+
+// credentialRequest finds a catalog cluster's provider and builds the
+// request for its credential, with the account's settings and secrets.
+func (s *Service) credentialRequest(cat *catalog.Catalog, clusterID string) (registry.Provider, provider.CredentialRequest, error) {
+	cl, err := cat.Get(clusterID)
+	if err != nil {
+		return nil, provider.CredentialRequest{}, err
+	}
+	src, ok := cat.Source(cl.Provider, cl.Account)
+	if !ok {
+		return nil, provider.CredentialRequest{}, fmt.Errorf("cluster %s has no source in the catalog; run `tug import`", cl.Name)
+	}
+	p, err := s.Registry.Get(cl.Provider)
+	if err != nil {
+		return nil, provider.CredentialRequest{}, err
+	}
+	secrets, err := s.Secrets(p.Info(), cl.Account)
+	if err != nil {
+		return nil, provider.CredentialRequest{}, err
+	}
+	return p, provider.CredentialRequest{Account: src.ProviderAccount(), ClusterID: cl.ProviderID, Secrets: secrets}, nil
 }
