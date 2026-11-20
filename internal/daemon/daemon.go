@@ -100,23 +100,14 @@ func New(cfg Config) *Server {
 // 104 bytes, so a long runtime directory falls back to a short directory of
 // its own in the system temp directory, named after the runtime directory.
 // tugd and its clients only use the socket's directory when it is private to
-// the user (see checkPrivateDir), so another user cannot create it first and
-// answer in tugd's place.
+// the user (see config.CheckPrivateDir), so another user cannot create it
+// first and answer in tugd's place.
 func SocketPath(runtimeDir string) string {
 	p := filepath.Join(runtimeDir, "tugd.sock")
 	if len(p) < 100 {
 		return p
 	}
 	return filepath.Join(os.TempDir(), "tugd-"+shortHash(runtimeDir), "tugd.sock")
-}
-
-// ensurePrivateDir creates dir for this user only, or checks that an
-// existing one is private.
-func ensurePrivateDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return checkPrivateDir(dir)
 }
 
 func shortHash(s string) string {
@@ -229,7 +220,7 @@ func (s *Server) idle() bool {
 // Run listens on the control socket and the proxy address and serves until
 // ctx ends, Shutdown is called, or tugd has been idle for IdleTimeout.
 func (s *Server) Run(ctx context.Context) error {
-	if err := ensurePrivateDir(s.cfg.RuntimeDir); err != nil {
+	if err := config.EnsurePrivateDir(s.cfg.RuntimeDir); err != nil {
 		return err
 	}
 	// The lock is held until Run returns. Two tugds started at once take
@@ -246,7 +237,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	sock := SocketPath(s.cfg.RuntimeDir)
 	if dir := filepath.Dir(sock); dir != filepath.Clean(s.cfg.RuntimeDir) {
-		if err := ensurePrivateDir(dir); err != nil {
+		if err := config.EnsurePrivateDir(dir); err != nil {
 			return err
 		}
 		defer os.Remove(dir)

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -202,6 +203,40 @@ func TestStaleSessionDoesNotUndoChanges(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(s.KubeconfigPath()); strings.Contains(string(b), "43000") {
 		t.Fatal("repointed the kubeconfig of a session that no longer uses the proxy")
+	}
+}
+
+// A runtime directory another user can change is refused: they could
+// replace a session kubeconfig, whose exec entry kubectl runs.
+func TestRefusesRuntimeDirOthersCanChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions")
+	}
+	// Not created yet: Create makes it private, and Open finds no session.
+	fresh := NewManager(filepath.Join(t.TempDir(), "run"))
+	if _, err := fresh.Open("abcdef123456"); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("Open before the directory exists: %v, want ErrNoSession", err)
+	}
+	s, err := fresh.Create(1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Made writable by others afterwards, or by someone else first.
+	if err := os.Chmod(fresh.runtime, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.Open(s.State.ID); err == nil || !strings.Contains(err.Error(), "refusing to use") {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := fresh.Create(1, ""); err == nil || !strings.Contains(err.Error(), "refusing to use") {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := fresh.Sweep(time.Hour); err == nil {
+		t.Fatal("Sweep worked in a directory others can change")
+	}
+	if err := fresh.Remove(s.State.ID); err == nil {
+		t.Fatal("Remove worked in a directory others can change")
 	}
 }
 

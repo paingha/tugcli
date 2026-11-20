@@ -367,6 +367,26 @@ func TestIsPassthrough(t *testing.T) {
 	}
 }
 
+// The shell hook runs `tug session new` in every new shell; in a runtime
+// directory another user can change, it refuses with a way out.
+func TestSessionNewRefusesSharedRuntimeDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions")
+	}
+	home := isolate(t)
+	run := filepath.Join(home, "run")
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(run, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	r := tug(t, "session", "new", "--shell", "bash", "--pid", fmt.Sprint(os.Getpid()))
+	if r.code == 0 || strings.Contains(r.stdout, "TUG_SESSION") || !strings.Contains(r.stderr, "refusing to use "+run) {
+		t.Fatalf("session new in a shared runtime directory: %+v", r)
+	}
+}
+
 func assertNoSecretUnder(t *testing.T, path string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
