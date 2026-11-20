@@ -1,7 +1,11 @@
 package catalog
 
 import (
+	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,5 +113,168 @@ func TestSaveLoad(t *testing.T) {
 	}
 	if len(got.Sources) != 1 || got.Sources[0].Config["path"] != "/x" {
 		t.Fatalf("sources: %+v", got.Sources)
+	}
+}
+
+func TestLoad(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	tests := []struct {
+		name    string
+		path    string
+		wantErr string // "" means success
+	}{
+		{"missing file is empty", filepath.Join(dir, "missing.yaml"), ""},
+		{"no apiVersion", write("none.yaml", "clusters: []\n"), ""},
+		{"current apiVersion", write("current.yaml", "apiVersion: "+APIVersion+"\n"), ""},
+		{"unsupported apiVersion", write("future.yaml", "apiVersion: tug.catalog/v9\n"), `unsupported apiVersion "tug.catalog/v9"`},
+		{"not YAML", write("bad.yaml", "clusters: [\n"), "parsing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Load(tt.path)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() = %+v, %v; want an error containing %q", c, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.APIVersion != APIVersion || len(c.Clusters) != 0 {
+				t.Fatalf("Load() = %+v, want an empty catalog at %s", c, APIVersion)
+			}
+		})
+	}
+}
+
+// names returns the names of clusters, in order.
+func names(cls []*Cluster) []string {
+	out := make([]string, 0, len(cls))
+	for _, cl := range cls {
+		out = append(out, cl.Name)
+	}
+	return out
+}
+
+func TestSelectHonoursUserLabels(t *testing.T) {
+	c := &Catalog{}
+	c.Merge(Source{Provider: "kubeconfig", Account: "default"}, []provider.Cluster{
+		{ID: "a", Name: "payments-prod", Labels: map[string]string{"team": "payments"}},
+		{ID: "b", Name: "payments-staging", Labels: map[string]string{"team": "payments"}},
+		{ID: "c", Name: "search-prod"},
+	}, time.Now())
+
+	tests := []struct {
+		name string
+		sel  map[string]string
+		want []string
+	}{
+		{"empty selector matches all", nil, []string{"payments-prod", "payments-staging", "search-prod"}},
+		{"provider label", map[string]string{"provider": "kubeconfig"}, []string{"payments-prod", "payments-staging", "search-prod"}},
+		{"guessed env", map[string]string{"env": "prod"}, []string{"payments-prod", "search-prod"}},
+		{"every label must match", map[string]string{"env": "prod", "team": "payments"}, []string{"payments-prod"}},
+		{"no match", map[string]string{"team": "search"}, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := names(c.Select(tt.sel)); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Select(%v) = %v, want %v", tt.sel, got, tt.want)
+			}
+		})
+	}
+
+	// A user label overrides the provider's, and an empty one removes it.
+	search, _ := c.Get("search-prod")
+	search.UserLabels = map[string]string{"env": "staging"}
+	staging, _ := c.Get("payments-staging")
+	staging.UserLabels = map[string]string{"team": ""}
+
+	if got, want := names(c.Select(map[string]string{"env": "prod"})), []string{"payments-prod"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Select(env=prod) with a user override = %v, want %v", got, want)
+	}
+	if got, want := names(c.Select(map[string]string{"team": "payments"})), []string{"payments-prod"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Select(team=payments) after removing a label = %v, want %v", got, want)
+	}
+	if _, ok := staging.EffectiveLabels()["team"]; ok {
+		t.Fatalf("EffectiveLabels() = %v, want team removed", staging.EffectiveLabels())
+	}
+}
+
+func TestRemoveSource(t *testing.T) {
+	c := &Catalog{}
+	work := Source{Provider: "coreweave", Account: "work"}
+	home := Source{Provider: "coreweave", Account: "home"}
+	for _, src := range []Source{work, home} {
+		c.AddSource(src)
+		c.Merge(src, []provider.Cluster{{ID: "1", Name: "train"}, {ID: "2", Name: "infer"}}, time.Now())
+	}
+
+	removed := c.RemoveSource("coreweave", "work")
+	var ids []string
+	for _, cl := range removed {
+		ids = append(ids, cl.ID)
+	}
+	slices.Sort(ids)
+	if want := []string{"coreweave/work/1", "coreweave/work/2"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("RemoveSource removed %v, want %v", ids, want)
+	}
+	if len(c.Sources) != 1 || c.Sources[0].Key() != home.Key() {
+		t.Fatalf("sources after RemoveSource = %+v, want only %s", c.Sources, home.Key())
+	}
+	for _, cl := range c.Clusters {
+		if cl.Account != "home" {
+			t.Fatalf("cluster %s from the removed source is still in the catalog", cl.ID)
+		}
+	}
+	if len(c.Clusters) != 2 {
+		t.Fatalf("catalog has %d clusters, want the 2 from home", len(c.Clusters))
+	}
+	if got := c.RemoveSource("coreweave", "nope"); len(got) != 0 {
+		t.Fatalf("RemoveSource of an unknown source removed %v", got)
+	}
+}
+
+func TestNormaliseLabels(t *testing.T) {
+	tests := []struct {
+		name   string
+		pc     provider.Cluster
+		labels map[string]string // expected subset
+		absent []string
+	}{
+		{"env alias", provider.Cluster{Name: "x", Labels: map[string]string{"Env": "Production"}}, map[string]string{"env": "prod"}, nil},
+		{"qa is test", provider.Cluster{Name: "x", Labels: map[string]string{"env": "QA"}}, map[string]string{"env": "test"}, nil},
+		{"unknown env kept lowercased", provider.Cluster{Name: "x", Labels: map[string]string{"env": "Sandbox"}}, map[string]string{"env": "sandbox"}, nil},
+		{"provider env wins over name", provider.Cluster{Name: "api-prod", Labels: map[string]string{"env": "stg"}}, map[string]string{"env": "staging"}, nil},
+		{"env guessed from name", provider.Cluster{Name: "api-stage-1"}, map[string]string{"env": "staging"}, nil},
+		{"no env", provider.Cluster{Name: "api"}, nil, []string{"env"}},
+		{"region and gpu lowercased", provider.Cluster{Name: "x", Region: "EU-West", Labels: map[string]string{"GPU": "H100"}}, map[string]string{"region": "eu-west", "gpu": "h100"}, nil},
+		{"no region", provider.Cluster{Name: "x"}, nil, []string{"region"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormaliseLabels("aws", "work", tt.pc)
+			if got[LabelProvider] != "aws" || got[LabelAccount] != "work" {
+				t.Errorf("provider, account labels = %q, %q; want aws, work", got[LabelProvider], got[LabelAccount])
+			}
+			for k, v := range tt.labels {
+				if got[k] != v {
+					t.Errorf("label %s = %q, want %q (all: %v)", k, got[k], v, got)
+				}
+			}
+			for _, k := range tt.absent {
+				if v, ok := got[k]; ok {
+					t.Errorf("label %s = %q, want it absent", k, v)
+				}
+			}
+		})
 	}
 }
