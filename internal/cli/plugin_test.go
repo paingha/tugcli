@@ -133,7 +133,7 @@ cat >/dev/null
 case "$1" in
   describe)
     sleep 1
-    printf '{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse","name":"slow","version":"1.0.0","protocols":["provider/v1alpha1"],"capabilities":["list","credential"]}\n'
+    printf '{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse","name":"slow","version":"1.0.0","description":"Clusters that take their time","protocols":["provider/v1alpha1"],"capabilities":["list","credential"]}\n'
     ;;
   list) printf '{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[]}\n' ;;
   *) exit 2 ;;
@@ -196,8 +196,9 @@ func TestPluginHostFollowsConfigAndManifest(t *testing.T) {
 	}
 	setDescribeTimeout("10s")
 	r = tug(t, "plugin", "describe", "slow")
-	if r.code != 0 || !strings.Contains(r.stderr, "settings:      zone: only clusters in this zone") {
-		t.Fatalf("describe should list the account settings: %+v", r)
+	if r.code != 0 || !strings.Contains(r.stderr, "settings:      zone: only clusters in this zone") ||
+		!strings.Contains(r.stderr, "description:   Clusters that take their time") {
+		t.Fatalf("describe should show the description and account settings: %+v", r)
 	}
 
 	r = tug(t, "import", "slow", "--account", "a", "--set", "zone=x", "--set", "zoen=y")

@@ -118,6 +118,7 @@ func dispatch(ctx context.Context, p Provider, op string, stdin io.Reader) (any,
 			Description: Description{
 				Name:         info.Name,
 				Version:      info.Version,
+				Description:  info.Description,
 				Protocols:    SupportedAPIVersions(),
 				Capabilities: Capabilities(p),
 				Secrets:      info.Secrets,

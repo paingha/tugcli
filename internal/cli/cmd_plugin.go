@@ -133,6 +133,7 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	}
 
 	a.printManifest(m)
+	a.warnUnknownFields(m, "which it ignores")
 	if !o.yes {
 		if !a.interactive() {
 			return fmt.Errorf("review the plugin above, then pass --yes to install it without a terminal")
@@ -177,7 +178,6 @@ func (a *app) printManifest(m *plugin.Manifest) {
 		}
 		fmt.Fprintf(a.stderr, "  %-15s%s\n", label, describeSetting(s))
 	}
-	a.warnUnknownFields(m, "which it ignores")
 }
 
 // describeSetting shows an account setting as `tug import --set` takes it.
@@ -280,7 +280,9 @@ func newPluginDescribeCmd(a *app) *cobra.Command {
 				return err
 			}
 			a.printManifest(pp.Plugin().Manifest)
+			fmt.Fprintf(a.stderr, "  description:   %s\n", dash(d.Description))
 			fmt.Fprintf(a.stderr, "  protocols:     %s\n  executable:    %s\n", strings.Join(d.Protocols, ", "), pp.Plugin().Bin)
+			a.warnUnknownFields(pp.Plugin().Manifest, "which it ignores")
 			if d.Name != pp.Plugin().Name() {
 				fmt.Fprintf(a.stderr, "%s describe says %q but the manifest says %q\n", a.colors().Yellow("warning:"), d.Name, pp.Plugin().Name())
 			}

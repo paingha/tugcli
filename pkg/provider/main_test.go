@@ -14,7 +14,7 @@ import (
 type fake struct{}
 
 func (fake) Info() Info {
-	return Info{Name: "fake", Version: "1.2.3", Secrets: []SecretSpec{{Name: "api_token"}}}
+	return Info{Name: "fake", Version: "1.2.3", Description: "Fake clusters", Secrets: []SecretSpec{{Name: "api_token"}}}
 }
 
 func (fake) List(_ context.Context, req ListRequest) ([]Cluster, error) {
@@ -47,7 +47,7 @@ func TestDescribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Name != "fake" || !d.Capabilities.Has(CapList|CapCredential) || d.Capabilities.Has(CapAccounts) {
+	if d.Name != "fake" || d.Description != "Fake clusters" || !d.Capabilities.Has(CapList|CapCredential) || d.Capabilities.Has(CapAccounts) {
 		t.Fatalf("unexpected describe: %+v", d)
 	}
 	if len(d.Protocols) == 0 || d.Protocols[0] != APIVersion {

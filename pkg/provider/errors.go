@@ -6,18 +6,22 @@ import (
 	"time"
 )
 
-// Code classifies an error so that tug can act on it.
+// Code classifies an error. tug shows the code and message, and the hint on
+// a line of its own; the conformance suite checks that plugins choose the
+// right one. tug does not yet retry or prompt on its own because of a code,
+// so the message and hint should say what the user can do.
 type Code string
 
 const (
-	// Unauthenticated means the secrets are missing, wrong or expired. tug
-	// asks the user to sign in again.
+	// Unauthenticated means the secrets are missing, wrong or expired. Add
+	// a hint that says how to get valid ones.
 	Unauthenticated Code = "Unauthenticated"
 	// PermissionDenied means the identity is valid but not allowed.
 	PermissionDenied Code = "PermissionDenied"
 	// NotFound means the account or cluster does not exist.
 	NotFound Code = "NotFound"
-	// RateLimited means try again later; set RetryAfterSeconds when known.
+	// RateLimited means try again later. Set RetryAfterSeconds when the API
+	// says how long to wait.
 	RateLimited Code = "RateLimited"
 	// Unavailable means the provider API could not be reached.
 	Unavailable Code = "Unavailable"
@@ -41,7 +45,8 @@ type Error struct {
 // print it separately.
 func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
 
-// RetryAfter returns the suggested wait for RateLimited errors.
+// RetryAfter returns how long a RateLimited error suggests waiting, or zero
+// when it does not say.
 func (e *Error) RetryAfter() time.Duration {
 	return time.Duration(e.RetryAfterSeconds) * time.Second
 }

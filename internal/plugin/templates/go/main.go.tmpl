@@ -19,8 +19,9 @@ type [[.Ident]] struct{}
 
 func ([[.Ident]]) Info() provider.Info {
 	return provider.Info{
-		Name:    "[[.Name]]",
-		Version: "0.1.0",
+		Name:        "[[.Name]]",
+		Version:     "0.1.0",
+		Description: "[[.Name]] Kubernetes clusters",
 		// tug asks for each secret once and keeps it in the OS keychain. The
 		// plugin only ever receives the secrets it declares here and in
 		// plugin.yaml.

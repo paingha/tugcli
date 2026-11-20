@@ -52,8 +52,11 @@ func IsKnownOp(op string) bool {
 
 // Description is the answer to describe.
 type Description struct {
-	Name         string       `json:"name"`
-	Version      string       `json:"version,omitempty"`
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	// Description says in a few words what the provider reaches, such as
+	// "Akamai (Linode) Kubernetes Engine".
+	Description  string       `json:"description,omitempty"`
 	Protocols    []string     `json:"protocols"`
 	Capabilities Capability   `json:"capabilities"`
 	Secrets      []SecretSpec `json:"secrets,omitempty"`

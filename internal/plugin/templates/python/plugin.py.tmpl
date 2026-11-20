@@ -42,6 +42,7 @@ def describe(_req):
         "kind": "DescribeResponse",
         "name": NAME,
         "version": VERSION,
+        "description": NAME + " Kubernetes clusters",
         "protocols": [API_VERSION],
         "capabilities": ["list", "credential"],
         "secrets": [{"name": "api_token", "prompt": NAME + " API token"}],

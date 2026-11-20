@@ -7,8 +7,12 @@ import (
 )
 
 // StatusError converts an HTTP error status from a provider's API into an
-// *Error with the code tug acts on: 401 asks the user to sign in again, 429
-// backs off for Retry-After seconds, and 5xx is reported as unavailable.
+// *Error with the matching code: 401 is Unauthenticated, 403
+// PermissionDenied, 404 NotFound, 429 RateLimited (with the Retry-After
+// seconds when the API sends them), 408 and 5xx Unavailable, 400 and 422
+// InvalidConfig, and anything else Internal. Some APIs answer 403 for a
+// token they do not accept; plugins for those map it to Unauthenticated
+// themselves.
 func StatusError(status int, message string, header http.Header) *Error {
 	if message == "" {
 		message = http.StatusText(status)
