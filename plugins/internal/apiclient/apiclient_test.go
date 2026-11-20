@@ -61,3 +61,27 @@ func TestDo(t *testing.T) {
 		t.Fatalf("401: %+v", pe)
 	}
 }
+
+func TestDoSign(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Header.Get("Authorization"), "Signed GET /v1/x?a=1"; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/v1", Token: "unused", Sign: func(req *http.Request) error {
+		req.Header.Set("Authorization", "Signed "+req.Method+" "+req.URL.RequestURI())
+		return nil
+	}}
+	if err := c.Do(context.Background(), http.MethodGet, "/x?a=1", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &Client{BaseURL: srv.URL, Sign: func(*http.Request) error {
+		return provider.Errorf(provider.Unauthenticated, "no key")
+	}}
+	if err := failing.Do(context.Background(), http.MethodGet, "/x", nil, nil); provider.CodeOf(err) != provider.Unauthenticated {
+		t.Fatalf("Do with a failing Sign = %v, want its error", err)
+	}
+}
