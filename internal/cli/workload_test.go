@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +201,12 @@ func shopObjects() []runtime.Object {
 		},
 		shopEvent("PersistentVolumeClaim", "data-ledger-0", "ProvisioningFailed", `storageclass.storage.k8s.io "fast-ssd" not found`, 40),
 
+		// A bare pod whose image has no shell.
+		shopPod("scratch", map[string]string{"run": "scratch"}, nil, func(p *corev1.Pod) {
+			p.Spec.Containers[0] = corev1.Container{Name: "app", Image: "gcr.io/distroless/static-debian12"}
+			p.Status.ContainerStatuses[0].Name = "app"
+		}),
+
 		billing, billingRS, crashing,
 		shopEvent("Pod", crashing.Name, "BackOff", "Back-off restarting failed container main in pod "+crashing.Name, 31),
 
@@ -332,5 +339,63 @@ func TestTree(t *testing.T) {
 	}
 	if writes.Load() != 0 {
 		t.Fatalf("tree wrote to the cluster %d times", writes.Load())
+	}
+}
+
+func TestShDebugContainers(t *testing.T) {
+	isolate(t)
+	srv, writes := fakeAPIServer(t)
+	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, srv))
+	newSession(t)
+	mustTug(t, "connect", "payments-prod") // env=prod: read-only
+
+	// Adding a debug container is a write, refused without a terminal to ask on.
+	r := tug(t, "sh", "scratch", "-n", "shop", "--debug")
+	if r.code == 0 || !strings.Contains(r.stderr, "read-only") || !strings.Contains(r.stderr, "tug unlock") {
+		t.Fatalf("sh --debug on a read-only session: %+v", r)
+	}
+	if writes.Load() != 0 {
+		t.Fatalf("%d writes reached the API server", writes.Load())
+	}
+	mustTug(t, "unlock", "5m")
+
+	// A container with a shell gets one, and runs a command given after --.
+	if out := mustTug(t, "sh", "checkout", "-n", "shop"); out != "shell in checkout-6b8c-aaaaa/main\n" {
+		t.Errorf("tug sh checkout = %q", out)
+	}
+	if out := mustTug(t, "sh", "checkout", "-n", "shop", "--", "ls", "/"); out != "ran in checkout-6b8c-aaaaa/main: ls /\n" {
+		t.Errorf("tug sh checkout -- ls / = %q", out)
+	}
+
+	// Without a shell, and without a terminal to ask on, tug says how to get one.
+	r = tug(t, "sh", "scratch", "-n", "shop")
+	if r.code != 1 || !strings.Contains(r.stderr, "container app of pod/scratch has no shell") ||
+		!strings.Contains(r.stderr, "run `tug sh scratch --debug -n shop`") {
+		t.Fatalf("sh into a distroless container: %+v", r)
+	}
+	if writes.Load() != 0 {
+		t.Fatal("a debug container was added without asking")
+	}
+
+	// --debug adds one that shares the app's processes, and attaches to it.
+	r = tug(t, "sh", "scratch", "-n", "shop", "--debug")
+	attached := regexp.MustCompile(`^attached to debugger-[a-z0-9]{5} \(image busybox:1\.36, target app, stdin true, tty false\)\n$`)
+	if r.code != 0 || !attached.MatchString(r.stdout) || !strings.Contains(r.stderr, "sharing the processes of app") {
+		t.Fatalf("sh --debug: %+v", r)
+	}
+	if writes.Load() != 1 {
+		t.Fatalf("want 1 write (the ephemeral container), got %d", writes.Load())
+	}
+
+	// A command may finish before tug can attach; its logs are shown instead.
+	r = tug(t, "sh", "scratch", "-n", "shop", "--debug", "--image", "alpine:3.20", "--", "ps")
+	if r.code != 0 || !strings.Contains(r.stdout, "(image alpine:3.20, target app, stdin true, tty false, command ps)") {
+		t.Fatalf("sh --debug --image alpine:3.20 -- ps: %+v", r)
+	}
+
+	// The debug containers stay in the pod, and its tree shows them.
+	out := mustTug(t, "tree", "pod/scratch", "-n", "shop")
+	if n := strings.Count(out, "ephemeral container debugger-"); n != 2 {
+		t.Errorf("tree shows %d debug containers, want 2:\n%s", n, out)
 	}
 }
