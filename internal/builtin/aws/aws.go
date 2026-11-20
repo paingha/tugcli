@@ -108,10 +108,27 @@ func loadConfig(ctx context.Context, profile, region string) (awsv2.Config, erro
 	return awsconfig.LoadDefaultConfig(ctx, opts...)
 }
 
+// credentialsError marks a failure to resolve AWS credentials, such as an
+// expired SSO session or no instance role, so it maps to Unauthenticated
+// without inspecting error text.
+type credentialsError struct{ err error }
+
+func (e *credentialsError) Error() string { return "resolving AWS credentials: " + e.err.Error() }
+
+func (e *credentialsError) Unwrap() error { return e.err }
+
 func sdkClients(ctx context.Context, profile, region string) (EKSAPI, Presigner, error) {
 	cfg, err := loadConfig(ctx, profile, region)
 	if err != nil {
 		return nil, nil, err
+	}
+	// Resolve credentials now so that a failure is known to be about
+	// credentials. The SDK caches them, so the API calls reuse the result.
+	if cfg.Credentials == nil {
+		return nil, nil, &credentialsError{err: errors.New("no credentials configured")}
+	}
+	if _, err := cfg.Credentials.Retrieve(ctx); err != nil {
+		return nil, nil, &credentialsError{err: err}
 	}
 	return eks.NewFromConfig(cfg), sts.NewPresignClient(sts.NewFromConfig(cfg)), nil
 }
@@ -254,6 +271,12 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 			if err != nil {
 				return nil, awsError(err, req.Account.ID)
 			}
+			// A cluster being created has no endpoint or CA until it is
+			// ACTIVE. Importing it now would give an unusable kubeconfig;
+			// the next sync picks it up.
+			if desc.Cluster == nil || awsv2.ToString(desc.Cluster.Endpoint) == "" {
+				continue
+			}
 			c, err := toCluster(region, desc)
 			if err != nil {
 				return nil, err
@@ -373,15 +396,17 @@ func awsError(err error, account string) error {
 		}
 		return provider.Errorf(provider.Internal, "%s: %s", api.ErrorCode(), api.ErrorMessage())
 	}
-	msg := err.Error()
+	var (
+		credErr    *credentialsError
+		profileErr awsconfig.SharedConfigProfileNotExistError
+	)
 	switch {
-	case strings.Contains(msg, "failed to retrieve credentials"), strings.Contains(msg, "no EC2 IMDS role found"),
-		strings.Contains(msg, "SSO session"), strings.Contains(msg, "token has expired"), strings.Contains(msg, "refresh cached SSO token"):
-		return provider.Errorf(provider.Unauthenticated, "%s", msg).WithHint(signInHint(account))
-	case strings.Contains(msg, "failed to get shared config profile"):
-		return provider.Errorf(provider.NotFound, "%s", msg)
+	case errors.As(err, &credErr):
+		return provider.Errorf(provider.Unauthenticated, "%v", err).WithHint(signInHint(account))
+	case errors.As(err, &profileErr):
+		return provider.Errorf(provider.NotFound, "%v", err).WithHint("check the profile name in ~/.aws/config")
 	}
-	return provider.Errorf(provider.Unavailable, "%s", msg)
+	return provider.Errorf(provider.Unavailable, "%v", err)
 }
 
 func signInHint(account string) string {

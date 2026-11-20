@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
@@ -94,9 +96,12 @@ func newTestProvider(fake *fakeEKS, regions map[string]string) (*Provider, *[]st
 }
 
 func TestListAcrossRegionsAndPages(t *testing.T) {
+	creating := cluster("creating", true, nil)
+	creating.Endpoint, creating.CertificateAuthority = nil, nil // not ACTIVE yet
 	fake := &fakeEKS{pageSize: 1, clusters: map[string]*ekstypes.Cluster{
 		"payments-prod": cluster("payments-prod", true, map[string]string{"Environment": "prod", "team": "pay"}),
 		"internal":      cluster("internal", false, nil),
+		"creating":      creating,
 	}}
 	p, calls := newTestProvider(fake, nil)
 	acct := provider.Account{ID: "work", Config: map[string]any{ConfigProfile: "work", ConfigRegions: "eu-west-1, us-east-1,eu-west-1"}}
@@ -105,7 +110,7 @@ func TestListAcrossRegionsAndPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(clusters) != 4 { // two clusters in each of two regions
+	if len(clusters) != 4 { // two ready clusters in each of two regions; "creating" is skipped
 		t.Fatalf("got %d clusters", len(clusters))
 	}
 	if strings.Join(*calls, ",") != "work@eu-west-1,work@us-east-1" {
@@ -229,7 +234,9 @@ func TestAWSErrorMapping(t *testing.T) {
 		{apiErr{"AccessDeniedException", "no"}, provider.PermissionDenied},
 		{apiErr{"ThrottlingException", "slow"}, provider.RateLimited},
 		{apiErr{"ResourceNotFoundException", "gone"}, provider.NotFound},
-		{errors.New("operation error: failed to retrieve credentials: SSO session has expired"), provider.Unauthenticated},
+		{&credentialsError{err: errors.New("the SSO session has expired")}, provider.Unauthenticated},
+		{fmt.Errorf("listing: %w", &credentialsError{err: errors.New("no EC2 IMDS role found")}), provider.Unauthenticated},
+		{awsconfig.SharedConfigProfileNotExistError{Profile: "gone"}, provider.NotFound},
 		{errors.New("dial tcp: no such host"), provider.Unavailable},
 	}
 	for _, tt := range tests {
