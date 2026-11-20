@@ -52,7 +52,7 @@ file. It answers from the cache, or asks the cluster's provider on a miss.`,
 	token.Flags().StringVar(&clusterID, "cluster", "", "catalog cluster ID or name")
 	token.Flags().BoolVar(&refresh, "refresh", false, "ignore the cache and ask the provider")
 	_ = token.MarkFlagRequired("cluster")
-	cmd.AddCommand(token, newAuthRotateCmd(a))
+	cmd.AddCommand(token, newProxyTokenCmd(a), newAuthRotateCmd(a))
 	return cmd
 }
 

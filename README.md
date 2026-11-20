@@ -64,6 +64,27 @@ tug import akamai --account work          # asks for the token once, keeps it in
 Every kubeconfig tug writes authenticates with `tug auth token`, so no secret is
 written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 
+## The local API proxy (tugd)
+
+Without the proxy, a read-only session protects tug's own commands, but
+kubectl, helm and k9s talk to the cluster directly. With `--proxy`, every
+client goes through tugd, a background process on this machine, and the guard
+applies to all of them:
+
+```bash
+tug connect prod-eu --proxy        # starts tugd if needed
+kubectl delete pod api-0           # Error from server (Forbidden): tug: refused DELETE pods/api-0: prod-eu is read-only
+tug unlock 15m                     # takes effect on the next request, for every client
+tug daemon status | stop
+```
+
+tugd serves TLS on a loopback port and holds each cluster's real credential.
+A session's kubeconfig trusts tugd's certificate and authenticates with a
+per-session token that exists only in tugd's memory, fetched through
+`tug auth proxy-token`, so nothing secret is written to disk. Exec, attach,
+port-forward, `logs -f` and watches pass through. tugd stops after 30 minutes
+without a live session.
+
 ## How it fits together
 
 | Piece | Where |
@@ -84,6 +105,7 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 | kubectl passthrough | [internal/passthrough](internal/passthrough) |
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
 | Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
+| tugd: local API proxy, control socket | [internal/daemon](internal/daemon) |
 | Logs, exec, port-forward, rollouts (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai LKE, CoreWeave CKS) | [plugins](plugins) |
@@ -93,11 +115,15 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 
 A plugin is an executable named `tug-provider-<name>` that reads one JSON
 request on stdin and writes one JSON response on stdout, in any language.
+[docs/plugins.md](docs/plugins.md) is the guide to writing, testing,
+packaging and installing one, with the protocol and manifest reference. While
+this repository is private, a Go plugin gets the SDK from a local checkout:
+`tug plugin new acme --sdk-replace <path to tugcli>`.
 
 ```bash
 tug plugin new acme                    # Go, with the SDK, tests and a release workflow
 tug plugin new acme --lang python      # one stdlib-only script, no SDK needed
-cd tug-provider-acme && make conformance
+cd tug-provider-acme && go mod tidy && make conformance
 
 tug plugin package . -o dist           # archive with each binary's sha256 in the manifest
 tug plugin install ./dist/tug-provider-acme_0.1.0.tar.gz
@@ -106,16 +132,15 @@ tug plugin test acme --account prod    # protocol conformance suite
 tug plugin ls | describe | link | unlink | remove
 ```
 
-Install verifies every binary against the manifest, refuses archives with
-links or paths outside the plugin directory, and shows the plugin's
-publisher, secrets and network hosts before asking to confirm. Plugins run
-with a scrubbed environment and receive only the secrets they declare. A
-plugin whose `minTugVersion` is newer than tug is refused. Fields in
-`plugin.yaml` that tug does not know are ignored with a warning, and
+Install verifies this platform's binary against the manifest, refuses
+archives with links or paths outside the plugin directory, and shows the
+plugin's publisher, secrets and network hosts before asking to confirm.
+Plugins run with a scrubbed environment and receive only the secrets they
+declare. A plugin whose `minTugVersion` is newer than tug is refused. Fields
+in `plugin.yaml` that tug does not know are ignored with a warning, and
 `tug import` warns about `--set` keys the plugin's `accountConfig` does not
-describe.
-`plugins.timeouts` in `config.yaml` sets the time allowed for each operation,
-for example `{list: 60s, rotate: 2m}`.
+describe. `plugins.timeouts` in `config.yaml` sets the time allowed for each
+operation, for example `{list: 60s, rotate: 2m}`.
 
 With the Go SDK, a plugin is mostly two methods:
 

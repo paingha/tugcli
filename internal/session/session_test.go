@@ -128,6 +128,83 @@ func TestChildSessionCopiesParent(t *testing.T) {
 	}
 }
 
+var proxied = AuthCommand{Command: "tug", ProxyURL: "https://127.0.0.1:41000", ProxyCA: []byte("PROXY-CA")}
+
+// A nested shell of a proxied session goes through tugd as itself, so its
+// own read-only state and lock/unlock govern its clients.
+func TestChildOfProxiedSessionUsesItsOwnSession(t *testing.T) {
+	m := NewManager(t.TempDir())
+	parent, _ := m.Create(1, "")
+	if err := parent.Connect(prodEU, "web", true, proxied); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.Unlock(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	child, err := m.Create(2, parent.State.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.State.ProxyURL != proxied.ProxyURL || child.State.Writable(time.Now()) {
+		t.Fatalf("child state: %+v", child.State)
+	}
+	cfg, err := clientcmd.LoadFromFile(child.KubeconfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl := cfg.Clusters[cfg.Contexts[cfg.CurrentContext].Cluster]
+	if want := ProxyServer(proxied.ProxyURL, child.State.ID); cl.Server != want || string(cl.CertificateAuthorityData) != "PROXY-CA" {
+		t.Fatalf("child server %s (CA %q), want %s", cl.Server, cl.CertificateAuthorityData, want)
+	}
+	args := strings.Join(cfg.AuthInfos[cfg.Contexts[cfg.CurrentContext].AuthInfo].Exec.Args, " ")
+	if args != "auth proxy-token --session "+child.State.ID {
+		t.Fatalf("child exec args: %s", args)
+	}
+}
+
+// A change made through a Session opened earlier must not undo one made
+// since: here proxy-token repointing a session after `tug lock`.
+func TestStaleSessionDoesNotUndoChanges(t *testing.T) {
+	m := NewManager(t.TempDir())
+	s, _ := m.Create(1, "")
+	if err := s.Connect(prodEU, "", true, proxied); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Unlock(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	stale, _ := m.Open(s.State.ID) // as proxy-token opens it: unlocked
+	if err := s.Lock(); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := stale.SetProxy("https://127.0.0.1:42000", []byte("NEW-CA"))
+	if err != nil || !changed {
+		t.Fatalf("SetProxy = %v, %v; want a change", changed, err)
+	}
+	now, _ := m.Open(s.State.ID)
+	if now.State.Writable(time.Now()) {
+		t.Fatal("repointing the session undid tug lock")
+	}
+	if now.State.ProxyURL != "https://127.0.0.1:42000" {
+		t.Fatalf("proxy URL = %s", now.State.ProxyURL)
+	}
+
+	// The same address again changes nothing.
+	if changed, err := now.SetProxy("https://127.0.0.1:42000", []byte("NEW-CA")); err != nil || changed {
+		t.Fatalf("SetProxy with the same address = %v, %v; want no change", changed, err)
+	}
+	// Nor does repointing a session that has since stopped using the proxy.
+	if err := now.Connect(prodEU, "", true, AuthCommand{Command: "tug"}); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := stale.SetProxy("https://127.0.0.1:43000", nil); err != nil || changed {
+		t.Fatalf("SetProxy on a session not using the proxy = %v, %v", changed, err)
+	}
+	if b, _ := os.ReadFile(s.KubeconfigPath()); strings.Contains(string(b), "43000") {
+		t.Fatal("repointed the kubeconfig of a session that no longer uses the proxy")
+	}
+}
+
 func TestDisconnect(t *testing.T) {
 	m := NewManager(t.TempDir())
 	s, _ := m.Create(1, "")

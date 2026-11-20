@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -84,6 +85,9 @@ type app struct {
 	cfg   *config.Config
 	log   *slog.Logger
 
+	// mu guards the pieces below, which load on first use. tugd asks for
+	// them from concurrent proxy requests.
+	mu       sync.Mutex
 	store    credentials.Store
 	reg      *registry.Registry
 	problems []plugin.Problem
@@ -130,6 +134,8 @@ func (a *app) setup(debug bool) error {
 
 // credentialStore opens the keychain or encrypted file on first use.
 func (a *app) credentialStore() (credentials.Store, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.store == nil {
 		s, err := credentials.Open(a.cfg.Keyring.Backend, a.paths)
 		if err != nil {
@@ -142,6 +148,8 @@ func (a *app) credentialStore() (credentials.Store, error) {
 
 // registry builds the provider registry: built-ins first, then plugins.
 func (a *app) registry() *registry.Registry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.reg != nil {
 		return a.reg
 	}
