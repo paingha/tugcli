@@ -15,6 +15,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -67,12 +69,30 @@ const aksScope = "6dae42f8-4368-4678-94ff-3960e28e3630/.default"
 // so that rotated cluster certificates and withdrawn access are picked up.
 const localCredentialTTL = time.Hour
 
+// credentialEnv are the variables azidentity's environment and workload
+// identity credentials read. Any of them set means Azure sign-in is set up.
+var credentialEnv = []string{
+	"AZURE_TENANT_ID",
+	"AZURE_CLIENT_ID",
+	"AZURE_CLIENT_SECRET",
+	"AZURE_CLIENT_CERTIFICATE_PATH",
+	"AZURE_CLIENT_CERTIFICATE_PASSWORD",
+	"AZURE_CLIENT_SEND_CERTIFICATE_CHAIN",
+	"AZURE_USERNAME",
+	"AZURE_PASSWORD",
+	"AZURE_FEDERATED_TOKEN_FILE",
+	"AZURE_AUTHORITY_HOST",
+	"AZURE_ADDITIONALLY_ALLOWED_TENANTS",
+}
+
 // Provider lists AKS clusters.
 type Provider struct {
 	armURL string
 	client *http.Client
 	cred   func() (azcore.TokenCredential, error)
 	now    func() time.Time
+	getenv func(string) string
+	home   string
 	kc     *kubeconfig.Provider
 }
 
@@ -102,6 +122,12 @@ func WithTokenCredential(c azcore.TokenCredential) Option {
 // WithNow replaces time.Now, for tests.
 func WithNow(f func() time.Time) Option { return func(p *Provider) { p.now = f } }
 
+// WithGetenv replaces os.Getenv, for tests.
+func WithGetenv(f func(string) string) Option { return func(p *Provider) { p.getenv = f } }
+
+// WithHome sets the home directory used to find the Azure CLI's ~/.azure.
+func WithHome(dir string) Option { return func(p *Provider) { p.home = dir } }
+
 // New returns the AKS provider. DefaultAzureCredential is created on first
 // use and then shared, so a long-running process remembers which source
 // signed it in instead of probing every source again.
@@ -112,11 +138,15 @@ func New(opts ...Option) *Provider {
 		cred: sync.OnceValues(func() (azcore.TokenCredential, error) {
 			return azidentity.NewDefaultAzureCredential(nil)
 		}),
-		now: time.Now,
-		kc:  kubeconfig.New(),
+		now:    time.Now,
+		getenv: os.Getenv,
+		kc:     kubeconfig.New(),
 	}
 	for _, o := range opts {
 		o(p)
+	}
+	if p.home == "" {
+		p.home, _ = os.UserHomeDir()
 	}
 	return p
 }
@@ -181,8 +211,13 @@ type (
 )
 
 // Accounts returns the subscriptions the signed-in identity can see in its
-// default tenant, leaving out disabled and deleted ones.
+// default tenant, leaving out disabled and deleted ones. On a machine with no
+// Azure sign-in set up it returns none without asking for a token, so
+// `tug import` neither waits for the managed identity probe nor warns there.
 func (p *Provider) Accounts(ctx context.Context) ([]provider.Account, error) {
+	if !p.signInSetUp() {
+		return nil, nil
+	}
 	tok, err := p.token(ctx, p.armScope(), "")
 	if err != nil {
 		return nil, err
@@ -201,7 +236,7 @@ func (p *Provider) Accounts(ctx context.Context) ([]provider.Account, error) {
 			}
 			acct := provider.Account{
 				ID:          s.SubscriptionID,
-				Description: "Azure subscription " + cmp.Or(s.DisplayName, s.SubscriptionID),
+				Description: cmp.Or(s.DisplayName, s.SubscriptionID),
 				Config:      map[string]any{ConfigSubscription: s.SubscriptionID},
 			}
 			if s.TenantID != "" {
@@ -215,6 +250,24 @@ func (p *Provider) Accounts(ctx context.Context) ([]provider.Account, error) {
 	}
 	slices.SortFunc(out, func(a, b provider.Account) int { return strings.Compare(a.ID, b.ID) })
 	return out, nil
+}
+
+// signInSetUp reports whether this machine has an Azure credential source
+// set up: one of credentialEnv, or an Azure CLI profile in ~/.azure (or
+// $AZURE_CONFIG_DIR). It asks for no token and makes no network call.
+func (p *Provider) signInSetUp() bool {
+	if slices.ContainsFunc(credentialEnv, func(k string) bool { return p.getenv(k) != "" }) {
+		return true
+	}
+	dir := p.getenv("AZURE_CONFIG_DIR")
+	if dir == "" && p.home != "" {
+		dir = filepath.Join(p.home, ".azure")
+	}
+	if dir == "" {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(dir, "azureProfile.json"))
+	return err == nil && st.Mode().IsRegular()
 }
 
 // subscription returns the account's subscription ID.

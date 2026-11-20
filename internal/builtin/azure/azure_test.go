@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -223,16 +225,52 @@ func (f *fakeARM) userCredential(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func newTestProvider(arm *fakeARM, cred *fakeCredential) *Provider {
+// newTestProvider returns a provider that talks to arm, with no AZURE_*
+// variables and an empty home directory unless opts say otherwise.
+func newTestProvider(t *testing.T, arm *fakeARM, cred *fakeCredential, opts ...Option) *Provider {
+	t.Helper()
 	if cred.tokens == nil {
 		cred.tokens = map[string]string{arm.URL + "/.default": "arm-token", aksScope: "aks-token"}
 	}
-	return New(
-		WithARMURL(arm.URL+"/"),
+	return New(append([]Option{
+		WithARMURL(arm.URL + "/"),
 		WithHTTPClient(arm.Client()),
 		WithTokenCredential(cred),
 		WithNow(func() time.Time { return testNow }),
-	)
+		WithGetenv(env()),
+		WithHome(t.TempDir()),
+	}, opts...)...)
+}
+
+// env returns a getenv that knows only the given name and value pairs.
+func env(kv ...string) func(string) string {
+	return func(k string) string {
+		for i := 0; i+1 < len(kv); i += 2 {
+			if kv[i] == k {
+				return kv[i+1]
+			}
+		}
+		return ""
+	}
+}
+
+// writeProfile writes an Azure CLI profile into dir, as `az login` does.
+func writeProfile(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "azureProfile.json"), []byte(`{"subscriptions":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// azureCLIHome returns a home directory with an Azure CLI profile in .azure.
+func azureCLIHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	writeProfile(t, filepath.Join(home, ".azure"))
+	return home
 }
 
 func prodAccount() provider.Account {
@@ -242,17 +280,18 @@ func prodAccount() provider.Account {
 func TestAccounts(t *testing.T) {
 	arm := newFakeARM(t)
 	cred := &fakeCredential{}
-	accts, err := newTestProvider(arm, cred).Accounts(context.Background())
+	accts, err := newTestProvider(t, arm, cred, WithHome(azureCLIHome(t))).Accounts(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got []string
 	for _, a := range accts {
-		got = append(got, a.ID+" "+a.Description+" "+a.ConfigString(ConfigSubscription)+" "+a.ConfigString(ConfigTenant))
+		got = append(got, a.ID+"|"+a.Description+"|"+a.ConfigString(ConfigSubscription)+"|"+a.ConfigString(ConfigTenant))
 	}
+	// The description is the display name, which the import picker can show.
 	want := []string{
-		subProd + " Azure subscription Production " + subProd + " " + homeTenant,
-		subDev + " Azure subscription Development " + subDev + " " + homeTenant,
+		subProd + "|Production|" + subProd + "|" + homeTenant,
+		subDev + "|Development|" + subDev + "|" + homeTenant,
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("Accounts() = %q, want %q", got, want)
@@ -262,10 +301,53 @@ func TestAccounts(t *testing.T) {
 	}
 }
 
+func TestAccountsSignInSetUp(t *testing.T) {
+	arm := newFakeARM(t)
+	configDir := t.TempDir()
+	writeProfile(t, configDir)
+	failed := errors.New("DefaultAzureCredential: failed to acquire a token")
+	tests := []struct {
+		name     string
+		getenv   func(string) string
+		home     string
+		tokenErr error
+		accounts int
+		code     provider.Code
+	}{
+		{name: "nothing set up", getenv: env(), home: t.TempDir()},
+		{name: "Azure CLI profile", getenv: env(), home: azureCLIHome(t), accounts: 2},
+		{name: "profile in AZURE_CONFIG_DIR", getenv: env("AZURE_CONFIG_DIR", configDir), home: t.TempDir(), accounts: 2},
+		{name: "AZURE_CONFIG_DIR without a profile", getenv: env("AZURE_CONFIG_DIR", t.TempDir()), home: azureCLIHome(t)},
+		{name: "service principal variables", getenv: env("AZURE_TENANT_ID", homeTenant, "AZURE_CLIENT_ID", "app"), home: t.TempDir(), accounts: 2},
+		{name: "workload identity variables", getenv: env("AZURE_FEDERATED_TOKEN_FILE", "/var/run/secrets/azure/tokens/token"), home: t.TempDir(), accounts: 2},
+		{name: "Azure CLI signed out", getenv: env(), home: azureCLIHome(t), tokenErr: failed, code: provider.Unauthenticated},
+		{name: "service principal rejected", getenv: env("AZURE_CLIENT_ID", "app"), home: t.TempDir(), tokenErr: failed, code: provider.Unauthenticated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cred := &fakeCredential{err: tt.tokenErr}
+			accts, err := newTestProvider(t, arm, cred, WithGetenv(tt.getenv), WithHome(tt.home)).Accounts(context.Background())
+			if tt.code != "" {
+				if pe := provider.AsError(err); pe.Code != tt.code || !strings.Contains(pe.Hint, "az login") {
+					t.Fatalf("Accounts() error = %+v, want %s with an az login hint", pe, tt.code)
+				}
+				return
+			}
+			if err != nil || len(accts) != tt.accounts {
+				t.Fatalf("Accounts() = %d accounts, %v; want %d, no error", len(accts), err, tt.accounts)
+			}
+			// Asking for a token is what runs the managed identity probe.
+			if tt.accounts == 0 && len(cred.requests) > 0 {
+				t.Fatalf("Accounts() asked for %d tokens with no sign-in set up", len(cred.requests))
+			}
+		})
+	}
+}
+
 func TestList(t *testing.T) {
 	arm := newFakeARM(t)
 	cred := &fakeCredential{}
-	clusters, err := newTestProvider(arm, cred).List(context.Background(), provider.ListRequest{Account: prodAccount()})
+	clusters, err := newTestProvider(t, arm, cred).List(context.Background(), provider.ListRequest{Account: prodAccount()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +407,7 @@ func TestListErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := newTestProvider(arm, tt.cred).List(context.Background(), provider.ListRequest{Account: tt.account})
+			_, err := newTestProvider(t, arm, tt.cred).List(context.Background(), provider.ListRequest{Account: tt.account})
 			pe := provider.AsError(err)
 			if pe.Code != tt.code || !strings.Contains(pe.Hint, tt.hint) {
 				t.Fatalf("List() error = %+v, want %s with hint %q", pe, tt.code, tt.hint)
@@ -333,7 +415,7 @@ func TestListErrors(t *testing.T) {
 		})
 	}
 
-	_, err := newTestProvider(arm, &fakeCredential{}).List(context.Background(), provider.ListRequest{Account: provider.Account{ID: subThrottled}})
+	_, err := newTestProvider(t, arm, &fakeCredential{}).List(context.Background(), provider.ListRequest{Account: provider.Account{ID: subThrottled}})
 	if pe := provider.AsError(err); pe.Code != provider.RateLimited || pe.RetryAfterSeconds != 7 {
 		t.Fatalf("List() when throttled = %+v, want RateLimited after 7 seconds", pe)
 	}
@@ -361,7 +443,7 @@ func TestCredential(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cred := &fakeCredential{}
-			c, err := newTestProvider(arm, cred).Credential(context.Background(), provider.CredentialRequest{Account: prodAccount(), ClusterID: tt.cluster})
+			c, err := newTestProvider(t, arm, cred).Credential(context.Background(), provider.CredentialRequest{Account: prodAccount(), ClusterID: tt.cluster})
 			if tt.code != "" {
 				if pe := provider.AsError(err); pe.Code != tt.code || !strings.Contains(pe.Hint, tt.hint) {
 					t.Fatalf("Credential(%s) error = %+v, want %s with hint %q", tt.cluster, pe, tt.code, tt.hint)
@@ -378,7 +460,7 @@ func TestCredential(t *testing.T) {
 	}
 
 	cred := &fakeCredential{}
-	if _, err := newTestProvider(arm, cred).Credential(context.Background(), provider.CredentialRequest{Account: prodAccount(), ClusterID: "payments-rg/payments-prod"}); err != nil {
+	if _, err := newTestProvider(t, arm, cred).Credential(context.Background(), provider.CredentialRequest{Account: prodAccount(), ClusterID: "payments-rg/payments-prod"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(cred.requests) != 2 || cred.requests[1].Scopes[0] != aksScope || cred.requests[1].TenantID != entraTenant {
