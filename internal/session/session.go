@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -61,13 +62,26 @@ func (s *State) Writable(now time.Time) bool {
 
 // Manager creates and finds sessions under one runtime directory.
 type Manager struct {
-	root string
-	now  func() time.Time
+	runtime string
+	root    string
+	now     func() time.Time
 }
 
 // NewManager returns a Manager for runtimeDir.
 func NewManager(runtimeDir string) *Manager {
-	return &Manager{root: filepath.Join(runtimeDir, "sessions"), now: time.Now}
+	return &Manager{runtime: runtimeDir, root: filepath.Join(runtimeDir, "sessions"), now: time.Now}
+}
+
+// checkPrivate refuses a runtime directory that other users can change (see
+// config.CheckPrivateDir). A session kubeconfig's exec entry names a command
+// that kubectl runs, so another user who could replace the file would run
+// their own program as this user. A directory that does not exist yet is
+// fine: Create makes it private.
+func (m *Manager) checkPrivate() error {
+	if err := config.CheckPrivateDir(m.runtime); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // Root is the directory that holds every session.
@@ -99,6 +113,9 @@ func (m *Manager) Create(pid int, parentID string) (*Session, error) {
 		State: State{ID: id, PID: pid, Created: now, Updated: now},
 		dir:   filepath.Join(m.root, id),
 		m:     m,
+	}
+	if err := config.EnsurePrivateDir(m.runtime); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating session directory: %w", err)
@@ -163,6 +180,9 @@ func (m *Manager) Open(id string) (*Session, error) {
 	if !validID.MatchString(id) {
 		return nil, fmt.Errorf("invalid session id %q", id)
 	}
+	if err := m.checkPrivate(); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(m.root, id)
 	b, err := os.ReadFile(filepath.Join(dir, stateFileName))
 	if errors.Is(err, os.ErrNotExist) {
@@ -192,12 +212,18 @@ func (m *Manager) Remove(id string) error {
 	if !validID.MatchString(id) {
 		return fmt.Errorf("invalid session id %q", id)
 	}
+	if err := m.checkPrivate(); err != nil {
+		return err
+	}
 	return os.RemoveAll(filepath.Join(m.root, id))
 }
 
 // Sweep removes sessions whose shell has exited, and any session not updated
 // within maxAge. It returns how many it removed.
 func (m *Manager) Sweep(maxAge time.Duration) (int, error) {
+	if err := m.checkPrivate(); err != nil {
+		return 0, err
+	}
 	entries, err := os.ReadDir(m.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
