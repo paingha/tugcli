@@ -21,7 +21,10 @@ import (
 const (
 	DefaultListTimeout       = 30 * time.Second
 	DefaultCredentialTimeout = 10 * time.Second
-	DefaultTimeout           = 30 * time.Second
+	// DefaultRotateTimeout is longer because a provider may have to wait for
+	// a regenerated credential after revoking the old one.
+	DefaultRotateTimeout = 60 * time.Second
+	DefaultTimeout       = 30 * time.Second
 	// killGrace is how long a plugin has to exit after SIGTERM.
 	killGrace = 2 * time.Second
 )
@@ -50,8 +53,10 @@ func (r *Runner) timeout(op string) time.Duration {
 	switch op {
 	case provider.OpList:
 		return DefaultListTimeout
-	case provider.OpCredential, provider.OpRotate:
+	case provider.OpCredential:
 		return DefaultCredentialTimeout
+	case provider.OpRotate:
+		return DefaultRotateTimeout
 	default:
 		return DefaultTimeout
 	}

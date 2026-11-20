@@ -22,9 +22,11 @@ const goodToken = "linode-pat"
 
 // fakeLinode serves the LKE endpoints the plugin uses.
 type fakeLinode struct {
-	mu          sync.Mutex
-	generation  int // kubeconfig token generation for cluster 101
-	notReadyFor int // GETs of 101's kubeconfig that answer 503 after a DELETE
+	mu            sync.Mutex
+	generation    int  // kubeconfig token generation for cluster 101
+	notReadyFor   int  // GETs of 101's kubeconfig that answer 503 after a DELETE
+	endpointsDown bool // 102's api-endpoints answers 500
+	noEndpoints   bool // 102's api-endpoints answers an empty list
 }
 
 func kubeconfigFor(server, token string) string {
@@ -76,11 +78,16 @@ func (f *fakeLinode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, `{"kubeconfig":%q}`, kubeconfigFor("https://101.lke.example:443", fmt.Sprintf("lke-token-%d", f.generation)))
 	case p == "/v4/lke/clusters/101/kubeconfig" && r.Method == http.MethodDelete:
 		f.generation++
-		f.notReadyFor = 1
+		f.notReadyFor = max(f.notReadyFor, 1)
 		fmt.Fprint(w, `{}`)
 	case p == "/v4/lke/clusters/102/kubeconfig":
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprint(w, `{"errors":[{"reason":"Kubeconfig not yet available"}]}`)
+	case p == "/v4/lke/clusters/102/api-endpoints" && f.endpointsDown:
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"errors":[{"reason":"Internal error"}]}`)
+	case p == "/v4/lke/clusters/102/api-endpoints" && f.noEndpoints:
+		fmt.Fprint(w, `{"data":[],"page":1,"pages":1}`)
 	case p == "/v4/lke/clusters/102/api-endpoints":
 		fmt.Fprint(w, `{"data":[{"endpoint":"https://102.lke.example:443"}],"page":1,"pages":1}`)
 	case p == "/v4/lke/clusters/101/control_plane_acl":
@@ -100,7 +107,7 @@ func setup(t *testing.T) (*Provider, provider.Account, *fakeLinode) {
 	srv := httptest.NewServer(fake)
 	t.Cleanup(srv.Close)
 	p := New()
-	p.sleep = func(time.Duration) {}
+	p.wait = func(context.Context, time.Duration) error { return nil }
 	return p, provider.Account{ID: "work", Config: map[string]any{"apiURL": srv.URL + "/v4"}}, fake
 }
 
@@ -132,6 +139,39 @@ func TestList(t *testing.T) {
 	pending := clusters[1]
 	if pending.Endpoints.Public != "https://102.lke.example:443" || pending.Credential != nil || pending.Labels["gpu"] != "" {
 		t.Fatalf("cluster without a kubeconfig yet: %+v", pending)
+	}
+}
+
+func TestListWhenEndpointsFail(t *testing.T) {
+	p, acct, fake := setup(t)
+	fake.endpointsDown = true
+	_, err := p.List(context.Background(), provider.ListRequest{Account: acct, Secrets: secrets})
+	if provider.CodeOf(err) != provider.Unavailable {
+		t.Fatalf("an endpoint error should fail the listing, not drop the cluster: %v", err)
+	}
+
+	fake.endpointsDown, fake.noEndpoints = false, true
+	clusters, err := p.List(context.Background(), provider.ListRequest{Account: acct, Secrets: secrets})
+	if err != nil || len(clusters) != 1 || clusters[0].ID != "101" {
+		t.Fatalf("a cluster with no endpoint yet is skipped: %+v %v", clusters, err)
+	}
+}
+
+func TestRotateStopsWhenCancelled(t *testing.T) {
+	p, acct, fake := setup(t)
+	p.wait = sleep // real, cancellable waits
+	fake.mu.Lock()
+	fake.notReadyFor = 100 // not ready again before the context ends
+	fake.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := p.Rotate(ctx, provider.CredentialRequest{Account: acct, ClusterID: "101", Secrets: secrets})
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("rotate kept waiting %s after cancellation", time.Since(start))
+	}
+	if pe := provider.AsError(err); pe.Code != provider.Unavailable || !strings.Contains(pe.Hint, "old token no longer works") {
+		t.Fatalf("got %+v", pe)
 	}
 }
 

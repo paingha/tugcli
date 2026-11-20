@@ -34,10 +34,15 @@ const DefaultAPIURL = "https://api.linode.com/v4"
 
 const pageSize = 500
 
+// rotateWaits are the pauses between polls for a regenerated kubeconfig,
+// about 15 seconds in all. The plugin host allows rotate a minute.
+var rotateWaits = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+
 // Provider implements the plugin.
 type Provider struct {
-	http  *http.Client
-	sleep func(time.Duration)
+	http *http.Client
+	// wait pauses for d or until ctx ends; tests replace it.
+	wait func(ctx context.Context, d time.Duration) error
 }
 
 var (
@@ -47,7 +52,19 @@ var (
 )
 
 // New returns the plugin.
-func New() *Provider { return &Provider{sleep: time.Sleep} }
+func New() *Provider { return &Provider{wait: sleep} }
+
+// sleep waits for d, returning early with the context's error when it ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
 
 // Info implements provider.Provider.
 func (p *Provider) Info() provider.Info {
@@ -197,9 +214,14 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 		case notReady(err):
 			// New clusters take a few minutes to get a kubeconfig; list them
 			// by endpoint now and pick up the CA and token at the next sync.
+			// Any error here fails the listing: leaving the cluster out
+			// would mark it stale.
 			endpoints, eerr := list[apiEndpoint](ctx, c, fmt.Sprintf("/lke/clusters/%d/api-endpoints", cl.ID))
-			if eerr != nil || len(endpoints) == 0 {
-				fmt.Fprintf(os.Stderr, "akamai: skipping %s: it is not ready yet\n", cl.Label)
+			if eerr != nil {
+				return nil, eerr
+			}
+			if len(endpoints) == 0 {
+				fmt.Fprintf(os.Stderr, "akamai: skipping %s: it has no API endpoint yet\n", cl.Label)
 				continue
 			}
 			pc.Endpoints.Public = endpoints[0].Endpoint
@@ -327,18 +349,29 @@ func (p *Provider) Rotate(ctx context.Context, req provider.CredentialRequest) (
 	if err := c.Do(ctx, http.MethodDelete, fmt.Sprintf("/lke/clusters/%d/kubeconfig", id), nil, nil); err != nil {
 		return provider.Credential{}, err
 	}
-	wait := time.Second
+	// The old token is revoked now; poll until the new kubeconfig is ready.
 	for attempt := 0; ; attempt++ {
 		kc, err := p.kubeconfig(ctx, c, id)
 		if err == nil {
 			return provider.Token(kc.token, provider.NoExpiry), nil
 		}
-		if !notReady(err) || attempt == 4 {
+		if !notReady(err) {
 			return provider.Credential{}, err
 		}
-		p.sleep(wait)
-		wait *= 2
+		if attempt == len(rotateWaits) {
+			return provider.Credential{}, regenerating(err)
+		}
+		if werr := p.wait(ctx, rotateWaits[attempt]); werr != nil {
+			return provider.Credential{}, regenerating(werr)
+		}
 	}
+}
+
+// regenerating explains a rotate that revoked the old token but could not
+// fetch the new one in time.
+func regenerating(err error) error {
+	return provider.Errorf(provider.Unavailable, "the kubeconfig was regenerated but is not ready yet: %v", err).
+		WithHint("the old token no longer works; run tug sync in a minute to fetch the new one")
 }
 
 // CheckAccess compares the caller's egress IP with the control plane ACL.

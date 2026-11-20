@@ -276,3 +276,21 @@ func TestDiscoverPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRunnerTimeouts(t *testing.T) {
+	r := &Runner{Timeouts: map[string]time.Duration{provider.OpList: time.Minute}}
+	tests := []struct {
+		op   string
+		want time.Duration
+	}{
+		{provider.OpList, time.Minute}, // configured
+		{provider.OpCredential, DefaultCredentialTimeout},
+		{provider.OpRotate, DefaultRotateTimeout}, // longer than credential: providers poll after revoking
+		{provider.OpDescribe, DefaultTimeout},
+	}
+	for _, tt := range tests {
+		if got := r.timeout(tt.op); got != tt.want {
+			t.Errorf("timeout(%s) = %s, want %s", tt.op, got, tt.want)
+		}
+	}
+}
