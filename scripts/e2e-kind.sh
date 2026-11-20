@@ -79,6 +79,30 @@ tug rollback web
 kubectl rollout status deploy/web --timeout=180s
 test -z "$(kubectl get deploy web -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}')"
 
+echo "--- tugd: plain kubectl through the local API proxy"
+tug connect "kind-$KIND_CLUSTER" --proxy
+kubectl get pods -A > /dev/null
+kubectl exec deploy/web -- nginx -v
+kubectl port-forward deploy/web 18082:80 > "$work/pf-proxy.log" 2>&1 &
+pf_proxy=$!
+for _ in $(seq 1 30); do
+  curl -fsS http://localhost:18082 > "$work/page-proxy.html" 2>/dev/null && break
+  sleep 1
+done
+kill "$pf_proxy" 2>/dev/null || true
+grep -q "Welcome to nginx" "$work/page-proxy.html" || { echo "FAIL: port-forward through tugd"; cat "$work/pf-proxy.log"; exit 1; }
+timeout 5 kubectl logs -f deploy/web --tail 1 > "$work/logs-proxy.txt" || true
+test -s "$work/logs-proxy.txt" || { echo "FAIL: logs -f through tugd"; exit 1; }
+
+echo "--- tugd refuses kubectl writes on a read-only session"
+tug connect "kind-$KIND_CLUSTER" --proxy --read-only
+if kubectl delete ns default --wait=false 2> "$work/delete-proxy.err"; then
+  echo "FAIL: kubectl delete allowed through tugd on a read-only session" >&2
+  exit 1
+fi
+grep -q "read-only" "$work/delete-proxy.err" || { echo "FAIL: unexpected refusal"; cat "$work/delete-proxy.err"; exit 1; }
+tug daemon stop
+
 echo "--- read-only guard"
 tug connect "kind-$KIND_CLUSTER" --read-only
 if tug delete ns default --wait=false 2>/dev/null; then

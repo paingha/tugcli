@@ -44,7 +44,7 @@ Commands tug does not have run as kubectl with this terminal's session:
 	)
 	add("discover", newImportCmd(a), newSyncCmd(a), newLsCmd(a), newLabelCmd(a), newForgetCmd(a), newPluginCmd(a))
 	add("safety", newUnlockCmd(a), newLockCmd(a))
-	add("other", newAuthCmd(a), newVersionCmd(a))
+	add("other", newAuthCmd(a), newDaemonCmd(a), newVersionCmd(a))
 	root.AddCommand(newSessionCmd(a), newProviderExecCmd(a))
 	root.SetHelpCommandGroupID("other")
 	root.SetCompletionCommandGroupID("other")

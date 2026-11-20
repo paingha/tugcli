@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,12 @@ import (
 // credentials: `<Command> auth token --cluster <id>`.
 type AuthCommand struct {
 	Command string
+	// ProxyURL, when set, sends the session through tugd's local API proxy
+	// at <ProxyURL>/s/<session>, and the kubeconfig runs
+	// `<Command> auth proxy-token --session <id>` instead.
+	ProxyURL string
+	// ProxyCA is the PEM certificate the kubeconfig trusts for the proxy.
+	ProxyCA []byte
 }
 
 // Prompt styles written to the prompt file and read by the shell hook.
@@ -42,10 +49,44 @@ func (s *Session) Connect(cl *catalog.Cluster, namespace string, readOnly bool, 
 	s.State.Namespace = namespace
 	s.State.ReadOnly = readOnly
 	s.State.UnlockedUntil = time.Time{}
-	if err := writeKubeconfig(s.KubeconfigPath(), Kubeconfig(cl, namespace, auth)); err != nil {
+	s.State.ProxyURL = auth.ProxyURL
+	if err := writeKubeconfig(s.KubeconfigPath(), Kubeconfig(cl, namespace, s.State.ID, auth)); err != nil {
 		return err
 	}
 	return s.saveWithPrompt()
+}
+
+// SetProxy repoints a proxied session at tugd's current address and
+// certificate, for example after tugd restarted on another port.
+func (s *Session) SetProxy(proxyURL string, ca []byte) error {
+	if s.State.ProxyURL == "" {
+		return nil
+	}
+	cfg, err := clientcmd.LoadFromFile(s.KubeconfigPath())
+	if err != nil {
+		return fmt.Errorf("reading session kubeconfig: %w", err)
+	}
+	server := ProxyServer(proxyURL, s.State.ID)
+	changed := false
+	for _, cl := range cfg.Clusters {
+		if cl.Server != server || !bytes.Equal(cl.CertificateAuthorityData, ca) {
+			cl.Server, cl.CertificateAuthorityData = server, ca
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if err := writeKubeconfig(s.KubeconfigPath(), cfg); err != nil {
+		return err
+	}
+	s.State.ProxyURL = proxyURL
+	return s.Save()
+}
+
+// ProxyServer is a session's API server address on tugd's proxy.
+func ProxyServer(proxyURL, sessionID string) string {
+	return strings.TrimSuffix(proxyURL, "/") + "/s/" + sessionID
 }
 
 // SetNamespace changes the namespace of a connected session.
@@ -124,22 +165,30 @@ func (s *Session) saveWithPrompt() error {
 	return config.WriteFileAtomic(filepath.Join(s.dir, promptFileName), []byte(line), 0o600)
 }
 
-// Kubeconfig builds the single-context kubeconfig for a cluster.
-func Kubeconfig(cl *catalog.Cluster, namespace string, auth AuthCommand) *clientcmdapi.Config {
+// Kubeconfig builds the single-context kubeconfig for a cluster. With a
+// proxy URL the cluster is reached through tugd, which holds the real
+// credential, so the kubeconfig carries neither a CA nor a credential.
+func Kubeconfig(cl *catalog.Cluster, namespace, sessionID string, auth AuthCommand) *clientcmdapi.Config {
 	cfg := clientcmdapi.NewConfig()
 	name := cl.Name
-	cfg.Clusters[name] = &clientcmdapi.Cluster{
-		Server:                   cl.Server,
-		CertificateAuthorityData: cl.CAData,
-		TLSServerName:            cl.TLSServerName,
-		InsecureSkipTLSVerify:    cl.InsecureSkipTLSVerify,
-		ProxyURL:                 cl.ProxyURL,
+	args := []string{"auth", "token", "--cluster", cl.ID}
+	if auth.ProxyURL != "" {
+		cfg.Clusters[name] = &clientcmdapi.Cluster{Server: ProxyServer(auth.ProxyURL, sessionID), CertificateAuthorityData: auth.ProxyCA}
+		args = []string{"auth", "proxy-token", "--session", sessionID}
+	} else {
+		cfg.Clusters[name] = &clientcmdapi.Cluster{
+			Server:                   cl.Server,
+			CertificateAuthorityData: cl.CAData,
+			TLSServerName:            cl.TLSServerName,
+			InsecureSkipTLSVerify:    cl.InsecureSkipTLSVerify,
+			ProxyURL:                 cl.ProxyURL,
+		}
 	}
 	cfg.AuthInfos[name] = &clientcmdapi.AuthInfo{
 		Exec: &clientcmdapi.ExecConfig{
 			APIVersion:      "client.authentication.k8s.io/v1",
 			Command:         auth.Command,
-			Args:            []string{"auth", "token", "--cluster", cl.ID},
+			Args:            args,
 			InteractiveMode: clientcmdapi.IfAvailableExecInteractiveMode,
 			InstallHint:     "tug is not on PATH; install it or run `tug init` again",
 		},

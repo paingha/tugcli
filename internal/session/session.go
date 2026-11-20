@@ -42,8 +42,10 @@ type State struct {
 	Namespace     string    `json:"namespace,omitempty"`
 	ReadOnly      bool      `json:"readOnly,omitempty"`
 	UnlockedUntil time.Time `json:"unlockedUntil,omitempty"`
-	Created       time.Time `json:"created"`
-	Updated       time.Time `json:"updated"`
+	// ProxyURL is set when the session goes through tugd's API proxy.
+	ProxyURL string    `json:"proxyURL,omitempty"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
 }
 
 // Connected reports whether the session points at a cluster.
