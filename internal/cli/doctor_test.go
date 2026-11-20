@@ -88,6 +88,28 @@ func TestDoctorChecksTheSessionCluster(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsAnEndedSession(t *testing.T) {
+	isolate(t)
+	t.Setenv("TUG_SESSION", "abcdef123456") // well formed, but no such session
+	got := results(decodeReport(t, mustTug(t, "doctor", "-o", "json")))
+	if s := got["shell session"]; s.Status != doctor.Warn || !strings.Contains(s.Detail, "ended") {
+		t.Fatalf("shell session = %+v, want a warning that the session ended", s)
+	}
+}
+
+func TestDoctorProbesTheCredentialStore(t *testing.T) {
+	isolate(t)
+	srv, _ := fakeAPIServer(t)
+	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, srv)) // writes the encrypted file
+
+	t.Setenv("TUG_KEYRING_PASSPHRASE", "wrong")
+	r := tug(t, "doctor", "-o", "json")
+	got := results(decodeReport(t, r.stdout))
+	if r.code != 1 || got["credential store"].Status != doctor.Fail || !strings.Contains(got["credential store"].Detail, "cannot be read") {
+		t.Fatalf("doctor with the wrong passphrase: exit %d, %+v", r.code, got["credential store"])
+	}
+}
+
 func TestDoctorUnknownCluster(t *testing.T) {
 	isolate(t)
 	srv, _ := fakeAPIServer(t)

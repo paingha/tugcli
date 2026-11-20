@@ -39,7 +39,7 @@ func checkSession(s SessionInfo) Result {
 	switch {
 	case s.ID == "":
 		return setup(name, Warn, "this terminal has no tug session, so kubectl does not follow tug connect",
-			fmt.Sprintf("add `eval \"$(tug init %s)\"` to your shell's startup file, or run `tug shell`", shell))
+			hookInstruction(shell)+", or run `tug shell`")
 	case s.Err != nil:
 		return setup(name, Warn, s.Err.Error(), "open a new terminal so the shell hook starts a fresh session")
 	case s.Cluster == "":
@@ -55,10 +55,26 @@ func checkSession(s SessionInfo) Result {
 	return setup(name, OK, fmt.Sprintf("session %s, connected to %s (%s)", s.ID, s.Cluster, mode), "")
 }
 
+// hookInstruction says how to install the shell hook in the user's shell.
+func hookInstruction(shell string) string {
+	switch shell {
+	case "fish":
+		return "add `tug init fish | source` to ~/.config/fish/config.fish"
+	case "powershell":
+		return "add `Invoke-Expression (& tug init powershell | Out-String)` to your $PROFILE"
+	default:
+		return fmt.Sprintf("add `eval \"$(tug init %s)\"` to your shell's startup file", shell)
+	}
+}
+
 // StoreInfo describes the credential store.
 type StoreInfo struct {
 	Name string
-	Err  error
+	// Err is the error opening the store.
+	Err error
+	// Probe reads from the store, so that a wrong passphrase or a corrupt
+	// file is found before a credential is needed.
+	Probe func() error
 }
 
 func checkStore(s StoreInfo) Result {
@@ -66,6 +82,12 @@ func checkStore(s StoreInfo) Result {
 	if s.Err != nil {
 		return setup(name, Fail, s.Err.Error(),
 			"use the OS keychain, or set TUG_KEYRING_BACKEND=file with TUG_KEYRING_PASSPHRASE for an encrypted file")
+	}
+	if s.Probe != nil {
+		if err := s.Probe(); err != nil {
+			return setup(name, Fail, fmt.Sprintf("%s cannot be read: %v", s.Name, err),
+				"check TUG_KEYRING_PASSPHRASE for an encrypted file, or that the keychain is unlocked")
+		}
 	}
 	return setup(name, OK, s.Name, "")
 }

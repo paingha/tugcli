@@ -78,10 +78,12 @@ func (a *app) runDoctor(ctx context.Context, args []string, o doctorOptions) err
 	s, sessErr := a.sessions().Current()
 	cfg.Session = doctor.SessionInfo{ID: os.Getenv(session.EnvSession), Env: os.Getenv("KUBECONFIG"), Shell: shellName()}
 	switch {
+	case cfg.Session.ID != "" && sessErr != nil:
+		// The hook named a session that cannot be loaded, for example one
+		// that has ended. Only an empty ID means there is no hook.
+		cfg.Session.Err = sessErr
 	case sessErr == nil && s.State.Connected():
 		cfg.Session.Cluster, cfg.Session.ReadOnly, cfg.Session.Kubeconfig = s.State.ClusterName, s.State.ReadOnly, s.KubeconfigPath()
-	case sessErr != nil && !errors.Is(sessErr, session.ErrNoSession):
-		cfg.Session.Err = sessErr
 	}
 
 	store, storeErr := a.credentialStore()
@@ -89,6 +91,13 @@ func (a *app) runDoctor(ctx context.Context, args []string, o doctorOptions) err
 		cfg.Store.Err = storeErr
 	} else {
 		cfg.Store.Name = store.Name()
+		cfg.Store.Probe = func() error {
+			_, err := store.Get("doctor/probe")
+			if errors.Is(err, credentials.ErrNotFound) {
+				return nil
+			}
+			return err
+		}
 	}
 	if path, err := exec.LookPath(a.cfg.Kubectl); err == nil {
 		cfg.Kubectl = doctor.KubectlInfo{Path: path, Version: func(ctx context.Context) (string, error) {

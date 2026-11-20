@@ -59,8 +59,17 @@ func checkCluster(ctx context.Context, cfg Config, kubectlVersion string) []Resu
 	host, port := u.Hostname(), u.Port()
 	if port == "" {
 		port = "443"
+		if u.Scheme == "http" {
+			port = "80"
+		}
 	}
 	addr := net.JoinHostPort(host, port)
+
+	// The provider's access list comes first: when it blocks this address,
+	// the TCP check below fails and stops everything after it.
+	if cfg.Access != nil {
+		checkAccess(ctx, cfg, add)
+	}
 
 	proxied := cl.ProxyURL != ""
 	if !proxied {
@@ -73,8 +82,8 @@ func checkCluster(ctx context.Context, cfg Config, kubectlVersion string) []Resu
 	} else if !networkChecks(ctx, cfg, host, addr, add) {
 		return out
 	}
-	if !proxied && u.Scheme == "https" {
-		checkTLS(ctx, cfg, host, addr, add)
+	if !proxied && u.Scheme == "https" && !checkTLS(ctx, cfg, host, addr, add) {
+		return out
 	}
 
 	if cfg.Credential != nil {
@@ -98,6 +107,12 @@ func checkCluster(ctx context.Context, cfg Config, kubectlVersion string) []Resu
 		add(cluster("API server", Fail, err.Error(), ""))
 		return out
 	}
+	// Bound every request, not only /version: a stalled review must not keep
+	// doctor from reporting.
+	rc = rest.CopyConfig(rc)
+	if limit := 2 * cfg.Timeout; rc.Timeout == 0 || rc.Timeout > limit {
+		rc.Timeout = limit
+	}
 	serverVersion, ok := checkAPI(ctx, cfg, rc, add)
 	if !ok {
 		return out
@@ -110,9 +125,6 @@ func checkCluster(ctx context.Context, cfg Config, kubectlVersion string) []Resu
 	}
 	checkIdentity(ctx, cs, add)
 	checkPermissions(ctx, cs, cfg.Namespace, add)
-	if cfg.Access != nil {
-		checkAccess(ctx, cfg, add)
-	}
 	return out
 }
 
@@ -143,8 +155,9 @@ func networkChecks(ctx context.Context, cfg Config, host, addr string, add func(
 	return true
 }
 
-// checkTLS verifies the server certificate against the CA tug holds.
-func checkTLS(ctx context.Context, cfg Config, host, addr string, add func(Result)) {
+// checkTLS verifies the server certificate against the CA tug holds. It
+// reports false when TLS fails, since every later check needs it.
+func checkTLS(ctx context.Context, cfg Config, host, addr string, add func(Result)) bool {
 	cl := cfg.Cluster
 	tlsCfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
 	if cl.TLSServerName != "" {
@@ -154,38 +167,39 @@ func checkTLS(ctx context.Context, cfg Config, host, addr string, add func(Resul
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(cl.CAData) {
 			add(cluster("TLS", Fail, "the stored CA is not valid PEM", "run `tug sync` to fetch the CA again"))
-			return
+			return false
 		}
 		tlsCfg.RootCAs = pool
 	}
 	if cl.InsecureSkipTLSVerify {
 		add(cluster("TLS", Warn, "certificate verification is turned off for this cluster", "remove insecure-skip-tls-verify from the source kubeconfig and import it again"))
-		return
+		return true
 	}
 	dctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 	raw, err := cfg.Dial(dctx, "tcp", addr)
 	if err != nil {
 		add(cluster("TLS", Fail, err.Error(), ""))
-		return
+		return false
 	}
 	conn := tls.Client(raw, tlsCfg)
 	defer conn.Close()
 	if err := conn.HandshakeContext(dctx); err != nil {
 		add(tlsFailure(err))
-		return
+		return false
 	}
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
 		add(cluster("TLS", Fail, "the server sent no certificate", ""))
-		return
+		return false
 	}
 	left := certs[0].NotAfter.Sub(cfg.Now())
 	if left < certExpiryWarn {
 		add(cluster("TLS", Warn, fmt.Sprintf("the server certificate expires in %s", roundDuration(left)), "ask the cluster's administrator to renew it"))
-		return
+		return true
 	}
 	add(cluster("TLS", OK, "certificate verified, valid until "+certs[0].NotAfter.Format("2006-01-02"), ""))
+	return true
 }
 
 func tlsFailure(err error) Result {
@@ -249,12 +263,18 @@ func checkAPI(ctx context.Context, cfg Config, rc *rest.Config, add func(Result)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusUnauthorized:
+	switch {
+	case resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusUnauthorized:
 		add(cluster("API server", Fail, "the API server rejected the credential (401)",
 			"run `tug auth token --cluster "+cfg.Cluster.Name+" --refresh`; if that fails, import the account again"))
 		return "", false
+	case resp.StatusCode >= 500:
+		add(cluster("API server", Fail, fmt.Sprintf("GET /version answered %s, so the API server is not serving requests", resp.Status),
+			"try again shortly; if it persists, check the cluster's control plane with its provider"))
+		return "", false
+	case resp.StatusCode == http.StatusForbidden:
+		add(cluster("API server", Warn, "reachable, but this identity may not read /version", ""))
 	default:
 		add(cluster("API server", Warn, fmt.Sprintf("GET /version answered %s", resp.Status), ""))
 	}

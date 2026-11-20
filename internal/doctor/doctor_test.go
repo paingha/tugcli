@@ -33,6 +33,10 @@ type fakeAPI struct {
 	srv     *httptest.Server
 	now     time.Time
 	version string
+	// versionStatus, when set, is the status /version answers with.
+	versionStatus int
+	// reviewDelay stalls the self-review endpoints, until the client gives up.
+	reviewDelay time.Duration
 }
 
 func newFakeAPI(t *testing.T) *fakeAPI {
@@ -46,8 +50,19 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","code":401}`)
 			return
 		}
+		if f.reviewDelay > 0 && strings.Contains(r.URL.Path, "/selfsubject") {
+			select {
+			case <-time.After(f.reviewDelay):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		switch r.URL.Path {
 		case "/version":
+			if f.versionStatus != 0 {
+				w.WriteHeader(f.versionStatus)
+				return
+			}
 			fmt.Fprintf(w, `{"gitVersion":%q}`, f.version)
 		case "/apis/authentication.k8s.io/v1/selfsubjectreviews":
 			fmt.Fprint(w, `{"kind":"SelfSubjectReview","apiVersion":"authentication.k8s.io/v1","status":{"userInfo":{"username":"alice","groups":["devs","system:authenticated"]}}}`)
@@ -173,6 +188,28 @@ func TestClusterFailures(t *testing.T) {
 			name:   "wrong CA",
 			mutate: func(_ *fakeAPI, c *Config) { c.Cluster.CAData = otherCA(t) },
 			check:  "TLS", status: Fail, detail: "not signed by the CA", fixHint: "tug sync",
+			absent: "credentials", // every later check needs TLS
+		},
+		{
+			name:   "API server down",
+			mutate: func(f *fakeAPI, _ *Config) { f.versionStatus = http.StatusServiceUnavailable },
+			check:  "API server", status: Fail, detail: "503", fixHint: "try again", absent: "identity",
+		},
+		{
+			name:   "version forbidden",
+			mutate: func(f *fakeAPI, _ *Config) { f.versionStatus = http.StatusForbidden },
+			check:  "API server", status: Warn, detail: "may not read /version",
+		},
+		{
+			// A blocking ACL makes TCP fail; its finding must still appear.
+			name: "access list checked before the network",
+			mutate: func(_ *fakeAPI, c *Config) {
+				c.Dial = func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("i/o timeout") }
+				c.Access = func(context.Context) ([]provider.Finding, error) {
+					return []provider.Finding{{Severity: provider.SeverityError, Message: "ACL does not allow 198.51.100.9", Fix: "add 198.51.100.9/32"}}, nil
+				}
+			},
+			check: "provider access list", status: Fail, detail: "does not allow", fixHint: "198.51.100.9/32", absent: "TLS",
 		},
 		{
 			name:   "verification off",
@@ -264,6 +301,40 @@ func otherCA(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: selfSigned(t)})
 }
 
+func TestHTTPEndpointUsesPort80(t *testing.T) {
+	var dialled string
+	cfg := Config{
+		Cluster: &catalog.Cluster{Name: "local", Server: "http://127.0.0.1"},
+		Proxy:   func(*http.Request) (*url.URL, error) { return nil, nil },
+		Dial: func(_ context.Context, _, addr string) (net.Conn, error) {
+			dialled = addr
+			client, server := net.Pipe()
+			server.Close()
+			return client, nil
+		},
+	}
+	Run(context.Background(), cfg)
+	if dialled != "127.0.0.1:80" {
+		t.Fatalf("dialled %q, want 127.0.0.1:80", dialled)
+	}
+}
+
+func TestStalledReviewsDoNotHang(t *testing.T) {
+	f := newFakeAPI(t)
+	f.reviewDelay = 1500 * time.Millisecond // answers only after the 200ms request timeout
+	cfg := f.config(t)
+	cfg.Timeout = 100 * time.Millisecond
+	start := time.Now()
+	r := Run(context.Background(), cfg)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("doctor took %s with stalled reviews", elapsed)
+	}
+	if got := byName(r)["identity"]; got.Status != Warn {
+		logReport(t, r)
+		t.Fatalf("identity = %+v, want a warning after the timeout", got)
+	}
+}
+
 func TestKuberc(t *testing.T) {
 	dir := t.TempDir()
 	tug := filepath.Join(dir, "tug")
@@ -325,6 +396,9 @@ func TestSetupChecks(t *testing.T) {
 		{"KUBECONFIG elsewhere", checkSession(SessionInfo{ID: "abc", Cluster: "dev", Kubeconfig: "/run/k", Env: "/home/me/.kube/config"}), Warn, "points elsewhere"},
 		{"read-only", checkSession(SessionInfo{ID: "abc", Cluster: "prod", ReadOnly: true, Kubeconfig: "/run/k", Env: "/run/k"}), OK, "prod (read-only)"},
 		{"no store", checkStore(StoreInfo{Err: errors.New("no keychain available")}), Fail, "no keychain"},
+		// Opening the file store does not read it; the probe does.
+		{"unreadable store", checkStore(StoreInfo{Name: "file:/x", Probe: func() error { return errors.New("cannot decrypt") }}), Fail, "cannot be read"},
+		{"readable store", checkStore(StoreInfo{Name: "file:/x", Probe: func() error { return nil }}), OK, "file:/x"},
 		{"no kubectl", func() Result { r, _ := checkKubectl(context.Background(), KubectlInfo{}); return r }(), Warn, "not on PATH"},
 	}
 	for _, tt := range tests {
@@ -334,8 +408,14 @@ func TestSetupChecks(t *testing.T) {
 			}
 		})
 	}
-	if r := checkSession(SessionInfo{Shell: "fish"}); !strings.Contains(r.Fix, "tug init fish") {
-		t.Fatalf("fix should name the shell: %q", r.Fix)
+	for shell, want := range map[string]string{
+		"zsh":        `eval "$(tug init zsh)"`,
+		"fish":       "tug init fish | source",
+		"powershell": "Invoke-Expression (& tug init powershell | Out-String)",
+	} {
+		if r := checkSession(SessionInfo{Shell: shell}); !strings.Contains(r.Fix, want) {
+			t.Errorf("%s fix = %q, want %q", shell, r.Fix, want)
+		}
 	}
 }
 
