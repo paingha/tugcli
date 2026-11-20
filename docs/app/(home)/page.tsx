@@ -125,11 +125,20 @@ const providerNames = [
   'minikube',
   'Docker Desktop',
   'OrbStack',
-  'Rancher Desktop',
   'Amazon EKS',
   'Google GKE',
+  'Azure AKS',
+  'Cluster API',
+  'Argo CD',
+  'DigitalOcean',
   'Akamai LKE',
-  'CoreWeave CKS',
+  'Vultr',
+  'CoreWeave',
+  'Crusoe',
+  'Nebius',
+  'Rancher',
+  'Teleport',
+  'Tailscale',
 ];
 
 function WorksWith() {
@@ -361,8 +370,9 @@ function Bento() {
 
         <Card className="md:col-span-2">
           <CardTitle icon={<Stethoscope />} title="Explains what's wrong">
-            <code className="font-mono text-[0.9em]">tug doctor</code> checks DNS, TLS, credentials, the clock and your
-            permissions, then says how to fix what fails.
+            <code className="font-mono text-[0.9em]">tug doctor</code> checks how you reach a cluster, and{' '}
+            <code className="font-mono text-[0.9em]">tug why</code> explains a workload that won&apos;t start, with the
+            next step to take.
           </CardTitle>
         </Card>
         <Card className="md:col-span-2">

@@ -1,0 +1,95 @@
+---
+title: Plugin indexes
+description: Install plugins by name from a signed index, or publish an index of your own.
+icon: BookKey
+---
+
+A **plugin index** is a file listing reviewed plugins, with the address and
+SHA-256 of each archive. The whole file is signed with an ed25519 key, so when
+you install by name, tug checks three things before anything runs: the index's
+signature, the archive's SHA-256, and the SHA-256 of every binary inside it.
+
+## Using an index
+
+Add the index to [`config.yaml`](/docs/reference/configuration#plugins) with
+the public key its publisher gives you:
+
+```yaml title="~/.config/tug/config.yaml"
+plugins:
+  indexes:
+  - name: acme
+    url: https://plugins.acme.example/index.yaml
+    publicKey: <the base64 key the publisher printed>
+```
+
+Then:
+
+```bash
+tug plugin search                # everything in your indexes
+tug plugin search gpu            # plugins whose name, description or publisher matches
+tug plugin install acme          # the newest version, from the first index that has it
+tug plugin install acme@0.1.0    # a particular version
+```
+
+`tug plugin search` lists each plugin's name, version, publisher, description
+and index. Indexes are searched in the order you list them.
+
+<Callout type="info" title="No default index yet">
+  tug comes without an index until one is published. Until then, add the
+  indexes you trust yourself, and install first-party plugins from
+  [tug's releases](/docs/providers).
+</Callout>
+
+## Publishing an index
+
+Anyone can run an index, for a team or a company's internal plugins. You need
+the plugin archives (made with [`tug plugin package`](/docs/plugins/writing#package-it))
+published somewhere over HTTPS, such as GitHub releases.
+
+<Steps>
+<Step>
+
+### Make a signing key, once
+
+```bash
+tug plugin index keygen
+```
+
+This prints the **public key** your users put in their `config.yaml`. The
+private key stays in tug's credential store. Keep a copy somewhere safe: an
+index signed with a lost key can only be replaced by a new key that every user
+configures again.
+
+</Step>
+<Step>
+
+### Add each released archive
+
+```bash
+tug plugin index add index.yaml dist/tug-provider-acme_0.1.0.tar.gz \
+  --url https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz \
+  --description "Acme Kubernetes clusters"
+```
+
+tug reads the plugin's name and version from the archive, records its
+SHA-256, and creates `index.yaml` if it doesn't exist yet.
+
+</Step>
+<Step>
+
+### Sign and publish
+
+```bash
+tug plugin index sign index.yaml      # writes index.yaml.sig
+tug plugin index verify index.yaml --public-key <your public key>   # check before you publish
+```
+
+Publish `index.yaml` and `index.yaml.sig` side by side over HTTPS. In CI, give
+`tug plugin index sign` the private key through the `TUG_INDEX_KEY`
+environment variable instead of the credential store.
+
+</Step>
+</Steps>
+
+Sign the index again every time you add a plugin: tug refuses an index whose
+signature doesn't match.

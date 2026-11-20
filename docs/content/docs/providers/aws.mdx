@@ -55,6 +55,16 @@ Tag a cluster `Environment=production` in AWS and tug opens it read-only.
 | `profile` | The AWS profile. Defaults to the account name. |
 | `regions` | Comma-separated regions to list. Defaults to the profile's region. |
 
+## Private clusters
+
+If a cluster's API server is only reachable inside its VPC, give it an AWS
+Systems Manager [tunnel](/docs/guides/tunnels) through an instance there. It
+needs only your AWS credentials:
+
+```bash
+tug tunnel set eks-private 'ssm://i-0123456789abcdef0?region=eu-west-1&profile=work'
+```
+
 ## Troubleshooting
 
 | Message | What to do |

@@ -63,6 +63,7 @@ tug ns payments       # switch namespace, in this terminal only
 tug logs api -f       # follow logs from every pod of deploy/api-server
 tug sh api            # open a shell in one of its pods
 tug pf api 8080       # forward localhost:8080 to it
+tug why api           # why isn't it ready? crashes, image pulls, probes, scheduling
 tug unlock 15m        # allow changes on this production cluster for 15 minutes
 tug auth login        # sign in through your browser, for clusters that use SSO
 tug get pods          # anything tug doesn't know runs as kubectl

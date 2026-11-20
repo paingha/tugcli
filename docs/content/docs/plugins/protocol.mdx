@@ -37,7 +37,7 @@ Rules worth knowing:
 | `accounts` | `AccountsRequest` | `AccountsResponse` | With the `accounts` capability |
 | `rotate` | `RotateRequest` | `CredentialResponse` | With the `rotate` capability |
 | `checkAccess` | `CheckAccessRequest` | `CheckAccessResponse` | With the `checkAccess` capability |
-| `serve` | | | Reserved for a future long-running mode |
+| `serve` | many, one per line | many, one per line | With the `serve` capability; see [Serve mode](#serve-mode) |
 
 ### Default time limits
 
@@ -212,6 +212,44 @@ firewall. `tug doctor` calls it.
 
 `severity` is `info`, `warning` or `error`.
 
+## Serve mode
+
+Starting a process for every request adds up when tugd or a command makes many
+calls. A plugin that lists the `serve` capability in its manifest can instead
+run as **one process that answers many requests**: tug starts
+`tug-provider-<name> serve` and talks to it line by line. The Go and Python
+SDKs implement this for you, so an SDK plugin only needs to add `serve` to its
+capabilities.
+
+- Each line on stdin is one request:
+  `{"id": "<string>", "op": "<operation>", "request": <request message>}`.
+  `request` is exactly what one-shot mode would read, and is left out for
+  `describe` and `accounts`.
+- Each line on stdout answers one request:
+  `{"id": "<same id>", "response": <response or Error message>}`. Requests
+  run concurrently, so answers may come out of order, but lines must never
+  interleave.
+- `{"id": "<id>", "cancel": true}` asks the plugin to stop working on that
+  request; it should answer soon, usually with an error.
+- An unknown operation gets an `Error` with that request's id. A line that
+  isn't JSON, or has no id, gets an `Error` with an empty id, and serving
+  goes on.
+- When stdin closes, the plugin finishes what's in flight and exits 0. On
+  SIGTERM it stops at once.
+- Each line is at most 16 MiB plus 64 KiB. tug applies each operation's time
+  limit per request, sends `cancel` when one runs out, and starts the process
+  again if it exits.
+
+```text
+→ {"id":"1","op":"describe"}
+→ {"id":"2","op":"list","request":{"apiVersion":"provider/v1alpha1","kind":"ListRequest",...}}
+← {"id":"2","response":{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[...]}}
+← {"id":"1","response":{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse",...}}
+```
+
+State your plugin keeps in global variables now lives across requests, and
+requests run at the same time, so protect it.
+
 ## Errors
 
 On failure, write an `Error` message to stdout and exit non-zero:
@@ -253,7 +291,7 @@ Every plugin folder has a `plugin.yaml`:
     'metadata.homepage': { type: 'string', description: 'Shown before install.' },
     'spec.protocols': { type: 'string[]', required: true, description: 'Must include provider/v1alpha1.' },
     'spec.minTugVersion': { type: 'string', description: 'The oldest tug this plugin works with.' },
-    'spec.capabilities': { type: 'string[]', description: 'list, credential, accounts, rotate, checkAccess.' },
+    'spec.capabilities': { type: 'string[]', description: 'list, credential, accounts, rotate, checkAccess, serve.' },
     'spec.platforms': { type: '{ os, arch, bin, sha256? }[]', required: true, description: 'One entry per OS and architecture. bin is a path inside the plugin folder. tug plugin package fills in sha256.' },
     'spec.secrets': { type: '{ name, prompt?, optional? }[]', description: 'Secrets tug asks for and sends in requests.' },
     'spec.env': { type: 'string[]', description: 'Host environment variables passed through, such as AWS_PROFILE.' },

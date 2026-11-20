@@ -68,6 +68,7 @@ just the cluster name. `tug current` is another name for `tug status`.
 | Switch namespace in this terminal | `tug ns <namespace>` |
 | Connect with a namespace already chosen | `tug connect prod -n payments` |
 | Stop using a cluster in this terminal | `tug disconnect` |
+| Connect automatically in a project folder | [`tug pin set <cluster>`](/docs/guides/pins) |
 
 Disconnecting, or closing the terminal, puts back whatever `KUBECONFIG` the
 terminal had before tug. tug's own commands then behave like plain kubectl

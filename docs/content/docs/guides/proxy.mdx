@@ -84,8 +84,12 @@ log:       /var/folders/…/tug-501/tugd.log
 | `tug daemon start` | Start it in the background if it isn't running. |
 | `tug daemon stop` | Stop it. Proxied sessions stop working until you reconnect. |
 
-tugd **stops by itself** after 30 minutes without a live session, so it
-doesn't linger once you're done.
+tugd **stops by itself** after 30 minutes without a live session or a
+[named port-forward](/docs/guides/workloads#keep-a-forward-running-in-the-background),
+so it doesn't linger once you're done.
+
+tugd also carries [tunnels](/docs/guides/tunnels): connecting to a cluster that
+has one routes your tools through tugd, which keeps the tunnel open.
 
 ## When to use it
 

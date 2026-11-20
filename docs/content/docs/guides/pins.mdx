@@ -1,0 +1,73 @@
+---
+title: Directory pins
+description: Connect a terminal to the right cluster automatically when you move into a project folder.
+icon: MapPin
+---
+
+If a project always talks to the same cluster, pin it. A small file called
+`.tug.yaml` in the project's folder says which cluster and namespace belong to
+it. When your terminal moves into that folder, or any folder below it, tug
+connects it for you. When you leave, it goes back to where it was.
+
+## Pin a folder
+
+From inside the project:
+
+```console
+$ tug pin set payments-staging -n payments
+Wrote /Users/sam/src/payments/.tug.yaml: payments-staging, namespace payments
+```
+
+That writes the file, trusts it, and connects this terminal. The file looks
+like this, and you can commit it so your team gets the same pin:
+
+```yaml title=".tug.yaml"
+cluster: payments-staging   # a name, prefix or fuzzy match, as for tug connect
+namespace: payments
+labels: {region: eu-west-1} # optional; narrows the choice first
+```
+
+`cluster` works like [`tug connect`](/docs/concepts/targets): a full name, a
+prefix, or labels on their own. Pin by labels with `tug pin set gpu=true
+region=us-east`, and use `--dir <folder>` to pin a folder other than the one
+you're in.
+
+## What you'll see
+
+The shell hook does the switching as you `cd`, and says so:
+
+```text
+pinned by /Users/sam/src/payments/.tug.yaml: payments-staging, namespace payments
+```
+
+```text
+left the pinned directory: back to dev-eu, namespace default
+```
+
+A pinned production cluster still opens [read-only](/docs/concepts/read-only).
+Connecting by hand with `tug connect` ends the pin for that terminal.
+
+## Pins you didn't write
+
+A `.tug.yaml` from a repository you cloned could switch your terminal to a
+cluster on its own, so tug never uses one until you've said it's fine. When you
+enter a folder with an untrusted pin, tug tells you and does nothing else:
+
+```text
+tug: /Users/sam/src/payments/.tug.yaml pins payments-staging, namespace payments; run `tug pin allow` to use it
+```
+
+| Command | What it does |
+| --- | --- |
+| `tug pin show [dir]` | Show the pin that applies to a folder, and whether you've allowed it. |
+| `tug pin allow [dir]` | Trust that pin file as it is now. |
+| `tug pin revoke [dir]` | Stop trusting it. |
+
+Trust is tied to the file's contents. If anyone changes the file, even by a
+character, tug asks you to allow it again. Your list of trusted pins is kept in
+`pins.yaml` in tug's [data folder](/docs/reference/files).
+
+## Turning pins off
+
+Set `TUG_PIN_DISABLE=1` in a shell to ignore pins there, for example in a
+script that must not change cluster as it moves between folders.

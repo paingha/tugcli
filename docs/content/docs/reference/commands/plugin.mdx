@@ -21,19 +21,35 @@ Run a plugin's `describe` operation and show its manifest.
 tug plugin describe <name>
 ```
 
-## tug plugin install
+## tug plugin search
 
-Install a plugin from a `.tar.gz` or `.zip` archive after checking its
-checksums. Shows the publisher, secrets, environment and network hosts first,
-and asks to confirm.
+Search the signed plugin indexes in `plugins.indexes` by name, description or
+publisher. With no query, list everything. See [Plugin indexes](/docs/plugins/indexes).
 
 ```bash
-tug plugin install <file|url> [flags]
+tug plugin search [query] [-o table|json|yaml|name]
+```
+
+## tug plugin install
+
+Install a plugin by name from a signed index, or from a `.tar.gz` or `.zip`
+archive, after checking its checksums. Shows the publisher, secrets,
+environment and network hosts first, and asks to confirm.
+
+```bash
+tug plugin install <name[@version]|file|url> [flags]
+```
+
+```bash
+tug plugin install acme                 # newest version from the first index that has it
+tug plugin install acme@0.1.0
+tug plugin install ./tug-provider-acme_0.1.0.tar.gz
+tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz --sha256 9f2c…
 ```
 
 | Flag | Meaning |
 | --- | --- |
-| `--sha256 <hash>` | Expected SHA-256 of the archive. Required for URLs. |
+| `--sha256 <hash>` | Expected SHA-256 of the archive. Required for URLs; an index supplies it for names. |
 | `-y`, `--yes` | Install without asking. |
 | `--force` | Replace the same version if it's installed. |
 
@@ -101,3 +117,15 @@ tug plugin test <name> [flags]
 | `--account <id>` | Imported account to test against. |
 | `--set key=value` | Account setting. Repeatable. |
 | `-o`, `--output <format>` | `table` or `json`. |
+
+## tug plugin index
+
+Build and sign a plugin index, for those who publish one. See
+[Publishing an index](/docs/plugins/indexes#publishing-an-index).
+
+| Command | Meaning |
+| --- | --- |
+| `tug plugin index keygen [--name <key>] [--force]` | Make an ed25519 signing key, kept in the credential store, and print its public key. |
+| `tug plugin index add <index.yaml> <archive> --url <https URL> [--description <text>]` | Record a packaged archive in an index file, creating the file if needed. |
+| `tug plugin index sign <index.yaml> [--name <key>]` | Sign the index, writing `<index.yaml>.sig`. `TUG_INDEX_KEY` supplies the key in CI. |
+| `tug plugin index verify <index.yaml> --public-key <key>` | Check an index against its signature and public key. |

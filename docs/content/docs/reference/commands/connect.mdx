@@ -110,3 +110,40 @@ tug doctor [cluster] [flags]
 | --- | --- |
 | `--egress-ip <ip>` | Your public IP, for providers that check access lists. |
 | `-o`, `--output <format>` | `table`, `json` or `yaml`. |
+
+## tug pin
+
+Pin a directory, and everything below it, to a cluster and namespace with a
+`.tug.yaml` file. See [Directory pins](/docs/guides/pins).
+
+| Command | Meaning |
+| --- | --- |
+| `tug pin set <cluster> [label=value...] [-n <ns>] [--dir <dir>]` | Write `.tug.yaml`, allow it and apply it to this terminal. `--dir` defaults to the current folder; `-n` to the cluster's default namespace. |
+| `tug pin show [dir]` | Show the pin that applies to a folder and whether it's allowed. |
+| `tug pin allow [dir]` | Trust the pin file as it is now. |
+| `tug pin revoke [dir]` | Stop trusting it. Alias: `deny`. |
+
+Set `TUG_PIN_DISABLE=1` to turn pins off in a shell.
+
+## tug tunnel
+
+Reach a private cluster through an SSH jump host, a proxy, AWS Systems Manager
+or Google Cloud IAP. See [Reaching private clusters](/docs/guides/tunnels).
+
+| Command | Meaning |
+| --- | --- |
+| `tug tunnel set <cluster> <tunnel>` | Reach the cluster through the tunnel from now on. |
+| `tug tunnel test [cluster]` | Open the tunnel and reach the API server through it. Without a cluster, tests this terminal's. |
+| `tug tunnel ls [-o table\|json\|yaml\|name]` | List clusters reached through tunnels. Alias: `list`. |
+| `tug tunnel rm <cluster>` | Reach the cluster directly again. Alias: `unset`. |
+
+Tunnel addresses:
+
+```text
+ssh://[user@]host[:port][?identity=<key file>]
+socks5://host:port
+http://host:port
+ssm://<instance id>[?region=<region>&profile=<profile>]
+iap://<instance>?project=<project>&zone=<zone>
+iap://?project=<project>&region=<region>&network=<network>&group=<group>
+```

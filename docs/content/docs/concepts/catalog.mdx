@@ -75,7 +75,8 @@ Labels come from three places:
 
 - Values from providers are tidied up: `production`, `prd` and `live` become
   `prod`; `stage` and `stg` become `staging`; `development` becomes `dev`;
-  `qa` becomes `test`. A tag called `environment` counts as `env`.
+  `qa` becomes `test`. The AWS, Azure and Google providers also treat a tag
+  called `environment` as `env`.
 - If the provider doesn't say, tug **guesses from the name**. It splits the
   name on `-`, `_`, `.`, `/`, `@` and `:` and looks for one of those words. So
   `prod-eu` gets `env=prod`, `api-staging` gets `env=staging`, and

@@ -1,0 +1,117 @@
+---
+title: Teleport
+description: List the Kubernetes clusters Teleport gives you access to, through your tsh sign-in.
+icon: DoorOpen
+---
+
+The `teleport` plugin lists Kubernetes clusters behind Teleport. It works
+through **tsh**, Teleport's client, so you need tsh installed and signed in.
+It's a first-party [plugin](/docs/plugins), so you add it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-teleport_<version>.tar.gz`, with a build for every platform,
+and lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-teleport_*' --pattern checksums.txt
+    tug plugin install tug-provider-teleport_*.tar.gz \
+      --sha256 "$(grep tug-provider-teleport_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`: `tug plugin install <archive URL> --sha256 <sha256>`.
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                    # builds the plugins for this machine
+    tug plugin package plugins/teleport -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-teleport_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/teleport` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (no secrets, the `TELEPORT_HOME`
+variable, and no network hosts: tsh does the talking) and asks before
+installing.
+
+## Sign in with tsh
+
+Install [tsh](https://goteleport.com/download/client-tools/) and sign in with
+`tsh login --proxy=teleport.example.com`. tug stores no secret for Teleport. It
+reads your tsh profile, in `~/.tsh` or `TELEPORT_HOME`, and asks tsh for the
+rest.
+
+## Import
+
+```console
+$ tug import teleport --account corp
+✓ teleport/corp: 5 clusters, 5 new, 5 credentials moved to keychain
+```
+
+tug lists what `tsh kube ls` shows you in the active profile's current
+Teleport cluster. To pin an account to a proxy, or to list a leaf cluster:
+
+```bash
+tug import teleport --account corp-eu --set proxy=teleport.example.com --set cluster=leaf-eu
+```
+
+## Credentials
+
+When kubectl needs a credential, tug runs `tsh kube credentials` for that
+cluster, as the kubeconfig from `tsh kube login` does, pinned to the proxy it
+was listed through so that a later `tsh login` elsewhere doesn't break it. That command is
+the "credential" import counts. If your Teleport session has expired, tsh can
+sign you in again when kubectl runs in a terminal; `tug sync` asks you to run
+`tsh login` instead.
+
+<Callout type="warn" title="Clusters that need tsh's local proxy">
+  If your private key lives on a hardware key, or the proxy sits behind a load
+  balancer that needs tsh to upgrade the connection, kubectl can't connect
+  directly and tug can't list the clusters. Use `tsh proxy kube` or
+  `tsh kubectl` for those.
+</Callout>
+
+## Labels
+
+| Label | When |
+| --- | --- |
+| `teleport-cluster` | the Teleport cluster, root or leaf |
+| `region` | the cluster's Teleport `region` label |
+| your Teleport labels | the labels `tsh kube ls` shows, as set |
+
+A cluster labelled `env=prod` in Teleport opens
+[read-only](/docs/concepts/read-only); without one, tug guesses `env` from its
+name. When two clusters in one Teleport cluster share a name, only the first
+is listed.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `proxy` | The Teleport proxy, as for `tsh --proxy`. Defaults to the active tsh profile's. |
+| `cluster` | The Teleport cluster, root or leaf. Defaults to the profile's current cluster. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `install tsh, Teleport's client` | tsh isn't on your `PATH`. |
+| `tsh login --proxy=…` | You're not signed in, or the session expired. Sign in, then `tug sync`. |
+| `use tsh proxy kube or tsh kubectl` | These clusters need tsh's local proxy, which tug can't use. |
+| `if Kubernetes access has been enabled since you signed in` | Your tsh profile has no Kubernetes proxy address. Sign in again with `tsh login`. |

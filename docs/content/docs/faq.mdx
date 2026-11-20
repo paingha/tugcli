@@ -47,6 +47,21 @@ icon: MessageCircleQuestionMark
     and end the session in your identity provider too. See
     [Rotating a credential](/docs/guides/rotating).
   </Accordion>
+  <Accordion title="My cluster is behind a bastion, a VPN or a private endpoint.">
+    Give it a tunnel: an SSH jump host, a proxy, AWS Systems Manager or Google
+    Cloud IAP. tug remembers it with the cluster and opens it whenever you
+    connect. See [Reaching private clusters](/docs/guides/tunnels).
+  </Accordion>
+  <Accordion title="My image has no shell. How do I look inside?">
+    `tug sh` offers to add an ephemeral debug container that shares the app's
+    processes, with the app's files under `/proc/1/root`. See
+    [Images without a shell](/docs/guides/workloads#images-without-a-shell).
+  </Accordion>
+  <Accordion title="Can a project folder pick its own cluster?">
+    Yes. `tug pin set <cluster> -n <namespace>` writes a `.tug.yaml`, and any
+    terminal that moves into the folder connects to it. See
+    [Directory pins](/docs/guides/pins).
+  </Accordion>
   <Accordion title="Can I delete a kubeconfig file after importing it?">
     Yes. Any token or key inside it is already in your keychain. Keep the file
     only if you want `tug sync` to notice changes to it.

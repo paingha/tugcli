@@ -26,7 +26,7 @@ Without them, those checks are skipped rather than failed.
 
 ```text
 RESULT   CHECK                                  DETAIL
-pass     describe is valid                      acme 0.1.0 speaks [provider/v1alpha1]
+pass     describe is valid                      acme 0.1.0 (acme Kubernetes clusters) speaks [provider/v1alpha1]
 pass     unknown operations are rejected        exit 2, InvalidConfig
 pass     an empty list request is rejected      exit 1, InvalidConfig
 pass     list returns valid clusters            1 clusters
@@ -56,6 +56,7 @@ if any check fails.
 - `accounts`, when declared, returns valid accounts.
 - The plugin stops promptly when tug sends SIGTERM.
 - stdout carries exactly one JSON object per call, and nothing else.
+- `serve`, when declared, answers exactly as one-shot mode does.
 
 ## Test the built-ins too
 

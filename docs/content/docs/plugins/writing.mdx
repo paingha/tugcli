@@ -49,6 +49,14 @@ log in to them.
     </Files>
 
     The script uses only Python's standard library, so there's nothing to install.
+
+    For a bigger plugin, use the **Python SDK**, the `tug_provider` package. It
+    mirrors the Go SDK (subclass `Provider`, implement `info`, `list` and
+    `credential`, call `main`), handles serve mode, and still needs nothing
+    outside the standard library. Install it from a tugcli checkout with
+    `python3 -m pip install ./sdk/python`, and read its
+    [README](https://github.com/paingha/tugcli/tree/main/sdk/python) for the
+    details.
   </Tab>
 </Tabs>
 
@@ -170,7 +178,7 @@ metadata:
   homepage: https://github.com/acme/tug-provider-acme
 spec:
   protocols: [provider/v1alpha1]
-  capabilities: [list, credential]
+  capabilities: [list, credential, serve]
   platforms:
   - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-acme}
   - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-acme}
@@ -234,9 +242,11 @@ the manifest doesn't declare.
 | `accounts` | `provider.AccountLister` | `tug import` offers the accounts it finds on this machine, such as profiles in your vendor's CLI config. |
 | `rotate` | `provider.Rotator` | [`tug auth rotate`](/docs/guides/rotating) asks for a new credential and revokes the old one. Stay well inside 60 seconds. |
 | `checkAccess` | `provider.AccessChecker` | [`tug doctor`](/docs/guides/doctor) explains an access list that blocks the user's IP. |
+| `serve` | none: the SDK does it | tug runs one long-lived process instead of one per request. See [Serve mode](/docs/plugins/protocol#serve-mode). The template declares it already. |
 
 A plugin without `accounts` gets an account called `default` when someone runs
-`tug import <name>` without `--account`.
+`tug import <name>` without `--account`. With `serve`, state you keep in
+package variables lives across requests that run at the same time, so guard it.
 
 </Step>
 <Step>

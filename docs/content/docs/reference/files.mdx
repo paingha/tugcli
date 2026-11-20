@@ -25,6 +25,7 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
   </Folder>
   <Folder name="~/.local/share/tug" defaultOpen>
     <File name="catalog.yaml" />
+    <File name="pins.yaml" />
     <File name="secrets.enc" />
     <Folder name="plugins" defaultOpen>
       <File name="links.yaml" />
@@ -56,7 +57,8 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
 | File | What it is |
 | --- | --- |
 | `config.yaml` | Your [settings](/docs/reference/configuration). Optional. |
-| `catalog.yaml` | Imported sources and their clusters, with labels. No secrets. |
+| `catalog.yaml` | Imported sources and their clusters, with labels and [tunnels](/docs/guides/tunnels). No secrets. |
+| `pins.yaml` | The [pin files](/docs/guides/pins) you've allowed, by path and content. |
 | `secrets.enc` | The encrypted secret store, only if you use the `file` backend. |
 | `plugins/<name>/<version>/` | Installed plugins. `links.yaml` lists linked ones. |
 | cache | API discovery data, to make commands faster. |

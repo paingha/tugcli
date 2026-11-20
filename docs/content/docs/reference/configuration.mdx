@@ -36,6 +36,11 @@ guard:
 plugins:
   # Built-in provider names a plugin may replace.
   allowOverride: []
+  # Signed plugin indexes for tug plugin search and install <name>, in order.
+  indexes:
+    - name: acme
+      url: https://plugins.acme.example/index.yaml
+      publicKey: <base64 ed25519 public key>
   # Time limits per plugin operation.
   timeouts:
     list: 60s
@@ -95,7 +100,13 @@ oidc:
     allowOverride: {
       type: 'string[]',
       default: '[]',
-      description: 'Built-in provider names (aws, google, kubeconfig, local) that a plugin of the same name may replace.',
+      description: 'Built-in provider names (such as aws or google) that a plugin of the same name may replace.',
+    },
+    indexes: {
+      type: '{ name, url, publicKey }[]',
+      default: '[]',
+      description:
+        'Signed plugin indexes that tug plugin search and tug plugin install <name> use, in order. The signature is read from url + ".sig" and must match publicKey (base64 ed25519). There is no default index yet.',
     },
     timeouts: {
       type: 'map of operation to duration',

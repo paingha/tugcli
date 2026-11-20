@@ -1,0 +1,101 @@
+---
+title: Vultr Kubernetes Engine
+description: List Vultr Kubernetes Engine (VKE) clusters with an API key, and connect with each cluster's client certificate.
+icon: Bird
+---
+
+The `vultr` plugin lists clusters on Vultr Kubernetes Engine (VKE). It's a
+first-party [plugin](/docs/plugins), so you add it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-vultr_<version>.tar.gz`, with a build for every platform, and
+lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-vultr_*' --pattern checksums.txt
+    tug plugin install tug-provider-vultr_*.tar.gz \
+      --sha256 "$(grep tug-provider-vultr_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`: `tug plugin install <archive URL> --sha256 <sha256>`.
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                 # builds the plugins for this machine
+    tug plugin package plugins/vultr -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-vultr_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/vultr` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (its secret, and that it only talks
+to `api.vultr.com`) and asks before installing.
+
+## Get an API key
+
+In the Vultr customer portal, go to **Account > API**, enable the API and copy
+its key. The key's access control decides which IP addresses may use it, so
+allow the machine you run tug on. The key's user must be allowed to manage
+Kubernetes, which you set under **Account > Users**.
+
+## Import
+
+```console
+$ tug import vultr --account work
+Vultr API key (vultr/work): ••••••••
+✓ vultr/work: 2 clusters, 2 new, 2 credentials moved to keychain
+```
+
+tug asks for the key once and keeps it in your keychain.
+
+## Credentials
+
+VKE kubeconfigs sign in with a client certificate. Listing fetches each
+cluster's kubeconfig for its CA and certificate, and tug moves the certificate
+to your keychain and fetches a new one a minute before it expires. A new
+cluster is skipped until it has a control plane endpoint. If it has one but no
+kubeconfig yet, tug lists it and picks up its CA and certificate at the next
+`tug sync`.
+
+## Labels
+
+| Label | When |
+| --- | --- |
+| `region` | the cluster's region |
+| `ha` | `true` for clusters with highly available control planes |
+| `gpu` | `true` when a node pool uses a Cloud GPU plan |
+
+VKE clusters have no tags, so tug guesses `env` from the cluster's name: one
+called `prod-api` opens [read-only](/docs/concepts/read-only). To set `env`
+yourself, use [`tug label`](/docs/guides/labels).
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `apiURL` | Another API endpoint (https). You won't normally need it. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `its access control allows this machine's IP address` | Allow your IP address in the key's access control. If the key itself is wrong, `tug forget vultr/<account>` and import again. |
+| `not allowed to manage Kubernetes` | Give the key's user access to Kubernetes under **Account > Users**. |
+| `the Vultr API limits how fast a key may call it` | Wait a few seconds and try again. |

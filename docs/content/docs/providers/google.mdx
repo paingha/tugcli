@@ -48,6 +48,16 @@ Without Application Default Credentials, tug falls back to Google's own
 | --- | --- |
 | `project` | The project ID. Defaults to the account name. |
 
+## Private clusters
+
+For a cluster with a private endpoint, give it a Google Cloud IAP
+[tunnel](/docs/guides/tunnels), through a VM or an IAP destination group. It
+needs only Application Default Credentials:
+
+```bash
+tug tunnel set gke-private 'iap://?project=acme&region=europe-west1&network=default&group=k8s'
+```
+
 ## Troubleshooting
 
 | Hint | What to do |
