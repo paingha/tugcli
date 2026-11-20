@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tug-provider"
 dynamic = ["version"]
 description = "Python SDK for tug provider plugins (protocol provider/v1alpha1)"
+readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []
 keywords = ["tug", "kubernetes", "kubectl", "plugin"]
