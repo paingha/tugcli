@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/paingha/tugcli/pkg/provider"
@@ -44,6 +45,12 @@ type Runner struct {
 	Log      *slog.Logger
 	// MaxBytes caps the response; defaults to provider.MaxMessageBytes.
 	MaxBytes int64
+	// Serve keeps one plugin process for every call, when the manifest
+	// declares the serve capability. Close stops it.
+	Serve bool
+
+	srvMu sync.Mutex
+	srv   *server
 }
 
 func (r *Runner) timeout(op string) time.Duration {
@@ -66,6 +73,9 @@ func (r *Runner) timeout(op string) time.Duration {
 // response bytes. The process gets a scrubbed environment, a timeout, and is
 // sent SIGTERM then SIGKILL when the context ends.
 func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, error) {
+	if r.Serve {
+		return r.callServe(ctx, op, request)
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout(op))
 	defer cancel()
 

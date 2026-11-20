@@ -53,7 +53,7 @@ func TestDescribe(t *testing.T) {
 	if len(d.Protocols) == 0 || d.Protocols[0] != APIVersion {
 		t.Fatalf("protocols: %v", d.Protocols)
 	}
-	if !strings.Contains(out, `"capabilities":["list","credential"]`) {
+	if !strings.Contains(out, `"capabilities":["list","credential","serve"]`) {
 		t.Fatalf("capabilities not encoded as names: %s", out)
 	}
 }

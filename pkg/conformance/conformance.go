@@ -13,11 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os/exec"
 	"runtime"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/paingha/tugcli/pkg/provider"
@@ -101,7 +103,7 @@ func Run(ctx context.Context, t Target, o Options) Report {
 	r.checkCancellation()
 	r.checkOnlyJSON()
 	if desc.Capabilities.Has(provider.CapServe) {
-		r.skip("serve answers like one-shot mode", "serve mode is not covered by this version of the suite")
+		r.checkServe()
 	} else {
 		r.skip("serve answers like one-shot mode", "plugin does not declare serve")
 	}
@@ -398,6 +400,83 @@ func (r *runner) checkAccounts(d provider.Description) {
 
 // checkCancellation starts list without finishing the request, sends SIGTERM,
 // and expects the plugin to exit within the grace period.
+// checkServe runs the plugin in serve mode: requests sent together are
+// answered by ID, as one-shot mode would answer them, unknown operations
+// and unreadable lines get errors, and closing stdin ends the process.
+func (r *runner) checkServe() {
+	const name = "serve answers like one-shot mode"
+	cmd := exec.Command(r.target.Command, append(slices.Clone(r.target.Args), provider.OpServe)...)
+	cmd.Env = r.target.Env
+	newGroup(cmd)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		r.fail(name, "%v", err)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		r.fail(name, "%v", err)
+		return
+	}
+	defer killGroup(cmd)
+	frames := []string{
+		`{"id":"describe-1","op":"describe"}`,
+		`{"id":"describe-2","op":"describe"}`,
+		`{"id":"unknown","op":"tug-conformance-unknown"}`,
+		`{"id":"empty-list","op":"list"}`,
+		`this is not JSON`,
+	}
+	_, err = io.WriteString(stdin, strings.Join(frames, "\n")+"\n")
+	stdin.Close()
+	if err != nil {
+		r.fail(name, "writing requests: %v", err)
+		return
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			r.fail(name, "exit after stdin closed: %v", err)
+			return
+		}
+	case <-time.After(10 * time.Second):
+		r.fail(name, "still running 10s after stdin closed")
+		return
+	}
+	got := map[string][]byte{}
+	for _, line := range bytes.Split(bytes.TrimSpace(stdout.Bytes()), []byte("\n")) {
+		var resp provider.ServeResponse
+		if err := json.Unmarshal(line, &resp); err != nil {
+			r.fail(name, "a line on stdout is not a serve response: %q", firstLine(line))
+			return
+		}
+		got[resp.ID] = resp.Response
+	}
+	for _, id := range []string{"describe-1", "describe-2"} {
+		if d, err := provider.DecodeDescribe(got[id]); err != nil || (r.opts.Name != "" && d.Name != r.opts.Name) {
+			r.fail(name, "%s: %v", id, err)
+			return
+		}
+	}
+	for _, id := range []string{"unknown", "empty-list", ""} {
+		resp, ok := got[id]
+		if !ok {
+			r.fail(name, "no response with id %q (unknown operation, empty request or unreadable line)", id)
+			return
+		}
+		var e struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(resp, &e) != nil || e.Kind != "Error" {
+			r.fail(name, "id %q was answered without an Error", id)
+			return
+		}
+	}
+	r.pass(name, "answered %d requests by ID and exited when stdin closed", len(got))
+}
+
 func (r *runner) checkCancellation() {
 	const name = "SIGTERM stops the plugin promptly"
 	if runtime.GOOS == "windows" {

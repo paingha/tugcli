@@ -7,7 +7,7 @@ metadata:
   homepage: ""    # where users can read about it
 spec:
   protocols: [provider/v1alpha1]
-  capabilities: [list, credential]
+  capabilities: [list, credential, serve]
   # `tug plugin package` fills in each sha256 from the built binaries.
   platforms:
   - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-[[.Name]]}

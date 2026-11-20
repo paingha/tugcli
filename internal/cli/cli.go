@@ -55,6 +55,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		now:    time.Now,
 	}
 	defer a.closeTunnels()
+	defer a.closePlugins()
 	root := newRootCmd(a)
 	root.SetArgs(args)
 	root.SetIn(stdin)
@@ -182,6 +183,7 @@ func (a *app) registry() *registry.Registry {
 			Name:     p.Name(),
 			Env:      p.Manifest.Spec.Env,
 			Timeouts: a.cfg.PluginTimeouts(),
+			Serve:    p.Manifest.Spec.Capabilities.Has(provider.CapServe),
 			Log:      a.log,
 		}
 		kind := registry.KindPlugin
@@ -216,6 +218,23 @@ func (a *app) tunnels() *tunnel.Pool {
 		a.tunnelPool = tunnel.NewPool(tunnel.WithLogger(a.log))
 	}
 	return a.tunnelPool
+}
+
+// closePlugins stops plugins running in serve mode.
+func (a *app) closePlugins() {
+	a.mu.Lock()
+	reg := a.reg
+	a.mu.Unlock()
+	if reg == nil {
+		return
+	}
+	for _, name := range reg.Names() {
+		if p, err := reg.Get(name); err == nil {
+			if c, ok := p.(io.Closer); ok {
+				_ = c.Close() // best effort on the way out
+			}
+		}
+	}
 }
 
 // closeTunnels ends every tunnel this process opened.
