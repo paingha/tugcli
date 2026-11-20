@@ -81,10 +81,12 @@ def credential(req):
     return {"kind": "CredentialResponse", "credential": {"type": "token", "token": secrets["api_token"]}}
 
 
+# Each operation's handler and the kind of request it reads; describe reads
+# none.
 OPERATIONS = {
-    "describe": (describe, False),
-    "list": (list_clusters, True),
-    "credential": (credential, True),
+    "describe": (describe, None),
+    "list": (list_clusters, "ListRequest"),
+    "credential": (credential, "CredentialRequest"),
 }
 
 
@@ -93,22 +95,35 @@ def respond(message):
     sys.stdout.write(json.dumps(message) + "\n")
 
 
+def read_request(kind):
+    """Reads the request from stdin. As in the Go SDK, apiVersion and kind may
+    be left out, but a request for another protocol version or operation is
+    refused rather than misread."""
+    raw = sys.stdin.read()
+    if not raw.strip():
+        raise ProviderError("InvalidConfig", "empty request")
+    try:
+        req = json.loads(raw)
+    except ValueError as e:
+        raise ProviderError("InvalidConfig", "request is not JSON: %s" % e)
+    if not isinstance(req, dict):
+        raise ProviderError("InvalidConfig", "request is not a JSON object")
+    version = req.get("apiVersion") or API_VERSION
+    if version != API_VERSION:
+        raise ProviderError("InvalidConfig", "unsupported apiVersion %r; this plugin speaks %s" % (version, API_VERSION))
+    if (req.get("kind") or kind) != kind:
+        raise ProviderError("InvalidConfig", "expected kind %s, got %r" % (kind, req["kind"]))
+    return req
+
+
 def main(argv):
     if len(argv) != 2 or argv[1] not in OPERATIONS:
         op = argv[1] if len(argv) > 1 else ""
         respond({"kind": "Error", "code": "InvalidConfig", "message": "unknown operation %r" % op})
         return 2
-    handler, needs_request = OPERATIONS[argv[1]]
+    handler, kind = OPERATIONS[argv[1]]
     try:
-        req = {}
-        if needs_request:
-            raw = sys.stdin.read()
-            if not raw.strip():
-                raise ProviderError("InvalidConfig", "empty request")
-            try:
-                req = json.loads(raw)
-            except ValueError as e:
-                raise ProviderError("InvalidConfig", "request is not JSON: %s" % e)
+        req = read_request(kind) if kind else {}
         respond(handler(req))
         return 0
     except ProviderError as e:
