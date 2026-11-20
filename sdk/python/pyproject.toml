@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tug-provider"
+dynamic = ["version"]
+description = "Python SDK for tug provider plugins (protocol provider/v1alpha1)"
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["tug", "kubernetes", "kubectl", "plugin"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/paingha/tugcli"
+Documentation = "https://github.com/paingha/tugcli/blob/main/docs/plugins.md"
+Source = "https://github.com/paingha/tugcli/tree/main/sdk/python"
+
+[tool.setuptools]
+packages = ["tug_provider"]
+
+[tool.setuptools.dynamic]
+version = { attr = "tug_provider.__version__" }
+
+[tool.setuptools.package-data]
+tug_provider = ["py.typed"]

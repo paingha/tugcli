@@ -6,3 +6,7 @@
 /plugins/*/bin/
 *.test
 .DS_Store
+__pycache__/
+/sdk/python/build/
+/sdk/python/dist/
+/sdk/python/*.egg-info/
