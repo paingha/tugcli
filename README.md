@@ -142,3 +142,5 @@ a keychain.
 Code follows [Effective Go](https://go.dev/doc/effective_go),
 [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments) and the
 [Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md).
+[AGENTS.md](AGENTS.md) holds the Go and CLI standards for this repository,
+for people and for AI coding agents.
