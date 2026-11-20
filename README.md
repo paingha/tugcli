@@ -189,3 +189,13 @@ Code follows [Effective Go](https://go.dev/doc/effective_go),
 [Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md).
 [AGENTS.md](AGENTS.md) holds the Go and CLI standards for this repository,
 for people and for AI coding agents.
+
+## Contributing
+
+Bug reports, docs fixes, plugins and pull requests are welcome.
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how to report a problem, set up a
+development copy and get a change merged.
+
+## License
+
+tug is released under the [MIT License](LICENSE).
