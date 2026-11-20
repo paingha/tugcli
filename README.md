@@ -58,9 +58,14 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 tug import local --account kind           # every kind cluster, even ones no kubeconfig mentions
 tug import aws --account work --set regions=eu-west-1
 tug import google --account my-project
-make plugins && tug plugin link plugins/akamai
+gh release download --repo paingha/tugcli --pattern 'tug-provider-akamai_*' --pattern checksums.txt
+tug plugin install tug-provider-akamai_*.tar.gz --sha256 "$(grep tug-provider-akamai_ checksums.txt | cut -d' ' -f1)"
 tug import akamai --account work          # asks for the token once, keeps it in the keychain
 ```
+
+Each release includes the Akamai and CoreWeave plugins as archives with a
+build for every platform, listed in the signed `checksums.txt`.
+`make plugins-dist` builds the same archives from a checkout.
 
 Every kubeconfig tug writes authenticates with `tug auth token`, so no secret is
 written to disk. For clusters that trust an OpenID Connect issuer, tug signs in
