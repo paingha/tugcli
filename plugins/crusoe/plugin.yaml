@@ -14,6 +14,7 @@ spec:
   - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-crusoe}
   - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-crusoe}
   - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-crusoe.exe}
+  - {os: windows, arch: arm64, bin: bin/windows_arm64/tug-provider-crusoe.exe}
   secrets:
   - {name: access_key_id, prompt: "Crusoe Cloud API access key ID"}
   - {name: secret_key, prompt: "Crusoe Cloud API secret key"}
