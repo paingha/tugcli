@@ -1,0 +1,22 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: tailscale
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/tailscale
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-tailscale}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-tailscale}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-tailscale}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-tailscale}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-tailscale.exe}
+  env: []
+  network: []
+  accountConfig:
+    type: object
+    properties:
+      tag: {type: string, description: "tag that marks the API server proxies (default: tag:k8s-operator)"}
