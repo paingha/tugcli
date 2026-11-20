@@ -129,7 +129,7 @@ func dispatch(ctx context.Context, p Provider, op string, stdin io.Reader) (any,
 		if !ok {
 			return nil, Errorf(Unimplemented, "accounts is not supported")
 		}
-		if _, err := readRequest[typeMeta](stdin, kindAccountsRequest, true); err != nil {
+		if _, err := readRequest[typeMeta](ctx, stdin, kindAccountsRequest, true); err != nil {
 			return nil, err
 		}
 		accts, err := al.Accounts(ctx)
@@ -139,7 +139,7 @@ func dispatch(ctx context.Context, p Provider, op string, stdin io.Reader) (any,
 		return accountsResponseMsg{typeMeta: meta(kindAccountsResponse), Accounts: nonNil(accts)}, nil
 
 	case OpList:
-		req, err := readRequest[listRequestMsg](stdin, kindListRequest, false)
+		req, err := readRequest[listRequestMsg](ctx, stdin, kindListRequest, false)
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +150,7 @@ func dispatch(ctx context.Context, p Provider, op string, stdin io.Reader) (any,
 		return listResponseMsg{typeMeta: meta(kindListResponse), Clusters: nonNil(clusters)}, nil
 
 	case OpCredential:
-		req, err := readRequest[credentialRequestMsg](stdin, kindCredentialRequest, false)
+		req, err := readRequest[credentialRequestMsg](ctx, stdin, kindCredentialRequest, false)
 		if err != nil {
 			return nil, err
 		}
@@ -161,7 +161,7 @@ func dispatch(ctx context.Context, p Provider, op string, stdin io.Reader) (any,
 		if !ok {
 			return nil, Errorf(Unimplemented, "rotate is not supported")
 		}
-		req, err := readRequest[credentialRequestMsg](stdin, kindRotateRequest, false)
+		req, err := readRequest[credentialRequestMsg](ctx, stdin, kindRotateRequest, false)
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +172,7 @@ func dispatch(ctx context.Context, p Provider, op string, stdin io.Reader) (any,
 		if !ok {
 			return nil, Errorf(Unimplemented, "checkAccess is not supported")
 		}
-		req, err := readRequest[checkAccessRequestMsg](stdin, kindCheckAccessRequest, false)
+		req, err := readRequest[checkAccessRequestMsg](ctx, stdin, kindCheckAccessRequest, false)
 		if err != nil {
 			return nil, err
 		}
@@ -201,12 +201,13 @@ func credentialResponse(cred Credential, err error) (any, error) {
 }
 
 // readRequest reads and checks one request message. When optional is true an
-// empty stdin is accepted.
-func readRequest[T any](r io.Reader, kind string, optional bool) (T, error) {
+// empty stdin is accepted. Reading stops when ctx ends, so a plugin told to
+// stop while the host is still writing exits promptly.
+func readRequest[T any](ctx context.Context, r io.Reader, kind string, optional bool) (T, error) {
 	var zero T
-	data, err := io.ReadAll(io.LimitReader(r, MaxMessageBytes+1))
+	data, err := readAll(ctx, r)
 	if err != nil {
-		return zero, Errorf(Internal, "reading request: %v", err)
+		return zero, err
 	}
 	if len(data) > MaxMessageBytes {
 		return zero, Errorf(InvalidConfig, "request exceeds %d bytes", MaxMessageBytes)
@@ -232,6 +233,30 @@ func readRequest[T any](r io.Reader, kind string, optional bool) (T, error) {
 		return zero, Errorf(InvalidConfig, "malformed %s: %v", kind, err)
 	}
 	return out, nil
+}
+
+// readAll reads r up to MaxMessageBytes+1 bytes unless ctx ends first. On
+// cancellation the reading goroutine is left blocked on r; the process is
+// about to exit, so it is not waited for.
+func readAll(ctx context.Context, r io.Reader) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(r, MaxMessageBytes+1))
+		done <- result{data, err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			return nil, Errorf(Internal, "reading request: %v", res.err)
+		}
+		return res.data, nil
+	case <-ctx.Done():
+		return nil, Errorf(Unavailable, "cancelled while reading the request: %v", context.Cause(ctx))
+	}
 }
 
 func writeJSON(w io.Writer, v any) error {

@@ -92,7 +92,7 @@ func (d Dirs) Discover() ([]*Plugin, []Problem) {
 
 	names, _ := os.ReadDir(d.Installed)
 	for _, n := range names {
-		if !n.IsDir() {
+		if !n.IsDir() || strings.HasPrefix(n.Name(), ".") { // skip staging dirs
 			continue
 		}
 		dir, err := latestVersionDir(filepath.Join(d.Installed, n.Name()))

@@ -1,0 +1,37 @@
+"""Tests that run the plugin the way tug does: one process per operation."""
+
+import json
+import os
+import subprocess
+import sys
+import unittest
+
+PLUGIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tug-provider-[[.Name]]")
+ACCOUNT = {"id": "demo", "config": {"clusters": "dev=https://127.0.0.1:6443"}}
+
+
+def call(op, request=None):
+    stdin = json.dumps(request) if request is not None else ""
+    out = subprocess.run([sys.executable, PLUGIN, op], input=stdin, capture_output=True, text=True)
+    return out.returncode, json.loads(out.stdout)
+
+
+class PluginTest(unittest.TestCase):
+    def test_describe(self):
+        code, resp = call("describe")
+        self.assertEqual(code, 0)
+        self.assertEqual(resp["name"], "[[.Name]]")
+
+    def test_list(self):
+        code, resp = call("list", {"kind": "ListRequest", "account": ACCOUNT, "secrets": {"api_token": "demo_x"}})
+        self.assertEqual(code, 0)
+        self.assertEqual([c["id"] for c in resp["clusters"]], ["dev"])
+
+    def test_bad_token(self):
+        code, resp = call("list", {"kind": "ListRequest", "account": ACCOUNT, "secrets": {"api_token": "nope"}})
+        self.assertEqual(code, 1)
+        self.assertEqual(resp["code"], "Unauthenticated")
+
+
+if __name__ == "__main__":
+    unittest.main()

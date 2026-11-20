@@ -1,0 +1,26 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - run: go install github.com/paingha/tugcli/cmd/tug@latest
+      - run: make package
+      - name: Publish the archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes
+          echo "Install with: tug plugin install <archive URL> --sha256 $(sha256sum dist/*.tar.gz | cut -d' ' -f1)"

@@ -26,6 +26,9 @@ tug import kubeconfig "$work/kind.yaml"
 tug ls
 tug connect "kind-$KIND_CLUSTER"
 
+echo "--- the built-in provider passes the plugin conformance suite"
+tug plugin test kubeconfig --account kind
+
 echo "--- passthrough"
 tug get pods -A
 tug get nodes -o name

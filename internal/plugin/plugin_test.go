@@ -58,7 +58,8 @@ func TestSDKPluginEndToEnd(t *testing.T) {
 	}
 
 	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443,ci=https://ci:6443"}}
-	clusters, err := prov.List(ctx, provider.ListRequest{Account: acct})
+	token := map[string]string{"api_token": "ex_t0k"}
+	clusters, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestSDKPluginEndToEnd(t *testing.T) {
 		t.Fatalf("clusters = %+v", clusters)
 	}
 
-	_, err = prov.List(ctx, provider.ListRequest{Account: provider.Account{ID: "empty"}})
+	_, err = prov.List(ctx, provider.ListRequest{Account: provider.Account{ID: "empty"}, Secrets: token})
 	var pe *provider.Error
 	if provider.CodeOf(err) != provider.InvalidConfig {
 		t.Fatalf("want InvalidConfig, got %v", err)
@@ -78,9 +79,9 @@ func TestSDKPluginEndToEnd(t *testing.T) {
 	// Undeclared secrets are never sent.
 	cred, err := prov.Credential(ctx, provider.CredentialRequest{
 		Account: acct, ClusterID: "dev",
-		Secrets: map[string]string{"api_token": "t0k", "other_plugin_secret": "nope"},
+		Secrets: map[string]string{"api_token": "ex_t0k", "other_plugin_secret": "nope"},
 	})
-	if err != nil || cred.Token != "t0k" {
+	if err != nil || cred.Token != "ex_t0k" {
 		t.Fatalf("credential = %+v, %v", cred, err)
 	}
 	if got := prov.declared(map[string]string{"api_token": "a", "x": "b"}); len(got) != 1 {

@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
+	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -71,6 +72,7 @@ func New(opts ...Option) *Provider {
 func (p *Provider) Info() provider.Info {
 	return provider.Info{
 		Name:         Name,
+		Version:      version.String(),
 		Description:  "Clusters in kubeconfig files (~/.kube/config, $KUBECONFIG, or files you name)",
 		Capabilities: provider.CapAccounts | provider.CapList | provider.CapCredential,
 	}

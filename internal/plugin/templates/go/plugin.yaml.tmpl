@@ -1,0 +1,25 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: [[.Name]]
+  version: 0.1.0
+  publisher: ""   # who publishes this plugin
+  homepage: ""    # where users can read about it
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  # `tug plugin package` fills in each sha256 from the built binaries.
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-[[.Name]]}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-[[.Name]]}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-[[.Name]]}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-[[.Name]]}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-[[.Name]].exe}
+  secrets:
+  - {name: api_token, prompt: "[[.Name]] API token"}
+  env: []       # host variables to pass through, for example AWS_PROFILE
+  network: []   # hosts the plugin talks to; shown to users at install time
+  accountConfig:
+    type: object
+    properties:
+      clusters: {type: string, description: "name=url pairs, comma separated (demo only)"}

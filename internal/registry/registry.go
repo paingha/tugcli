@@ -144,3 +144,32 @@ func (a sdkAdapter) List(ctx context.Context, req provider.ListRequest) ([]provi
 func (a sdkAdapter) Credential(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) {
 	return a.p.Credential(ctx, req)
 }
+
+// ToSDK exposes a registry provider through the public SDK interface, so a
+// built-in can be served over the plugin protocol and held to the same
+// conformance suite as plugins.
+func ToSDK(p Provider) provider.Provider {
+	v := sdkView{p: p}
+	if p.Info().Capabilities.Has(provider.CapAccounts) {
+		return sdkViewWithAccounts{v}
+	}
+	return v
+}
+
+type sdkView struct{ p Provider }
+
+func (v sdkView) Info() provider.Info { return v.p.Info() }
+
+func (v sdkView) List(ctx context.Context, req provider.ListRequest) ([]provider.Cluster, error) {
+	return v.p.List(ctx, req)
+}
+
+func (v sdkView) Credential(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) {
+	return v.p.Credential(ctx, req)
+}
+
+type sdkViewWithAccounts struct{ sdkView }
+
+func (v sdkViewWithAccounts) Accounts(ctx context.Context) ([]provider.Account, error) {
+	return v.p.Accounts(ctx)
+}

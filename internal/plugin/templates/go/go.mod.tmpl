@@ -1,0 +1,9 @@
+module [[.Module]]
+
+go 1.26.0
+[[- if .SDKReplace]]
+
+require github.com/paingha/tugcli v0.0.0
+
+replace github.com/paingha/tugcli => [[.SDKReplace]]
+[[- end]]

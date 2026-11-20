@@ -1,0 +1,84 @@
+// Command tug-provider-[[.Name]] is a tug provider plugin. It lists the
+// clusters of an account and hands out credentials for them.
+//
+// The generated code lists the clusters named in the account's "clusters"
+// setting and accepts tokens starting with "demo_", so it passes
+// `tug plugin test` before you change anything. Replace the TODOs with calls
+// to your provider's API.
+package main
+
+import (
+	"context"
+	"os"
+	"strings"
+
+	"github.com/paingha/tugcli/pkg/provider"
+)
+
+type [[.Ident]] struct{}
+
+func ([[.Ident]]) Info() provider.Info {
+	return provider.Info{
+		Name:    "[[.Name]]",
+		Version: "0.1.0",
+		// tug asks for each secret once and keeps it in the OS keychain. The
+		// plugin only ever receives the secrets it declares here and in
+		// plugin.yaml.
+		Secrets: []provider.SecretSpec{{Name: "api_token", Prompt: "[[.Name]] API token"}},
+	}
+}
+
+// List returns the clusters in one account.
+func ([[.Ident]]) List(ctx context.Context, req provider.ListRequest) ([]provider.Cluster, error) {
+	if err := checkToken(req.Secrets["api_token"]); err != nil {
+		return nil, err
+	}
+	// TODO: call your provider's API, for example GET /v1/clusters, and map
+	// each result to a provider.Cluster. Return provider.Errorf with
+	// Unauthenticated on 401, PermissionDenied on 403, RateLimited on 429 and
+	// Unavailable when the API cannot be reached.
+	spec := req.Account.ConfigString("clusters")
+	if spec == "" {
+		return nil, provider.Errorf(provider.InvalidConfig, "account %q has no clusters setting", req.Account.ID).
+			WithHint("tug import [[.Name]] --account demo --set clusters=dev=https://127.0.0.1:6443")
+	}
+	var out []provider.Cluster
+	for _, entry := range strings.Split(spec, ",") {
+		name, server, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		if !ok {
+			return nil, provider.Errorf(provider.InvalidConfig, "bad cluster entry %q; want name=url", entry)
+		}
+		out = append(out, provider.Cluster{
+			ID:        name, // must stay the same for the life of the cluster
+			Name:      name,
+			Endpoints: provider.Endpoints{Public: server},
+			// CAData: the cluster CA in PEM, when the API returns it.
+			Labels: map[string]string{"env": "dev"},
+		})
+	}
+	return out, nil
+}
+
+// Credential returns a credential for one cluster.
+func ([[.Ident]]) Credential(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) {
+	if err := checkToken(req.Secrets["api_token"]); err != nil {
+		return provider.Credential{}, err
+	}
+	// TODO: return what your clusters accept: provider.Token with an expiry
+	// for short-lived tokens, provider.ClientCert, provider.OIDC, or
+	// provider.Delegate to run a vendor's own exec plugin.
+	return provider.Token(req.Secrets["api_token"], provider.NoExpiry), nil
+}
+
+// checkToken stands in for the API's own check until List calls the API.
+func checkToken(token string) error {
+	if !strings.HasPrefix(token, "demo_") {
+		return provider.Errorf(provider.Unauthenticated, "invalid api_token").
+			WithHint("until the plugin calls a real API, tokens must start with demo_")
+	}
+	return nil
+}
+
+func main() {
+	os.Exit(provider.Main([[.Ident]]{}))
+}

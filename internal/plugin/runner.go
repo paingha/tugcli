@@ -65,7 +65,7 @@ func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, e
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, r.Bin, op)
-	cmd.Env = r.environ()
+	cmd.Env = r.Environ()
 	cmd.Stdin = bytes.NewReader(request)
 	cmd.Cancel = func() error { return terminate(cmd.Process) }
 	cmd.WaitDelay = killGrace
@@ -108,8 +108,9 @@ func (r *Runner) logger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// environ builds the scrubbed environment.
-func (r *Runner) environ() []string {
+// Environ returns the scrubbed environment the plugin runs with: a few basics
+// such as PATH and HOME, plus the variables its manifest declares.
+func (r *Runner) Environ() []string {
 	names := append([]string{}, baseEnv...)
 	if runtime.GOOS == "windows" {
 		names = append(names, windowsEnv...)

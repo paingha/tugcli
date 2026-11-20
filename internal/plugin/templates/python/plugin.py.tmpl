@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""tug provider plugin for [[.Name]] (protocol provider/v1alpha1).
+
+tug runs this script once per operation, with the operation as the only
+argument. It writes one JSON request to stdin and reads one JSON response from
+stdout; anything on stderr goes to tug's log. Only the standard library is
+used, so there is nothing to install.
+
+The generated code lists the clusters named in the account's "clusters"
+setting and accepts tokens starting with "demo_", so it passes
+`tug plugin test` before you change anything. Replace the TODOs with calls to
+your provider's API.
+"""
+
+import json
+import sys
+
+API_VERSION = "provider/v1alpha1"
+NAME = "[[.Name]]"
+VERSION = "0.1.0"
+
+
+class ProviderError(Exception):
+    """An error tug understands. Codes: Unauthenticated, PermissionDenied,
+    NotFound, RateLimited, Unavailable, InvalidConfig, Unimplemented."""
+
+    def __init__(self, code, message, hint=None):
+        super().__init__(message)
+        self.code = code
+        self.hint = hint
+
+
+def check_token(secrets):
+    # Stands in for the API's own check until list_clusters calls the API.
+    if not secrets.get("api_token", "").startswith("demo_"):
+        raise ProviderError("Unauthenticated", "invalid api_token",
+                            "until the plugin calls a real API, tokens must start with demo_")
+
+
+def describe(_req):
+    return {
+        "kind": "DescribeResponse",
+        "name": NAME,
+        "version": VERSION,
+        "protocols": [API_VERSION],
+        "capabilities": ["list", "credential"],
+        "secrets": [{"name": "api_token", "prompt": NAME + " API token"}],
+    }
+
+
+def list_clusters(req):
+    check_token(req.get("secrets") or {})
+    account = req.get("account") or {}
+    # TODO: call your provider's API and map each cluster. Raise
+    # ProviderError("Unauthenticated", ...) on 401, "RateLimited" on 429.
+    spec = (account.get("config") or {}).get("clusters", "")
+    if not spec:
+        raise ProviderError("InvalidConfig", "account %r has no clusters setting" % account.get("id"),
+                            "tug import %s --account demo --set clusters=dev=https://127.0.0.1:6443" % NAME)
+    clusters = []
+    for entry in spec.split(","):
+        name, sep, server = entry.strip().partition("=")
+        if not sep:
+            raise ProviderError("InvalidConfig", "bad cluster entry %r; want name=url" % entry)
+        clusters.append({
+            "id": name,  # must stay the same for the life of the cluster
+            "name": name,
+            "endpoints": {"public": server},
+            "labels": {"env": "dev"},
+        })
+    return {"kind": "ListResponse", "clusters": clusters}
+
+
+def credential(req):
+    secrets = req.get("secrets") or {}
+    check_token(secrets)
+    # TODO: return what your clusters accept. Shapes: {"type": "token",
+    # "token": ..., "expiresAt": RFC 3339}, {"type": "clientCert", ...},
+    # {"type": "oidc", ...} or {"type": "delegate", "exec": {...}}.
+    return {"kind": "CredentialResponse", "credential": {"type": "token", "token": secrets["api_token"]}}
+
+
+OPERATIONS = {
+    "describe": (describe, False),
+    "list": (list_clusters, True),
+    "credential": (credential, True),
+}
+
+
+def respond(message):
+    message["apiVersion"] = API_VERSION
+    sys.stdout.write(json.dumps(message) + "\n")
+
+
+def main(argv):
+    if len(argv) != 2 or argv[1] not in OPERATIONS:
+        op = argv[1] if len(argv) > 1 else ""
+        respond({"kind": "Error", "code": "InvalidConfig", "message": "unknown operation %r" % op})
+        return 2
+    handler, needs_request = OPERATIONS[argv[1]]
+    try:
+        req = {}
+        if needs_request:
+            raw = sys.stdin.read()
+            if not raw.strip():
+                raise ProviderError("InvalidConfig", "empty request")
+            try:
+                req = json.loads(raw)
+            except ValueError as e:
+                raise ProviderError("InvalidConfig", "request is not JSON: %s" % e)
+        respond(handler(req))
+        return 0
+    except ProviderError as e:
+        error = {"kind": "Error", "code": e.code, "message": str(e)}
+        if e.hint:
+            error["hint"] = e.hint
+        respond(error)
+        print("%s %s: %s: %s" % (NAME, argv[1], e.code, e), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

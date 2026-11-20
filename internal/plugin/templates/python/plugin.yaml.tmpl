@@ -1,0 +1,25 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: [[.Name]]
+  version: 0.1.0
+  publisher: ""   # who publishes this plugin
+  homepage: ""    # where users can read about it
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  # One script serves every platform with python3; `tug plugin package`
+  # fills in the sha256.
+  platforms:
+  - {os: darwin, arch: arm64, bin: tug-provider-[[.Name]]}
+  - {os: darwin, arch: amd64, bin: tug-provider-[[.Name]]}
+  - {os: linux, arch: amd64, bin: tug-provider-[[.Name]]}
+  - {os: linux, arch: arm64, bin: tug-provider-[[.Name]]}
+  secrets:
+  - {name: api_token, prompt: "[[.Name]] API token"}
+  env: []
+  network: []
+  accountConfig:
+    type: object
+    properties:
+      clusters: {type: string, description: "name=url pairs, comma separated (demo only)"}

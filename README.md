@@ -6,9 +6,8 @@ points each terminal at one cluster without touching `~/.kube/config`.
 
 > Status: early development. Phase 0 (foundations) and most of Phase 1 are in
 > place: sessions, catalog, credentials, the plugin protocol and host,
-> guardrails, and the daily commands. Cloud providers (EKS, GKE, Akamai LKE,
-> CoreWeave CKS), `doctor` and the plugin tooling (`install`, `new`, `test`)
-> are next.
+> guardrails, the daily commands and the plugin tooling. Cloud providers (EKS,
+> GKE, Akamai LKE, CoreWeave CKS) and `doctor` are next.
 
 ## Quick start
 
@@ -57,7 +56,8 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 | Keychain, encrypted file store, credential broker | [internal/credentials](internal/credentials) |
 | Provider registry | [internal/registry](internal/registry) |
 | Built-in providers | [internal/builtin](internal/builtin) |
-| Plugin host: discovery, manifests, process runner | [internal/plugin](internal/plugin) |
+| Plugin host: discovery, manifests, runner, install, scaffolding | [internal/plugin](internal/plugin) |
+| Protocol conformance suite (public) | [pkg/conformance](pkg/conformance) |
 | Client factory and discovery cache | [internal/kube](internal/kube) |
 | Read-only guard as an `http.RoundTripper` | [internal/guard](internal/guard) |
 | kubectl passthrough | [internal/passthrough](internal/passthrough) |
@@ -66,28 +66,42 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | Example plugin | [examples/tug-provider-example](examples/tug-provider-example) |
 
-## Writing a provider plugin
+## Provider plugins
 
 A plugin is an executable named `tug-provider-<name>` that reads one JSON
-request on stdin and writes one JSON response on stdout. With the Go SDK:
-
-```go
-type myProvider struct{}
-
-func (myProvider) Info() provider.Info { return provider.Info{Name: "my"} }
-func (myProvider) List(ctx context.Context, req provider.ListRequest) ([]provider.Cluster, error) { ... }
-func (myProvider) Credential(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) { ... }
-
-func main() { os.Exit(provider.Main(myProvider{})) }
-```
-
-See [examples/tug-provider-example](examples/tug-provider-example), then:
+request on stdin and writes one JSON response on stdout, in any language.
 
 ```bash
-make example-plugin
-tug plugin link examples/tug-provider-example
-tug plugin describe example
+tug plugin new acme                    # Go, with the SDK, tests and a release workflow
+tug plugin new acme --lang python      # one stdlib-only script, no SDK needed
+cd tug-provider-acme && make conformance
+
+tug plugin package . -o dist           # archive with each binary's sha256 in the manifest
+tug plugin install ./dist/tug-provider-acme_0.1.0.tar.gz
+tug plugin install https://.../tug-provider-acme_0.1.0.tar.gz --sha256 <archive sha256>
+tug plugin test acme --account prod    # protocol conformance suite
+tug plugin ls | describe | link | unlink | remove
 ```
+
+Install verifies every binary against the manifest, refuses archives with
+links or paths outside the plugin directory, and shows the plugin's
+publisher, secrets and network hosts before asking to confirm. Plugins run
+with a scrubbed environment and receive only the secrets they declare.
+
+With the Go SDK, a plugin is mostly two methods:
+
+```go
+func (acme) List(ctx context.Context, req provider.ListRequest) ([]provider.Cluster, error) { ... }
+func (acme) Credential(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) { ... }
+
+func main() { os.Exit(provider.Main(acme{})) }
+```
+
+The conformance suite is a public package, [pkg/conformance](pkg/conformance),
+so plugin authors can run it in their own tests; tug's CI runs it against the
+built-in providers through the same process interface. See
+[examples/tug-provider-example](examples/tug-provider-example) for a complete
+plugin.
 
 ## Development
 

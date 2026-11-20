@@ -1,0 +1,54 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/paingha/tugcli/pkg/provider"
+)
+
+// call runs one protocol operation in process, as tug would run the binary.
+func call(t *testing.T, op string, payload any) []byte {
+	t.Helper()
+	req, err := provider.EncodeRequest(op, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	provider.Run(context.Background(), [[.Ident]]{}, []string{op}, bytes.NewReader(req), &out, &errb)
+	return out.Bytes()
+}
+
+var demo = provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443"}}
+
+func TestDescribe(t *testing.T) {
+	d, err := provider.DecodeDescribe(call(t, provider.OpDescribe, nil))
+	if err != nil || d.Name != "[[.Name]]" {
+		t.Fatalf("describe = %+v, %v", d, err)
+	}
+}
+
+func TestList(t *testing.T) {
+	out := call(t, provider.OpList, provider.ListRequest{Account: demo, Secrets: map[string]string{"api_token": "demo_x"}})
+	clusters, err := provider.DecodeList(out)
+	if err != nil || len(clusters) != 1 || clusters[0].ID != "dev" {
+		t.Fatalf("list = %+v, %v", clusters, err)
+	}
+}
+
+func TestBadTokenIsUnauthenticated(t *testing.T) {
+	out := call(t, provider.OpList, provider.ListRequest{Account: demo, Secrets: map[string]string{"api_token": "nope"}})
+	if _, err := provider.DecodeList(out); provider.CodeOf(err) != provider.Unauthenticated {
+		t.Fatalf("want Unauthenticated, got %v", err)
+	}
+}
+
+func TestCredential(t *testing.T) {
+	out := call(t, provider.OpCredential, provider.CredentialRequest{Account: demo, ClusterID: "dev", Secrets: map[string]string{"api_token": "demo_x"}})
+	c, err := provider.DecodeCredential(out)
+	if err != nil || !strings.HasPrefix(c.Token, "demo_") {
+		t.Fatalf("credential = %+v, %v", c, err)
+	}
+}

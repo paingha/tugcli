@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -143,5 +144,22 @@ func TestCapabilityJSONIgnoresUnknown(t *testing.T) {
 	}
 	if c != CapList|CapRotate {
 		t.Fatalf("got %v", c)
+	}
+}
+
+func TestCancelWhileReadingRequest(t *testing.T) {
+	r, w := io.Pipe() // never written: the host is still sending
+	defer w.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	var out, errb bytes.Buffer
+	start := time.Now()
+	code := Run(ctx, fake{}, []string{OpList}, r, &out, &errb)
+	if code != ExitError || time.Since(start) > time.Second {
+		t.Fatalf("exit %d after %s", code, time.Since(start))
+	}
+	if _, err := DecodeList(out.Bytes()); CodeOf(err) != Unavailable {
+		t.Fatalf("want Unavailable, got %v", err)
 	}
 }

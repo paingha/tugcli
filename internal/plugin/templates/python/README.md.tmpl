@@ -1,0 +1,25 @@
+# tug-provider-[[.Name]]
+
+A [tug](https://github.com/paingha/tugcli) provider plugin for [[.Name]],
+written in Python with only the standard library.
+
+## Develop
+
+```bash
+python3 -m unittest            # tests
+tug plugin link .              # let tug use this directory
+TUG_SECRET_API_TOKEN=demo_test tug plugin test [[.Name]] --set clusters=dev=https://127.0.0.1:6443
+tug import [[.Name]] --account demo --set clusters=dev=https://127.0.0.1:6443
+```
+
+Implement `list_clusters` and `credential` in `tug-provider-[[.Name]]` with
+calls to your provider's API.
+
+## Release
+
+`tug plugin package . -o dist` writes an installable archive and prints its
+sha256. Users install it with:
+
+```bash
+tug plugin install <url or file> --sha256 <archive sha256>
+```

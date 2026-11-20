@@ -1,0 +1,29 @@
+# tug-provider-[[.Name]]
+
+A [tug](https://github.com/paingha/tugcli) provider plugin for [[.Name]].
+
+## Develop
+
+```bash
+make test          # unit tests
+make link          # build and let tug use this directory
+make conformance   # run tug's protocol conformance suite against it
+tug import [[.Name]] --account demo --set clusters=dev=https://127.0.0.1:6443
+```
+
+The plugin is an executable that reads one JSON request on stdin and writes
+one JSON response on stdout; `provider.Main` handles that. Implement `List`
+and `Credential` in `main.go` with calls to your provider's API.
+
+## Release
+
+`make package` builds every platform in `plugin.yaml` and writes
+`dist/tug-provider-[[.Name]]_<version>.tar.gz`, recording each binary's sha256
+in the packaged manifest. Users install it with:
+
+```bash
+tug plugin install <url or file> --sha256 <archive sha256>
+```
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which does this and
+attaches the archive to a GitHub release.
