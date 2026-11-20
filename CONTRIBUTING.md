@@ -66,6 +66,7 @@ make test         # all tests, with the race detector
 | Lint | `make lint` |
 | Format | `make fmt` |
 | Build the first-party plugins | `make plugins` |
+| Python SDK tests | `make python-sdk-test` |
 | End to end against a kind cluster | `make e2e-kind` |
 | Run the docs site | `cd docs && npm install && npm run dev` |
 
