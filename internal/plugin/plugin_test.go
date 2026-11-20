@@ -98,7 +98,7 @@ kind: ProviderPlugin
 metadata: {name: script, version: 1.0.0}
 spec:
   protocols: [provider/v1alpha1]
-  capabilities: [list, credential]
+  capabilities: [list, credential, checkAccess]
   platforms:
   - {os: %s, arch: %s, bin: tug-provider-script, sha256: %s}
   env: [DECLARED_VAR]
@@ -115,6 +115,10 @@ case "$1" in
     echo "fetching credential" >&2
     printf '{"apiVersion":"provider/v1alpha1","kind":"Error","code":"RateLimited","message":"slow down","retryAfterSeconds":7}\n'
     exit 1
+    ;;
+  checkAccess)
+    ip=$(sed -n 's/.*"egressIP":"\([^"]*\)".*/\1/p')
+    printf '{"apiVersion":"provider/v1alpha1","kind":"CheckAccessResponse","findings":[{"severity":"error","message":"%s is not allowed","fix":"add %s/32"}]}\n' "$ip" "$ip"
     ;;
   hang) sleep 10 ;;
   *) exit 2 ;;
@@ -292,5 +296,26 @@ func TestRunnerTimeouts(t *testing.T) {
 		if got := r.timeout(tt.op); got != tt.want {
 			t.Errorf("timeout(%s) = %s, want %s", tt.op, got, tt.want)
 		}
+	}
+}
+
+func TestCheckAccess(t *testing.T) {
+	dir := writeScriptPlugin(t)
+	p, err := Load(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := NewProvider(p, &Runner{Bin: p.Bin, Name: p.Name()})
+	findings, err := prov.CheckAccess(context.Background(), provider.AccessRequest{Cluster: provider.Cluster{ID: "a"}, EgressIP: "198.51.100.9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 1 || findings[0].Severity != provider.SeverityError || findings[0].Fix != "add 198.51.100.9/32" {
+		t.Fatalf("findings = %+v", findings)
+	}
+
+	p.Manifest.Spec.Capabilities &^= provider.CapCheckAccess
+	if _, err := prov.CheckAccess(context.Background(), provider.AccessRequest{}); provider.CodeOf(err) != provider.Unimplemented {
+		t.Fatalf("a plugin without checkAccess: %v", err)
 	}
 }

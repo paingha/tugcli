@@ -80,6 +80,20 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 	return provider.DecodeList(out)
 }
 
+// CheckAccess runs the plugin's checkAccess operation, which explains whether
+// the caller can reach the cluster's API server.
+func (p *Provider) CheckAccess(ctx context.Context, req provider.AccessRequest) ([]provider.Finding, error) {
+	if !p.plugin.Manifest.Spec.Capabilities.Has(provider.CapCheckAccess) {
+		return nil, provider.Errorf(provider.Unimplemented, "%s does not check access", p.plugin.Name())
+	}
+	req.Secrets = p.declared(req.Secrets)
+	out, err := p.call(ctx, provider.OpCheckAccess, req)
+	if err != nil {
+		return nil, err
+	}
+	return provider.DecodeCheckAccess(out)
+}
+
 // Credential implements registry.Provider.
 func (p *Provider) Credential(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) {
 	req.Secrets = p.declared(req.Secrets)
