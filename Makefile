@@ -53,6 +53,12 @@ test: ## Run unit and in-process end-to-end tests
 test-short: ## Skip tests that build binaries
 	go test -short ./...
 
+PYTHON ?= python3
+
+.PHONY: python-sdk-test
+python-sdk-test: ## Run the Python SDK's unit tests
+	cd sdk/python && PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -v
+
 .PHONY: cover
 cover: ## Write coverage.html
 	go test -coverprofile=coverage.out ./...

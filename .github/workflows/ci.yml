@@ -39,6 +39,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get install -y zsh fish
       - run: go test -race ./...
+      # This uses the runner's python3. go test above has already run the
+      # SDK's example through the conformance suite and compared the SDK's
+      # output with the Go SDK's.
+      - name: Python SDK tests
+        if: runner.os == 'Linux'
+        run: make python-sdk-test
 
   e2e-kind:
     runs-on: ubuntu-latest
