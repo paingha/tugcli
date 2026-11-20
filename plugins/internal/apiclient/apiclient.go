@@ -24,8 +24,12 @@ const ConfigAPIURL = "apiURL"
 
 // Client calls one provider API with a bearer token.
 type Client struct {
-	BaseURL   string
-	Token     string
+	BaseURL string
+	// Token is sent as a bearer token, unless Sign is set.
+	Token string
+	// Sign, when set, authenticates each request in place of Token, for
+	// APIs that sign requests. It is called once the request is complete.
+	Sign      func(req *http.Request) error
 	HTTP      *http.Client
 	UserAgent string
 	// Message extracts a readable error message from an error body.
@@ -78,13 +82,19 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
+	}
+	if c.Sign != nil {
+		if err := c.Sign(req); err != nil {
+			return err
+		}
+	} else {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	hc := c.HTTP
 	if hc == nil {
