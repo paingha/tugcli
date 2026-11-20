@@ -44,11 +44,49 @@ if grep -rqF "$key" "$TUG_HOME/data/catalog.yaml" "$KUBECONFIG"; then
   exit 1
 fi
 
+echo "--- daily commands on a sample workload"
+tug ns default
+kubectl create deployment web --image=nginx:1.27-alpine --port=80
+kubectl rollout status deploy/web --timeout=180s
+
+tug logs web --tail 5
+tug sh web -- nginx -v
+
+tug pf web 18080:80 > "$work/pf.log" 2>&1 &
+pf_pid=$!
+for _ in $(seq 1 30); do
+  curl -fsS http://localhost:18080 > "$work/page.html" 2>/dev/null && break
+  sleep 1
+done
+kill "$pf_pid" 2>/dev/null || true
+grep -q "Welcome to nginx" "$work/page.html" || { echo "FAIL: port-forward"; cat "$work/pf.log"; exit 1; }
+
+tug scale web 2
+kubectl rollout status deploy/web --timeout=180s
+test "$(kubectl get deploy web -o jsonpath='{.spec.replicas}')" = 2
+
+tug restart web
+kubectl rollout status deploy/web --timeout=180s
+test -n "$(kubectl get deploy web -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}')"
+
+tug rollback web
+kubectl rollout status deploy/web --timeout=180s
+test -z "$(kubectl get deploy web -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}')"
+
 echo "--- read-only guard"
 tug connect "kind-$KIND_CLUSTER" --read-only
 if tug delete ns default --wait=false 2>/dev/null; then
   echo "FAIL: delete allowed on a read-only session" >&2
   exit 1
 fi
+if tug restart web 2>/dev/null; then
+  echo "FAIL: restart allowed on a read-only session" >&2
+  exit 1
+fi
+if tug sh web -- true 2>/dev/null; then
+  echo "FAIL: exec allowed on a read-only session" >&2
+  exit 1
+fi
+tug logs web --tail 1 # reads still work
 
 echo "PASS"

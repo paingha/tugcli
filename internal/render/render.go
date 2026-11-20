@@ -2,8 +2,10 @@
 package render
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"strings"
@@ -98,3 +100,28 @@ func (c Colors) Dim(s string) string { return c.wrap("2", s) }
 
 // Bold emphasises names.
 func (c Colors) Bold(s string) string { return c.wrap("1", s) }
+
+// palette holds distinguishable foreground colours for log prefixes.
+var palette = []string{"36", "33", "32", "35", "34", "96", "93", "92", "95", "94"}
+
+// Pick colours s with a palette colour chosen by key, so the same pod keeps
+// the same colour for the whole stream.
+func (c Colors) Pick(key, s string) string {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return c.wrap(palette[h.Sum32()%uint32(len(palette))], s)
+}
+
+// PrettyJSON indents a line that is a JSON object; other lines are returned
+// unchanged.
+func PrettyJSON(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "{") || !json.Valid([]byte(trimmed)) {
+		return line
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, []byte(trimmed), "", "  "); err != nil {
+		return line
+	}
+	return buf.String()
+}

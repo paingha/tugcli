@@ -19,6 +19,10 @@ import (
 
 const secretToken = "s3cr3t-token-from-kubeconfig"
 
+const apiServerDeployment = `{"kind":"Deployment","apiVersion":"apps/v1",
+	"metadata":{"name":"api-server"},
+	"spec":{"selector":{"matchLabels":{"app":"api-server"}},"template":{"spec":{"containers":[{"name":"main"}]}}}}`
+
 // fakeAPIServer serves just enough of the Kubernetes API for tug's commands,
 // and only to callers presenting secretToken.
 func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
@@ -33,10 +37,28 @@ func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 			writes.Add(1)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/v1/namespaces":
+		p := r.URL.Path
+		switch {
+		case p == "/api/v1/namespaces":
 			fmt.Fprint(w, `{"kind":"NamespaceList","apiVersion":"v1","items":[
 				{"metadata":{"name":"default"}},{"metadata":{"name":"payments"}},{"metadata":{"name":"kube-system"}}]}`)
+		case strings.HasSuffix(p, "/deployments") && r.Method == http.MethodGet:
+			fmt.Fprint(w, `{"kind":"DeploymentList","apiVersion":"apps/v1","items":[`+apiServerDeployment+`]}`)
+		case strings.HasSuffix(p, "/deployments/api-server") && r.Method == http.MethodPatch:
+			fmt.Fprint(w, apiServerDeployment)
+		case strings.HasSuffix(p, "/statefulsets"):
+			fmt.Fprint(w, `{"kind":"StatefulSetList","apiVersion":"apps/v1","items":[]}`)
+		case strings.HasSuffix(p, "/daemonsets"):
+			fmt.Fprint(w, `{"kind":"DaemonSetList","apiVersion":"apps/v1","items":[]}`)
+		case strings.HasSuffix(p, "/pods"):
+			fmt.Fprint(w, `{"kind":"PodList","apiVersion":"v1","items":[{
+				"metadata":{"name":"api-server-7d9f-x2x4z","labels":{"app":"api-server"},
+				  "ownerReferences":[{"apiVersion":"apps/v1","kind":"ReplicaSet","name":"api-server-7d9f","uid":"rs","controller":true}]},
+				"spec":{"containers":[{"name":"main"}]},
+				"status":{"phase":"Running"}}]}`)
+		case strings.HasSuffix(p, "/pods/api-server-7d9f-x2x4z/log"):
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, "{\"level\":\"info\",\"msg\":\"listening\"}\nready\n")
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","code":404}`)
@@ -257,6 +279,47 @@ func TestReadWriteFlagAndAmbiguity(t *testing.T) {
 	}
 	if out := mustTug(t, "connect", "env=staging"); !strings.Contains(out, "payments-staging") {
 		t.Fatalf("label selection: %s", out)
+	}
+}
+
+func TestDailyCommands(t *testing.T) {
+	isolate(t)
+	srv, writes := fakeAPIServer(t)
+	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, srv))
+	newSession(t)
+	mustTug(t, "connect", "payments-prod") // env=prod: read-only
+
+	// "api" resolves to deploy/api-server and streams its pod with a prefix.
+	out := mustTug(t, "logs", "api", "--json")
+	if !strings.Contains(out, "api-server-7d9f-x2x4z/main") || !strings.Contains(out, `"msg": "listening"`) || !strings.Contains(out, "ready") {
+		t.Fatalf("logs output:\n%s", out)
+	}
+
+	// Writes are refused on a read-only session without a terminal to ask on.
+	r := tug(t, "restart", "api")
+	if r.code == 0 || !strings.Contains(r.stderr, "read-only") {
+		t.Fatalf("restart on read-only: %+v", r)
+	}
+	if r := tug(t, "scale", "api", "3"); r.code == 0 {
+		t.Fatal("scale allowed on a read-only session")
+	}
+	if writes.Load() != 0 {
+		t.Fatalf("%d writes reached the API server", writes.Load())
+	}
+
+	mustTug(t, "unlock", "5m")
+	if out := mustTug(t, "restart", "api"); !strings.Contains(out, "Restarted deploy/api-server") {
+		t.Fatalf("restart: %s", out)
+	}
+	if writes.Load() != 1 {
+		t.Fatalf("want 1 write after unlock, got %d", writes.Load())
+	}
+
+	if r := tug(t, "logs", "nothing-like-this"); r.code == 0 || !strings.Contains(r.stderr, "matches") {
+		t.Fatalf("unknown target: %+v", r)
+	}
+	if r := tug(t, "sh", "api", "ls"); r.code == 0 || !strings.Contains(r.stderr, "after --") {
+		t.Fatalf("sh without --: %+v", r)
 	}
 }
 

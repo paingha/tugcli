@@ -4,10 +4,11 @@ A CLI that makes Kubernetes clusters easy to reach and work with. tug finds
 clusters across providers, keeps their credentials in the OS keychain, and
 points each terminal at one cluster without touching `~/.kube/config`.
 
-> Status: early development. Phase 0 (foundations) and the core of Phase 1
-> (sessions, catalog, credentials, the plugin protocol and host, guardrails)
-> are in place. Cloud providers (EKS, GKE, Akamai LKE, CoreWeave CKS), `doctor`
-> and the daily commands (`logs`, `sh`, `pf`, ...) are next.
+> Status: early development. Phase 0 (foundations) and most of Phase 1 are in
+> place: sessions, catalog, credentials, the plugin protocol and host,
+> guardrails, and the daily commands. Cloud providers (EKS, GKE, Akamai LKE,
+> CoreWeave CKS), `doctor` and the plugin tooling (`install`, `new`, `test`)
+> are next.
 
 ## Quick start
 
@@ -29,9 +30,16 @@ tug import kubeconfig ./lke.yaml  # import a downloaded kubeconfig; its token mo
 tug ls                          # list clusters
 tug connect prod                # fuzzy-pick a cluster for this terminal only
 tug ns payments                 # switch namespace for this session
+tug logs api -f                 # deploy/api-server: every pod, coloured prefixes, new pods too
+tug sh api                      # shell into a pod (bash, else sh)
+tug pf api 8080                 # port-forward by short name
+tug restart api | tug scale api 3 | tug rollback api
 tug get pods                    # anything tug does not know runs as kubectl
 tug unlock 15m                  # allow writes on a read-only (env=prod) session
 ```
+
+Targets are fuzzy: exact beats prefix beats fuzzy, workloads beat bare pods,
+and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 
 Every kubeconfig tug writes authenticates with `tug auth token`, so no secret is
 written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
@@ -53,7 +61,8 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 | Client factory and discovery cache | [internal/kube](internal/kube) |
 | Read-only guard as an `http.RoundTripper` | [internal/guard](internal/guard) |
 | kubectl passthrough | [internal/passthrough](internal/passthrough) |
-| Fuzzy target resolution | [internal/resolve](internal/resolve) |
+| Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
+| Logs, exec, port-forward, rollouts (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | Example plugin | [examples/tug-provider-example](examples/tug-provider-example) |
 
