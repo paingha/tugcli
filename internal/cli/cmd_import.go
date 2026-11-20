@@ -37,7 +37,7 @@ func newImportCmd(a *app) *cobra.Command {
 
   tug import                          scan every provider for accounts on this machine
   tug import kubeconfig ./lke.yaml    import a downloaded kubeconfig; its token moves to the keychain
-  tug import coreweave --account work --set org=acme
+  tug import coreweave --account work --set zone=US-EAST-04A
 
 Secrets that a provider declares are asked for once and kept in the keychain.
 In CI, set TUG_SECRET_<NAME> (for example TUG_SECRET_API_TOKEN) instead.`,
