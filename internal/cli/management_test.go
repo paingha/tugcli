@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,34 @@ var argoClusterSecret, _ = json.Marshal(map[string]any{
 		"config": []byte(`{"bearerToken":"` + argoToken + `","tlsClientConfig":{"insecure":false,"caData":"` + b64([]byte("-----BEGIN CERTIFICATE-----")) + `"}}`),
 	},
 })
+
+// memberProfile is a ClusterProfile on a cluster inventory hub, offering
+// one access provider.
+const memberProfile = `{"apiVersion":"multicluster.x-k8s.io/v1alpha2","kind":"ClusterProfile",
+	"metadata":{"name":"member-1","namespace":"fleet","labels":{"env":"dev"}},
+	"spec":{"displayName":"member-1","clusterManager":{"name":"fleet-manager"}},
+	"status":{"version":{"kubernetes":"v1.34.1"},"accessProviders":[
+		{"name":"token-plugin","cluster":{"server":"https://member-1.example.com"}}]}}`
+
+// writeProvidersFile writes a ClusterProfile providers file that maps the
+// token-plugin access provider to command.
+func writeProvidersFile(t *testing.T, command string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]any{"providers": []any{map[string]any{
+		"name": "token-plugin",
+		"execConfig": map[string]any{
+			"apiVersion": "client.authentication.k8s.io/v1", "command": command, "interactiveMode": "Never",
+		},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "providers.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 // workloadKubeconfig is what a Cluster API control plane provider writes
 // to a <cluster>-kubeconfig Secret.
@@ -96,6 +125,14 @@ func fakeManagementServer(t *testing.T) *httptest.Server {
 			fmt.Fprintf(w, `{"kind":"SecretList","apiVersion":"v1","metadata":{},"items":[%s]}`, argoClusterSecret)
 		case "/api/v1/namespaces/argocd/secrets/cluster-edge-1":
 			_, _ = w.Write(argoClusterSecret)
+		case "/apis/multicluster.x-k8s.io":
+			fmt.Fprint(w, `{"kind":"APIGroup","apiVersion":"v1","name":"multicluster.x-k8s.io","versions":[
+				{"groupVersion":"multicluster.x-k8s.io/v1alpha2","version":"v1alpha2"},
+				{"groupVersion":"multicluster.x-k8s.io/v1alpha1","version":"v1alpha1"}]}`)
+		case "/apis/multicluster.x-k8s.io/v1alpha2/clusterprofiles":
+			fmt.Fprintf(w, `{"kind":"ClusterProfileList","apiVersion":"multicluster.x-k8s.io/v1alpha2","metadata":{},"items":[%s]}`, memberProfile)
+		case "/apis/multicluster.x-k8s.io/v1alpha2/namespaces/fleet/clusterprofiles/member-1":
+			fmt.Fprint(w, memberProfile)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`)
@@ -137,6 +174,28 @@ func TestImportFromManagementCluster(t *testing.T) {
 	}
 	if ec := mustTug(t, "auth", "token", "--cluster", "edge-1", "--refresh"); !strings.Contains(ec, argoToken) {
 		t.Fatalf("auth token for an Argo CD cluster: %s", ec)
+	}
+
+	plugin := "tug-test-token-plugin"
+	if runtime.GOOS != "windows" {
+		plugin = filepath.Join(t.TempDir(), "token-plugin")
+		script := "#!/bin/sh\necho '{\"apiVersion\":\"client.authentication.k8s.io/v1\",\"kind\":\"ExecCredential\",\"status\":{\"token\":\"from-the-plugin\"}}'\n"
+		if err := os.WriteFile(plugin, []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out = mustTug(t, "import", "clusterprofile", "--account", "inventory", "--set", "cluster=payments-staging",
+		"--set", "providerFile="+writeProvidersFile(t, plugin))
+	if !strings.Contains(out, "clusterprofile/inventory: 1 clusters") || !strings.Contains(out, "1 credentials moved") {
+		t.Fatalf("import clusterprofile: %s", out)
+	}
+	if out := mustTug(t, "ls", "-o", "name", "-l", "provider=clusterprofile"); strings.TrimSpace(out) != "member-1" {
+		t.Fatalf("ls -l provider=clusterprofile: %s", out)
+	}
+	if runtime.GOOS != "windows" {
+		if ec := mustTug(t, "auth", "token", "--cluster", "member-1"); !strings.Contains(ec, "from-the-plugin") {
+			t.Fatalf("auth token through the locally configured plugin: %s", ec)
+		}
 	}
 
 	b, err := os.ReadFile(filepath.Join(home, "data", "catalog.yaml"))

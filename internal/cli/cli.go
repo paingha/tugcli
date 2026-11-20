@@ -24,6 +24,7 @@ import (
 	"github.com/paingha/tugcli/internal/builtin/argocd"
 	"github.com/paingha/tugcli/internal/builtin/aws"
 	"github.com/paingha/tugcli/internal/builtin/capi"
+	"github.com/paingha/tugcli/internal/builtin/clusterprofile"
 	"github.com/paingha/tugcli/internal/builtin/google"
 	"github.com/paingha/tugcli/internal/builtin/kubeconfig"
 	"github.com/paingha/tugcli/internal/builtin/local"
@@ -171,6 +172,7 @@ func (a *app) registry() *registry.Registry {
 		google.New(),
 		registry.FromSDK(capi.New(capi.WithClusterConfig(a.managementConfig))),
 		registry.FromSDK(argocd.New(argocd.WithClusterConfig(a.managementConfig))),
+		registry.FromSDK(clusterprofile.New(clusterprofile.WithClusterConfig(a.managementConfig))),
 	}
 	for _, p := range builtins {
 		if err := r.Add(p, registry.KindBuiltin, ""); err != nil {
@@ -203,9 +205,9 @@ func (a *app) registry() *registry.Registry {
 }
 
 // managementConfig returns a client config for a catalog cluster that a
-// built-in provider reads other clusters from, such as a Cluster API
-// management cluster or the cluster Argo CD runs on. The providers only
-// read, so the config refuses writes.
+// built-in provider reads other clusters from: a Cluster API management
+// cluster, the cluster Argo CD runs on or a ClusterProfile hub. The
+// providers only read, so the config refuses writes.
 func (a *app) managementConfig(ctx context.Context, cluster string) (*rest.Config, error) {
 	cat, err := a.loadCatalog()
 	if err != nil {
