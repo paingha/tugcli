@@ -70,6 +70,45 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	if err != nil {
 		return err
 	}
+	readOnly, auth, err := a.connectTo(ctx, s, cl, o)
+	if err != nil {
+		return err
+	}
+	// Connecting by hand ends any pin: leaving the pinned directory must
+	// not undo the user's own choice.
+	if s.State.Pin != nil {
+		if err := s.SetPin(nil); err != nil {
+			return err
+		}
+	}
+
+	c := a.colors()
+	mode := c.Green("read-write")
+	if readOnly {
+		mode = c.Red("read-only") + c.Dim(" (tug unlock 15m to allow writes)")
+	}
+	fmt.Fprintf(a.stdout, "Connected to %s, namespace %s, %s\n", c.Bold(cl.Name), s.State.Namespace, mode)
+	if auth.ProxyURL != "" {
+		fmt.Fprintln(a.stdout, c.Dim("Every client goes through tugd at "+auth.ProxyURL+", so the guard applies to kubectl, helm and k9s too"))
+	}
+	if cl.Stale {
+		fmt.Fprintln(a.stderr, c.Yellow("warning: this cluster was not listed by its provider at the last sync"))
+	}
+
+	// Check credentials now so problems show here, not in the next kubectl.
+	_, broker, err := a.services(cat)
+	if err != nil {
+		return err
+	}
+	if _, err := broker.Resolve(ctx, cl.ID, false); err != nil {
+		fmt.Fprintf(a.stderr, "%s %v\n", c.Yellow("warning: credentials are not ready:"), err)
+	}
+	return nil
+}
+
+// connectTo points session s at cl: read-only by its labels unless o says
+// otherwise, and through tugd when o asks or the cluster has a tunnel.
+func (a *app) connectTo(ctx context.Context, s *session.Session, cl *catalog.Cluster, o connectOptions) (bool, session.AuthCommand, error) {
 	readOnly := guard.ReadOnlyFor(cl.EffectiveLabels(), a.cfg.Guard.ReadOnlyLabels)
 	switch {
 	case o.readOnly:
@@ -86,40 +125,15 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	if o.proxy {
 		c, err := a.ensureDaemon(ctx)
 		if err != nil {
-			return err
+			return false, auth, err
 		}
 		reg, err := c.Register(ctx, s.State.ID)
 		if err != nil {
-			return err
+			return false, auth, err
 		}
 		auth.ProxyURL, auth.ProxyCA = reg.ProxyURL, reg.ProxyCA
 	}
-	if err := s.Connect(cl, o.namespace, readOnly, auth); err != nil {
-		return err
-	}
-
-	c := a.colors()
-	mode := c.Green("read-write")
-	if readOnly {
-		mode = c.Red("read-only") + c.Dim(" (tug unlock 15m to allow writes)")
-	}
-	fmt.Fprintf(a.stdout, "Connected to %s, namespace %s, %s\n", c.Bold(cl.Name), s.State.Namespace, mode)
-	if o.proxy {
-		fmt.Fprintln(a.stdout, c.Dim("Every client goes through tugd at "+auth.ProxyURL+", so the guard applies to kubectl, helm and k9s too"))
-	}
-	if cl.Stale {
-		fmt.Fprintln(a.stderr, c.Yellow("warning: this cluster was not listed by its provider at the last sync"))
-	}
-
-	// Check credentials now so problems show here, not in the next kubectl.
-	_, broker, err := a.services(cat)
-	if err != nil {
-		return err
-	}
-	if _, err := broker.Resolve(ctx, cl.ID, false); err != nil {
-		fmt.Fprintf(a.stderr, "%s %v\n", c.Yellow("warning: credentials are not ready:"), err)
-	}
-	return nil
+	return readOnly, auth, s.Connect(cl, o.namespace, readOnly, auth)
 }
 
 // chooseCluster resolves a target and label filters to one cluster.

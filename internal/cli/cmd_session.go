@@ -95,7 +95,7 @@ func newSessionCmd(a *app) *cobra.Command {
 	}
 	endCmd.Flags().StringVar(&id, "id", "", "session ID (default $TUG_SESSION)")
 
-	cmd.AddCommand(newCmd, endCmd)
+	cmd.AddCommand(newCmd, endCmd, newSessionPinCmd(a))
 	return cmd
 }
 

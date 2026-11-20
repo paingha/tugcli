@@ -1,6 +1,7 @@
 # tug shell integration for fish. Add this to ~/.config/fish/config.fish:
 #   tug init fish | source
 # Set TUG_PROMPT_DISABLE=1 to keep your prompt unchanged and use $TUG_PROMPT yourself.
+# Set TUG_PIN_DISABLE=1 to ignore .tug.yaml pin files.
 set -g _tug_bin {{.Bin}}
 
 if test "$TUG_SESSION_PID" != "$fish_pid"
@@ -35,6 +36,11 @@ function _tug_sync --on-event fish_prompt
     end
 end
 
+# _tug_pin applies the .tug.yaml of the new directory, if it is allowed.
+function _tug_pin --on-variable PWD
+    test "$TUG_PIN_DISABLE" = 1; or $_tug_bin session pin --dir "$PWD"
+end
+
 function _tug_exit --on-event fish_exit
     if test "$TUG_SESSION_PID" = "$fish_pid"
         $_tug_bin session end --id "$TUG_SESSION" >/dev/null 2>&1
@@ -62,4 +68,5 @@ if test "$TUG_PROMPT_DISABLE" != 1; and not functions -q _tug_orig_fish_prompt; 
     end
 end
 
+_tug_pin
 _tug_sync
