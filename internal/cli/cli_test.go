@@ -33,12 +33,19 @@ func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		if r.Method != http.MethodGet {
+		// Self-reviews are POSTs that only ask questions; they are not writes.
+		if r.Method != http.MethodGet && !strings.Contains(r.URL.Path, "/selfsubject") {
 			writes.Add(1)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		p := r.URL.Path
 		switch {
+		case p == "/version":
+			fmt.Fprint(w, `{"major":"1","minor":"35","gitVersion":"v1.35.1"}`)
+		case p == "/apis/authentication.k8s.io/v1/selfsubjectreviews":
+			fmt.Fprint(w, `{"kind":"SelfSubjectReview","apiVersion":"authentication.k8s.io/v1","status":{"userInfo":{"username":"alice"}}}`)
+		case p == "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews":
+			fmt.Fprint(w, `{"kind":"SelfSubjectAccessReview","apiVersion":"authorization.k8s.io/v1","status":{"allowed":true}}`)
 		case p == "/api/v1/namespaces":
 			fmt.Fprint(w, `{"kind":"NamespaceList","apiVersion":"v1","items":[
 				{"metadata":{"name":"default"}},{"metadata":{"name":"payments"}},{"metadata":{"name":"kube-system"}}]}`)
@@ -111,6 +118,9 @@ func isolate(t *testing.T) string {
 	t.Setenv("TUG_SESSION", "")
 	t.Setenv("KUBECONFIG", "")
 	t.Setenv("NO_COLOR", "1")
+	// Never read the real kubectl preferences.
+	t.Setenv("KUBERC", "off")
+	t.Setenv("KUBECTL_KUBERC", "")
 	return home
 }
 

@@ -6,9 +6,9 @@ points each terminal at one cluster without touching `~/.kube/config`.
 
 > Status: early development. Phase 0 (foundations) and most of Phase 1 are in
 > place: sessions, catalog, credentials, the plugin protocol and host,
-> guardrails, the daily commands, the plugin tooling, and the EKS, GKE,
-> Akamai LKE and CoreWeave CKS providers. `doctor` and local clusters (kind,
-> k3d, minikube) as their own provider are next.
+> guardrails, the daily commands, the plugin tooling, `doctor`, and the EKS,
+> GKE, Akamai LKE and CoreWeave CKS providers. Local clusters (kind, k3d,
+> minikube) as their own provider are next.
 
 ## Quick start
 
@@ -30,6 +30,7 @@ tug import kubeconfig ./lke.yaml  # import a downloaded kubeconfig; its token mo
 tug ls                          # list clusters
 tug connect prod                # fuzzy-pick a cluster for this terminal only
 tug ns payments                 # switch namespace for this session
+tug doctor                      # why can't I reach this cluster? DNS, TLS, credentials, clock, RBAC, access lists
 tug logs api -f                 # deploy/api-server: every pod, coloured prefixes, new pods too
 tug sh api                      # shell into a pod (bash, else sh)
 tug pf api 8080                 # port-forward by short name
@@ -80,6 +81,7 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 | Read-only guard as an `http.RoundTripper` | [internal/guard](internal/guard) |
 | kubectl passthrough | [internal/passthrough](internal/passthrough) |
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
+| Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
 | Logs, exec, port-forward, rollouts (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai LKE, CoreWeave CKS) | [plugins](plugins) |

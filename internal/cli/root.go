@@ -37,7 +37,7 @@ Commands tug does not have run as kubectl with this terminal's session:
 	}
 	add("connect",
 		newConnectCmd(a), newDisconnectCmd(a), newStatusCmd(a), newNsCmd(a),
-		newShellCmd(a), newInitCmd(a), newUICmd(a),
+		newShellCmd(a), newInitCmd(a), newUICmd(a), newDoctorCmd(a),
 	)
 	add("interact",
 		newLogsCmd(a), newShCmd(a), newPfCmd(a), newRestartCmd(a), newScaleCmd(a), newRollbackCmd(a), newTopCmd(a),

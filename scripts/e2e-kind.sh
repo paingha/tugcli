@@ -26,6 +26,9 @@ tug import kubeconfig "$work/kind.yaml"
 tug ls
 tug connect "kind-$KIND_CLUSTER"
 
+echo "--- doctor finds nothing wrong with a healthy cluster"
+tug doctor
+
 echo "--- the built-in provider passes the plugin conformance suite"
 tug plugin test kubeconfig --account kind
 
