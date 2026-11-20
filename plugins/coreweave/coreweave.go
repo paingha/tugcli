@@ -125,7 +125,7 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 	}
 	var resp listResponse
 	if err := c.Do(ctx, http.MethodGet, "/v1beta1/cks/clusters", nil, &resp); err != nil {
-		return nil, unauthorizedHint(err)
+		return nil, authError(err)
 	}
 	zone := req.Account.ConfigString(ConfigZone)
 	out := make([]provider.Cluster, 0, len(resp.Items))
@@ -206,13 +206,13 @@ func (p *Provider) Credential(ctx context.Context, req provider.CredentialReques
 		// token to kubectl.
 		var resp getResponse
 		if err := c.Do(ctx, http.MethodGet, "/v1beta1/cks/clusters/"+url.PathEscape(req.ClusterID), nil, &resp); err != nil {
-			return provider.Credential{}, unauthorizedHint(err)
+			return provider.Credential{}, authError(err)
 		}
 		return provider.Token(c.Token, provider.NoExpiry), nil
 	case "oidc":
 		var resp getResponse
 		if err := c.Do(ctx, http.MethodGet, "/v1beta1/cks/clusters/"+url.PathEscape(req.ClusterID), nil, &resp); err != nil {
-			return provider.Credential{}, unauthorizedHint(err)
+			return provider.Credential{}, authError(err)
 		}
 		o := resp.Cluster.OIDC
 		if o == nil || o.IssuerURL == "" || o.ClientID == "" {
@@ -225,12 +225,16 @@ func (p *Provider) Credential(ctx context.Context, req provider.CredentialReques
 	}
 }
 
-// unauthorizedHint adds a hint to authentication failures. CoreWeave can
-// answer 403 for an invalid or revoked token.
-func unauthorizedHint(err error) error {
+// authError classifies authentication failures. CoreWeave answers 403 as
+// well as 401 for a token that is invalid or revoked, and a valid token
+// without access to CKS needs the same fix, a token that works, so both are
+// Unauthenticated with a hint.
+func authError(err error) error {
 	switch provider.CodeOf(err) {
 	case provider.Unauthenticated, provider.PermissionDenied:
-		return provider.AsError(err).WithHint("check the API access token in the CoreWeave Cloud Console; tokens are shown only once when created")
+		pe := *provider.AsError(err)
+		pe.Code = provider.Unauthenticated
+		return pe.WithHint("the API access token is invalid, revoked or without access to CKS; create one in the CoreWeave Cloud Console, which shows it only once")
 	default:
 		return err
 	}

@@ -15,7 +15,10 @@ import (
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
-const goodToken = "CW-token"
+const (
+	goodToken    = "CW-token"
+	revokedToken = "CW-revoked"
+)
 
 const clusterJSON = `{"id":"c-7f3a","name":"train-us-east","zone":"US-EAST-04A","version":"v1.34","status":"RUNNING",
   "public":true,"vpcId":"vpc-1","apiServerEndpoint":"c-7f3a.k8s.us-east-04a.coreweave.com",
@@ -25,6 +28,12 @@ func fakeCKS(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("Authorization") == "Bearer "+revokedToken {
+			// CoreWeave answers 403, not 401, for some tokens it rejects.
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"token revoked"}`)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer "+goodToken {
 			w.WriteHeader(http.StatusUnauthorized)
 			fmt.Fprint(w, `{"message":"invalid API access token"}`)
@@ -137,10 +146,24 @@ func TestCredential(t *testing.T) {
 
 func TestBadToken(t *testing.T) {
 	srv := fakeCKS(t)
-	_, err := New().List(context.Background(), provider.ListRequest{Account: account(srv, nil), Secrets: map[string]string{"api_token": "nope"}})
-	pe := provider.AsError(err)
-	if pe.Code != provider.Unauthenticated || !strings.Contains(pe.Message, "invalid API access token") || pe.Hint == "" {
-		t.Fatalf("got %+v", pe)
+	tests := []struct {
+		name, token, message string
+	}{
+		{"401", "nope", "invalid API access token"},
+		{"403", revokedToken, "token revoked"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bad := map[string]string{"api_token": tt.token}
+			_, err := New().List(context.Background(), provider.ListRequest{Account: account(srv, nil), Secrets: bad})
+			if pe := provider.AsError(err); pe.Code != provider.Unauthenticated || !strings.Contains(pe.Message, tt.message) || pe.Hint == "" {
+				t.Errorf("List = %+v, want Unauthenticated with a hint", pe)
+			}
+			_, err = New().Credential(context.Background(), provider.CredentialRequest{Account: account(srv, nil), Secrets: bad, ClusterID: "c-7f3a"})
+			if pe := provider.AsError(err); pe.Code != provider.Unauthenticated || pe.Hint == "" {
+				t.Errorf("Credential = %+v, want Unauthenticated with a hint", pe)
+			}
+		})
 	}
 }
 
