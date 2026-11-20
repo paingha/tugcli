@@ -315,8 +315,8 @@ func main() { os.Exit(provider.Main(acmeProvider{})) }
 ```
 
 `Info` returns the name, version and declared secrets, which must match
-`plugin.yaml`. Add `Description` for people reading the code; it is not sent
-to tug.
+`plugin.yaml`. `Description` says in a few words what the provider reaches;
+`describe` sends it, and `tug plugin describe` shows it.
 
 `provider.Main` reads the operation from `os.Args`, decodes the request,
 calls your method, writes the response or error, and returns the exit code.
@@ -695,14 +695,15 @@ as `Internal`. `hint` and `retryAfterSeconds` are optional.
 | Other operations | 30 seconds |
 | After a timeout or Ctrl-C | SIGTERM, then SIGKILL after 2 seconds (Windows: killed at once) |
 
-A timed-out call fails as `Unavailable`. Users with slow APIs can raise the
-`list` and `credential` timeouts in tug's `config.yaml`:
+A timed-out call fails as `Unavailable`. Users with slow APIs can change the
+timeout of any operation in tug's `config.yaml`:
 
 ```yaml
 plugins:
   timeouts:
     list: 60s
     credential: 20s
+    rotate: 2m
 ```
 
 ### Versioning
@@ -760,12 +761,13 @@ spec:
 | `spec.secrets` | no | Secrets tug asks for once per account and keeps in the keychain: `name`, `prompt` (what tug asks), and `optional: true` for ones the plugin can do without. The plugin receives these and no others. |
 | `spec.env` | no | Host environment variables passed through to the plugin, such as `AWS_PROFILE`. Everything else is scrubbed. |
 | `spec.network` | no | Hosts the plugin talks to. Shown to users before they install; tug does not enforce it. |
-| `spec.accountConfig` | no | A JSON Schema for the account settings. Documentation for now: tug does not validate `--set` against it. |
-| `spec.minTugVersion` | no | The oldest tug the plugin works with. Accepted, not yet enforced. |
+| `spec.accountConfig` | no | A JSON Schema for the account settings. `tug plugin describe` and `tug plugin install` list its `properties`, and `tug import` warns about `--set` keys that are not among them, unless `additionalProperties` allows others. tug does not check the values. |
+| `spec.minTugVersion` | no | The oldest tug the plugin works with, such as `0.4.0`. A released tug refuses a plugin that needs a newer one when it finds, links or installs it; development builds accept every plugin. |
 
-tug ignores fields it does not know, so a misspelt field (`secret:` for
-`secrets:`) is silently dropped. Check what tug sees with
-`tug plugin describe <name>`.
+tug ignores fields it does not know, so that a manifest written for a newer
+tug still loads. `tug plugin link`, `describe`, `install` and `package` warn
+about them, so a misspelt field (`secret:` for `secrets:`) shows up as
+`spec.secret`. `tug plugin package` leaves unknown fields out of the archive.
 
 Keep the manifest and `Info()` in step: tug takes the name, version,
 capabilities and secrets from the manifest, and the conformance suite checks
@@ -976,11 +978,13 @@ Publish the archive and its sha256 together, for example as a GitHub release
 with the sha256 in the notes. Users need both.
 
 The scaffold's `.github/workflows/release.yml` does this when you push a `v*`
-tag: it runs the tests, installs tug, runs `make package` and attaches the
-archive to a GitHub release. **It cannot work while tugcli is private**: the
-runner can neither `go install github.com/paingha/tugcli/cmd/tug@latest` nor
-follow the `replace` directive to a checkout on your machine. Until tugcli is
-public, release by hand:
+tag: it checks the tag against `metadata.version`, runs the tests, installs
+tug, runs `make package` and attaches the archive to a GitHub release. While
+tugcli is private, the runner needs a repository secret `TUGCLI_TOKEN` with
+read access to `paingha/tugcli`, and `go.mod` must require the SDK by version.
+It cannot follow a `replace` directive to a checkout on your machine, which is
+what `--sdk-replace` writes. Without a token, or with a `replace`, release by
+hand:
 
 ```bash
 make test package
@@ -988,7 +992,8 @@ gh release create v0.1.0 dist/tug-provider-acme_0.1.0.tar.gz --notes "sha256: $(
 ```
 
 The tag does not set the version: the archive name and the installed version
-come from `metadata.version`.
+come from `metadata.version`, and the workflow fails when the tag is not `v`
+followed by that version.
 
 ### Install
 
@@ -1144,8 +1149,9 @@ unknown to every other command, which then reports
 
 **What does tug see?** `tug plugin describe acme` runs `describe` and prints
 the manifest as tug reads it: publisher, capabilities, secrets, environment,
-network hosts, platforms, protocols and the executable it will run. It warns
-when `describe` and the manifest disagree on the name.
+network hosts, platforms, account settings, the description, protocols and
+the executable it will run. It warns when `describe` and the manifest
+disagree on the name, and about manifest fields it does not know.
 
 **What did the plugin say?** `tug --debug <command>` logs each plugin call
 with its operation, duration and error, and every line the plugin wrote to
@@ -1192,4 +1198,4 @@ Use it to check the endpoint, CA and credential your plugin returns.
 | `OIDC login (issuer ...) is not supported yet` | The plugin returned an `oidc` credential; use `delegate` for now. |
 | `<name> is a built-in provider; a plugin may replace it only if plugins.allowOverride in config.yaml lists it` | The plugin uses a built-in provider's name. Pick another name. |
 | Changes to `main.go` do not show up | Rebuild (`make build` or `make link`), then `tug sync` to refresh listed data or `tug auth token --refresh` for credentials. |
-| On Windows, `tug plugin link` cannot find `bin/windows_amd64/tug-provider-acme.exe` | The scaffold's `make build` writes the binary without `.exe`. Build it with `go build -o bin/windows_amd64/tug-provider-acme.exe .` instead. |
+| `plugin acme needs tug v0.5.0 or later and this is v0.4.0` | The plugin's `minTugVersion` is newer than tug. Upgrade tug. |
