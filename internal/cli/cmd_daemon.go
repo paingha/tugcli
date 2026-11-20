@@ -15,6 +15,7 @@ import (
 	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 	"k8s.io/client-go/rest"
 
+	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/daemon"
 	"github.com/paingha/tugcli/internal/kube"
 	"github.com/paingha/tugcli/internal/render"
@@ -169,7 +170,9 @@ func (a *app) ensureDaemon(ctx context.Context) (*daemon.Client, error) {
 	if !errors.Is(err, daemon.ErrNotRunning) {
 		return nil, err
 	}
-	if err := os.MkdirAll(a.paths.Runtime, 0o700); err != nil {
+	// Private before the log is opened: in a directory another user can
+	// write to, tugd.log could be a link to one of this user's files.
+	if err := config.EnsurePrivateDir(a.paths.Runtime); err != nil {
 		return nil, err
 	}
 	logf, err := os.OpenFile(a.daemonLog(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)

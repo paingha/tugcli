@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/paingha/tugcli/internal/config"
 )
 
 // Errors about tugd's state.
@@ -131,7 +133,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	}
 	// Whoever answers on the socket is trusted with the proxy address and
 	// CA, so the socket must be in a directory only this user can use.
-	if err := checkPrivateDir(filepath.Dir(c.sock)); err != nil {
+	if err := config.CheckPrivateDir(filepath.Dir(c.sock)); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("%w: %w", ErrNotRunning, err)
 		}
