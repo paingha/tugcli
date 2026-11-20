@@ -126,6 +126,45 @@ func TestTable(t *testing.T) {
 	}
 }
 
+func TestTree(t *testing.T) {
+	c := Colors{Enabled: true}
+	root := TreeNode{Label: c.Bold("deploy/api"), Detail: c.Green("✓") + " 2/2 ready", Children: []TreeNode{
+		{Label: "svc/api", Detail: "✓ ClusterIP"},
+		{Label: "rs/api-7d9f", Detail: "✓ 2/2 ready", Children: []TreeNode{
+			{Label: "pod/api-7d9f-a", Children: []TreeNode{{Label: "container main", Detail: "✓ running"}}},
+			{Label: "pod/api-7d9f-b", Detail: c.Red("✗") + " Pending"},
+		}},
+	}}
+	var buf bytes.Buffer
+	if err := Tree(&buf, root); err != nil {
+		t.Fatal(err)
+	}
+	want := "" +
+		"\x1b[1mdeploy/api\x1b[0m                  \x1b[32m✓\x1b[0m 2/2 ready\n" +
+		"├── svc/api                 ✓ ClusterIP\n" +
+		"└── rs/api-7d9f             ✓ 2/2 ready\n" +
+		"    ├── pod/api-7d9f-a\n" +
+		"    │   └── container main  ✓ running\n" +
+		"    └── pod/api-7d9f-b      \x1b[1;31m✗\x1b[0m Pending\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("Tree =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestVisibleWidth(t *testing.T) {
+	tests := map[string]int{
+		"":                   0,
+		"pod/a":              5,
+		"├── x":              5,
+		"\x1b[1;31m✗\x1b[0m": 1,
+	}
+	for in, want := range tests {
+		if got := visibleWidth(in); got != want {
+			t.Errorf("visibleWidth(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
 func TestColorsForDisabled(t *testing.T) {
 	file, err := os.Create(filepath.Join(t.TempDir(), "out"))
 	if err != nil {

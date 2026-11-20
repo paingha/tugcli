@@ -24,10 +24,12 @@ const apiServerDeployment = `{"kind":"Deployment","apiVersion":"apps/v1",
 	"spec":{"selector":{"matchLabels":{"app":"api-server"}},"template":{"spec":{"containers":[{"name":"main"}]}}}}`
 
 // fakeAPIServer serves just enough of the Kubernetes API for tug's commands,
-// and only to callers presenting secretToken.
+// and only to callers presenting secretToken. The "shop" namespace holds the
+// typed objects of shopObjects; every other namespace has deploy/api-server.
 func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var writes atomic.Int32
+	shop := newFakeNamespace(t, shopObjects()...)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+secretToken {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -39,6 +41,10 @@ func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		p := r.URL.Path
+		if ns, parts, ok := namespacedParts(p); ok && ns == "shop" {
+			shop.serve(w, r, parts)
+			return
+		}
 		switch {
 		case p == "/version":
 			fmt.Fprint(w, `{"major":"1","minor":"35","gitVersion":"v1.35.1"}`)
@@ -57,6 +63,8 @@ func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 			fmt.Fprint(w, `{"kind":"StatefulSetList","apiVersion":"apps/v1","items":[]}`)
 		case strings.HasSuffix(p, "/daemonsets"):
 			fmt.Fprint(w, `{"kind":"DaemonSetList","apiVersion":"apps/v1","items":[]}`)
+		case strings.HasSuffix(p, "/jobs"):
+			fmt.Fprint(w, `{"kind":"JobList","apiVersion":"batch/v1","items":[]}`)
 		case strings.HasSuffix(p, "/pods"):
 			fmt.Fprint(w, `{"kind":"PodList","apiVersion":"v1","items":[{
 				"metadata":{"name":"api-server-7d9f-x2x4z","labels":{"app":"api-server"},
