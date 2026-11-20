@@ -33,7 +33,9 @@ tug connect prod                # fuzzy-pick a cluster for this terminal only
 tug ns payments                 # switch namespace for this session
 tug doctor                      # why can't I reach this cluster? DNS, TLS, credentials, clock, RBAC, access lists
 tug logs api -f                 # deploy/api-server: every pod, coloured prefixes, new pods too
-tug sh api                      # shell into a pod (bash, else sh)
+tug sh api                      # shell into a pod (bash, else sh; a debug container for distroless images)
+tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
+tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -134,9 +136,11 @@ tug tunnel ls | rm <cluster>
 | `ssh://[user@]host[:port]` | an SSH jump host; keys from ssh-agent, `~/.ssh` or `?identity=`, and the host key must already be in `known_hosts` |
 | `socks5://`, `http://`, `https://` | a proxy that needs no password, since tug keeps no secrets in its catalog |
 | `ssm://<instance>[?region=&profile=]` | an AWS Systems Manager session through a managed instance that can reach the private endpoint; tug speaks Session Manager itself, so it needs only AWS credentials, not the session-manager-plugin |
+| `iap://<instance>?project=&zone=` | Google Cloud IAP TCP forwarding to a VM; needs only Application Default Credentials, not gcloud |
+| `iap://?project=&region=&network=&group=` | IAP to a host in a destination group, such as a private GKE endpoint |
 
 Kubernetes clients honour a proxy for exec, attach and port-forward but not
-a custom dialer, so tug serves SSH and SSM tunnels as a SOCKS5 proxy on a
+a custom dialer, so tug serves SSH, SSM and IAP tunnels as a SOCKS5 proxy on a
 loopback port, guarded by a random username and password that only tug
 knows. `tug doctor` checks a tunnelled cluster through its tunnel.
 
@@ -178,10 +182,10 @@ pins off.
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
 | Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
 | tugd: local API proxy, named port-forwards, control socket | [internal/daemon](internal/daemon) |
-| Tunnels: SSH, proxies, AWS SSM | [internal/tunnel](internal/tunnel) |
+| Tunnels: SSH, proxies, AWS SSM, Google IAP | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
-| Logs, exec, port-forward, rollouts (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |
