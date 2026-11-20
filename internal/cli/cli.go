@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/paingha/tugcli/internal/browser"
+	"github.com/paingha/tugcli/internal/builtin/argocd"
 	"github.com/paingha/tugcli/internal/builtin/aws"
 	"github.com/paingha/tugcli/internal/builtin/capi"
 	"github.com/paingha/tugcli/internal/builtin/google"
@@ -169,6 +170,7 @@ func (a *app) registry() *registry.Registry {
 		aws.New(),
 		google.New(),
 		registry.FromSDK(capi.New(capi.WithClusterConfig(a.managementConfig))),
+		registry.FromSDK(argocd.New(argocd.WithClusterConfig(a.managementConfig))),
 	}
 	for _, p := range builtins {
 		if err := r.Add(p, registry.KindBuiltin, ""); err != nil {
@@ -202,8 +204,8 @@ func (a *app) registry() *registry.Registry {
 
 // managementConfig returns a client config for a catalog cluster that a
 // built-in provider reads other clusters from, such as a Cluster API
-// management cluster. The providers only read, so the config refuses
-// writes.
+// management cluster or the cluster Argo CD runs on. The providers only
+// read, so the config refuses writes.
 func (a *app) managementConfig(ctx context.Context, cluster string) (*rest.Config, error) {
 	cat, err := a.loadCatalog()
 	if err != nil {

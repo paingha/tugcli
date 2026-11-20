@@ -40,6 +40,7 @@ func TestBuiltinProvidersConform(t *testing.T) {
 	}{
 		{"kubeconfig", provider.Account{ID: "downloaded", Config: map[string]any{"path": kubeconfigPath}}},
 		{"capi", provider.Account{ID: "fleet", Config: map[string]any{"cluster": "payments-staging"}}},
+		{"argocd", provider.Account{ID: "gitops", Config: map[string]any{"cluster": "payments-staging"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

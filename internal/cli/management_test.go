@@ -21,6 +21,22 @@ import (
 // describes.
 const workloadToken = "w0rkl0ad-token-from-management-cluster"
 
+// argoToken is the bearer token in an Argo CD cluster Secret.
+const argoToken = "4rgo-token-from-a-cluster-secret"
+
+// argoClusterSecret is a cluster Secret as Argo CD's declarative setup
+// describes it.
+var argoClusterSecret, _ = json.Marshal(map[string]any{
+	"kind": "Secret", "apiVersion": "v1", "type": "Opaque",
+	"metadata": map[string]any{"name": "cluster-edge-1", "namespace": "argocd",
+		"labels": map[string]string{"argocd.argoproj.io/secret-type": "cluster", "env": "dev"}},
+	"data": map[string][]byte{
+		"name":   []byte("edge-1"),
+		"server": []byte("https://edge-1.example.com"),
+		"config": []byte(`{"bearerToken":"` + argoToken + `","tlsClientConfig":{"insecure":false,"caData":"` + b64([]byte("-----BEGIN CERTIFICATE-----")) + `"}}`),
+	},
+})
+
 // workloadKubeconfig is what a Cluster API control plane provider writes
 // to a <cluster>-kubeconfig Secret.
 var workloadKubeconfig = `apiVersion: v1
@@ -72,6 +88,14 @@ func fakeManagementServer(t *testing.T) *httptest.Server {
 				"data":     map[string][]byte{"value": []byte(workloadKubeconfig)},
 			})
 			_, _ = w.Write(secret)
+		case "/api/v1/namespaces/argocd/secrets":
+			if r.URL.Query().Get("labelSelector") != "argocd.argoproj.io/secret-type=cluster" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			fmt.Fprintf(w, `{"kind":"SecretList","apiVersion":"v1","metadata":{},"items":[%s]}`, argoClusterSecret)
+		case "/api/v1/namespaces/argocd/secrets/cluster-edge-1":
+			_, _ = w.Write(argoClusterSecret)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`)
@@ -100,15 +124,29 @@ func TestImportFromManagementCluster(t *testing.T) {
 	if out := mustTug(t, "ls", "-o", "name", "-l", "provider=capi"); strings.TrimSpace(out) != "workload-a" {
 		t.Fatalf("ls -l provider=capi: %s", out)
 	}
+	if ec := mustTug(t, "auth", "token", "--cluster", "workload-a", "--refresh"); !strings.Contains(ec, workloadToken) {
+		t.Fatalf("auth token for a Cluster API cluster: %s", ec)
+	}
+
+	out = mustTug(t, "import", "argocd", "--account", "gitops", "--set", "cluster=payments-staging")
+	if !strings.Contains(out, "argocd/gitops: 1 clusters") || !strings.Contains(out, "1 credentials moved") {
+		t.Fatalf("import argocd: %s", out)
+	}
+	if out := mustTug(t, "ls", "-o", "name", "-l", "provider=argocd"); strings.TrimSpace(out) != "edge-1" {
+		t.Fatalf("ls -l provider=argocd: %s", out)
+	}
+	if ec := mustTug(t, "auth", "token", "--cluster", "edge-1", "--refresh"); !strings.Contains(ec, argoToken) {
+		t.Fatalf("auth token for an Argo CD cluster: %s", ec)
+	}
+
 	b, err := os.ReadFile(filepath.Join(home, "data", "catalog.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), workloadToken) {
-		t.Fatal("the catalog contains the workload cluster's token")
-	}
-	if ec := mustTug(t, "auth", "token", "--cluster", "workload-a", "--refresh"); !strings.Contains(ec, workloadToken) {
-		t.Fatalf("auth token for a Cluster API cluster: %s", ec)
+	for _, secret := range []string{workloadToken, argoToken} {
+		if strings.Contains(string(b), secret) {
+			t.Fatalf("the catalog contains %s", secret)
+		}
 	}
 
 	r := tug(t, "import", "capi", "--account", "lost", "--set", "cluster=nowhere")
