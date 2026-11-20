@@ -1,0 +1,26 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: nebius
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/nebius
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  # The plugin drives the nebius CLI, which Nebius ships for macOS and Linux.
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-nebius}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-nebius}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-nebius}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-nebius}
+  # The CLI profile holds the user or service account credentials.
+  secrets: []
+  env: [NEBIUS_PROFILE]
+  # Hosts the nebius CLI calls on the plugin's behalf.
+  network: [api.nebius.cloud, mk8s.api.nebius.cloud, tokens.iam.api.nebius.cloud, auth.nebius.com]
+  accountConfig:
+    type: object
+    properties:
+      project: {type: string, description: "ID of the project to list clusters in (default: the CLI profile's parent-id)"}
+      profile: {type: string, description: "nebius CLI profile to use (default: NEBIUS_PROFILE or the active profile)"}
