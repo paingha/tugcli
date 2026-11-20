@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -161,5 +162,25 @@ func TestCancelWhileReadingRequest(t *testing.T) {
 	}
 	if _, err := DecodeList(out.Bytes()); CodeOf(err) != Unavailable {
 		t.Fatalf("want Unavailable, got %v", err)
+	}
+}
+
+func TestStatusError(t *testing.T) {
+	h := http.Header{}
+	h.Set("Retry-After", "30")
+	tests := []struct {
+		status int
+		want   Code
+	}{
+		{401, Unauthenticated}, {403, PermissionDenied}, {404, NotFound}, {429, RateLimited},
+		{500, Unavailable}, {503, Unavailable}, {408, Unavailable}, {400, InvalidConfig}, {422, InvalidConfig}, {418, Internal},
+	}
+	for _, tt := range tests {
+		if got := StatusError(tt.status, "", h); got.Code != tt.want || got.Message == "" {
+			t.Errorf("StatusError(%d) = %+v, want %s", tt.status, got, tt.want)
+		}
+	}
+	if got := StatusError(429, "slow down", h); got.RetryAfter() != 30*time.Second {
+		t.Fatalf("retry after = %s", got.RetryAfter())
 	}
 }
