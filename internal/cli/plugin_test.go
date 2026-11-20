@@ -31,20 +31,39 @@ func TestBuiltinProvidersConform(t *testing.T) {
 	}
 	srv, _ := fakeAPIServer(t)
 	kubeconfigPath := writeKubeconfig(t, srv)
+	// The management cluster providers read from a cluster in the catalog.
+	importManagementCluster(t)
 
-	r := conformance.Run(context.Background(), conformance.Target{
-		Command: bin,
-		Args:    []string{"provider-exec", "kubeconfig"},
-		Env:     os.Environ(),
-	}, conformance.Options{
-		Name:    "kubeconfig",
-		Account: provider.Account{ID: "downloaded", Config: map[string]any{"path": kubeconfigPath}},
-	})
-	for _, x := range r.Results {
-		t.Logf("%-4s %-40s %s", x.Status, x.Name, x.Detail)
+	tests := []struct {
+		name    string
+		account provider.Account
+	}{
+		{"kubeconfig", provider.Account{ID: "downloaded", Config: map[string]any{"path": kubeconfigPath}}},
+		{"capi", provider.Account{ID: "fleet", Config: map[string]any{"cluster": "payments-staging"}}},
+		{"argocd", provider.Account{ID: "gitops", Config: map[string]any{"cluster": "payments-staging"}}},
+		{"clusterprofile", provider.Account{ID: "inventory", Config: map[string]any{
+			"cluster": "payments-staging", "providerFile": writeProvidersFile(t, "tug-test-token-plugin"),
+		}}},
 	}
-	if r.Failed() {
-		t.Fatal("the kubeconfig provider does not conform")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := conformance.Run(context.Background(), conformance.Target{
+				Command: bin,
+				Args:    []string{"provider-exec", tt.name},
+				Env:     os.Environ(),
+			}, conformance.Options{Name: tt.name, Account: tt.account})
+			for _, x := range r.Results {
+				t.Logf("%-4s %-40s %s", x.Status, x.Name, x.Detail)
+			}
+			if r.Failed() {
+				t.Fatalf("the %s provider does not conform", tt.name)
+			}
+			for _, x := range r.Results {
+				if x.Name == "credential is valid and unexpired" && x.Status != conformance.Pass {
+					t.Fatalf("%s: %s %s", x.Name, x.Status, x.Detail)
+				}
+			}
+		})
 	}
 }
 
