@@ -52,11 +52,14 @@ type Config struct {
 	// ProxyAddr is the proxy's listen address; by default a loopback port,
 	// reusing the previous one when it is free.
 	ProxyAddr string
-	// IdleTimeout ends tugd once no live session has used it for this long.
+	// IdleTimeout ends tugd once no live session has used it for this long
+	// and no named port-forward is running.
 	IdleTimeout time.Duration
-	Version     string
-	Now         func() time.Time
-	Log         *slog.Logger
+	// Forward runs named port-forwards; without it tugd refuses them.
+	Forward ForwardFunc
+	Version string
+	Now     func() time.Time
+	Log     *slog.Logger
 }
 
 // Server is a running tugd.
@@ -67,6 +70,7 @@ type Server struct {
 	tokens     map[string]string // session ID to its proxy token
 	upstreams  map[string]*upstream
 	building   map[string]*sync.Mutex // per cluster, held while its upstream is built
+	forwards   map[string]*forwardRunner
 	proxyURL   string
 	proxyCA    []byte
 	lastActive time.Time
@@ -92,6 +96,7 @@ func New(cfg Config) *Server {
 		tokens:    map[string]string{},
 		upstreams: map[string]*upstream{},
 		building:  map[string]*sync.Mutex{},
+		forwards:  map[string]*forwardRunner{},
 		shutdown:  make(chan struct{}),
 	}
 }
@@ -223,7 +228,7 @@ func (s *Server) idle() bool {
 			delete(s.tokens, id)
 		}
 	}
-	return len(s.tokens) == 0 && s.cfg.Now().Sub(s.lastActive) > s.cfg.IdleTimeout
+	return len(s.tokens) == 0 && len(s.forwards) == 0 && s.cfg.Now().Sub(s.lastActive) > s.cfg.IdleTimeout
 }
 
 // Run listens on the control socket and the proxy address and serves until
@@ -322,6 +327,7 @@ loop:
 			break loop
 		}
 	}
+	s.stopForwards()
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = ctlSrv.Shutdown(sctx)

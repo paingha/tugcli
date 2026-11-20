@@ -283,14 +283,20 @@ func (a *app) exec(ctx context.Context, env *opsEnv, pod, container string, comm
 }
 
 func newPfCmd(a *app) *cobra.Command {
-	var namespace string
+	var namespace, name string
 	var addresses []string
 	cmd := &cobra.Command{
 		Use:   "pf <target> [[local:]port...]",
 		Short: "Port-forward to a workload by short name",
+		Long: `Port-forward to a running pod of a workload until Ctrl-C. With --name, tugd
+runs the forward in the background instead, keeps the same local ports, and
+starts it again on a new pod when the old one goes away. tug pf ls lists
+named forwards and tug pf stop ends them; a workload called ls or stop is
+deploy/ls or deploy/stop.`,
 		Example: `  tug pf api 8080          # localhost:8080 -> container port 8080
   tug pf api 9000:http     # localhost:9000 -> the port named http
-  tug pf db                # every declared port to the same local port`,
+  tug pf db                # every declared port to the same local port
+  tug pf db 5432 --name db # in the background, through tugd`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -310,6 +316,9 @@ func newPfCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if name != "" {
+				return a.startNamedForward(ctx, env, t, name, args[1:], addresses)
+			}
 			fmt.Fprintf(a.stderr, "%s\n", a.colors().Dim(fmt.Sprintf("%s via pod/%s; Ctrl-C to stop", t, pod.Name)))
 			err = ops.PortForward(ctx, env.cfg, env.cs, ops.ForwardOptions{
 				Namespace: env.namespace,
@@ -327,6 +336,8 @@ func newPfCmd(a *app) *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace (default: the session's)")
 	cmd.Flags().StringSliceVar(&addresses, "address", []string{"localhost"}, "addresses to listen on")
+	cmd.Flags().StringVar(&name, "name", "", "run in the background through tugd under this name, reconnecting when the pod goes away")
+	cmd.AddCommand(newPfLsCmd(a), newPfStopCmd(a))
 	return cmd
 }
 

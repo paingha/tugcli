@@ -125,3 +125,14 @@ func TestTunnelThroughTugd(t *testing.T) {
 		t.Fatalf("the jump host opened %v; want the API server %s", dials, api)
 	}
 }
+
+func TestPfLsAndStopWithoutTugd(t *testing.T) {
+	isolate(t)
+	if out := mustTug(t, "pf", "ls", "-o", "json"); strings.TrimSpace(out) != "[]" {
+		t.Fatalf("pf ls without tugd: %q", out)
+	}
+	if r := tug(t, "pf", "stop"); r.code == 0 || !strings.Contains(r.stderr, "--all") {
+		t.Fatalf("pf stop with nothing named: %+v", r)
+	}
+	mustTug(t, "pf", "stop", "--all") // nothing to stop is not an error
+}

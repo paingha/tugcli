@@ -28,12 +28,15 @@ func newDaemonCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Run tugd, the background process behind the local API proxy",
-		Long: `tugd owns what must outlive a single command. Today that is the local API
-proxy: sessions connected with --proxy send every client (kubectl, helm, k9s)
-through it, so a read-only session refuses writes from all of them.
+		Long: `tugd owns what must outlive a single command:
+  - the local API proxy: sessions connected with --proxy send every client
+    (kubectl, helm, k9s) through it, so a read-only session refuses writes
+    from all of them;
+  - tunnels to private clusters (tug tunnel), which it keeps open;
+  - named port-forwards (tug pf --name), which it restarts on new pods.
 
 tug starts tugd when a session needs it, and tugd stops after 30 minutes
-without a live session.`,
+without a live session or a named port-forward.`,
 	}
 	cmd.AddCommand(newDaemonRunCmd(a), newDaemonStartCmd(a), newDaemonStopCmd(a), newDaemonStatusCmd(a))
 	return cmd
@@ -50,6 +53,7 @@ func newDaemonRunCmd(a *app) *cobra.Command {
 				RuntimeDir: a.paths.Runtime,
 				Sessions:   a.sessions(),
 				Upstream:   a.daemonUpstream,
+				Forward:    a.daemonForward,
 				Version:    version.String(),
 				Now:        a.now,
 				Log:        a.log,

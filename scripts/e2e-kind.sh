@@ -102,6 +102,23 @@ grep -q "Welcome to nginx" "$work/page-proxy.html" || { echo "FAIL: port-forward
 timeout 5 kubectl logs -f deploy/web --tail 1 > "$work/logs-proxy.txt" || true
 test -s "$work/logs-proxy.txt" || { echo "FAIL: logs -f through tugd"; exit 1; }
 
+echo "--- named port-forwards survive a pod restart"
+tug pf web 18083:80 --name web
+for _ in $(seq 1 30); do
+  curl -fsS http://localhost:18083 > "$work/named1.html" 2>/dev/null && break
+  sleep 1
+done
+grep -q "Welcome to nginx" "$work/named1.html" || { echo "FAIL: named port-forward"; tug pf ls; exit 1; }
+kubectl delete pod -l app=web --wait=false
+kubectl rollout status deploy/web --timeout=180s
+for _ in $(seq 1 60); do
+  curl -fsS http://localhost:18083 > "$work/named2.html" 2>/dev/null && break
+  sleep 1
+done
+grep -q "Welcome to nginx" "$work/named2.html" || { echo "FAIL: named port-forward after a pod restart"; tug pf ls; exit 1; }
+tug pf ls | grep -q "^web " || { echo "FAIL: pf ls"; exit 1; }
+tug pf stop web
+
 echo "--- tugd refuses kubectl writes on a read-only session"
 tug connect "kind-$KIND_CLUSTER" --proxy --read-only
 if kubectl delete ns default --wait=false 2> "$work/delete-proxy.err"; then
