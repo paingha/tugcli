@@ -58,6 +58,7 @@ func TestParse(t *testing.T) {
 		{"ssh://admin@bastion.example.com", ""},
 		{"socks5://127.0.0.1:1080", ""},
 		{"http://proxy.corp:3128", ""},
+		{"ssm://i-0123456789abcdef0?region=eu-west-1", ""},
 		{"ftp://example.com", "scheme must be one of"},
 		{"ssh://", "name the host"},
 		{"::", "missing protocol scheme"},
