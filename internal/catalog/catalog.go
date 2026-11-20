@@ -246,6 +246,13 @@ func (c *Catalog) Merge(src Source, listed []provider.Cluster, now time.Time) Me
 			next.Name = existing.Name
 			next.UserLabels = existing.UserLabels
 			next.FirstSeen = existing.FirstSeen
+			// A listing without a CA for an unchanged endpoint means the
+			// provider could not fetch it this time, for example a kubeconfig
+			// that was briefly unavailable. Keep the one already trusted
+			// rather than breaking TLS verification.
+			if len(next.CAData) == 0 && next.Server == existing.Server {
+				next.CAData = existing.CAData
+			}
 			*existing = next
 			res.Updated = append(res.Updated, next.Name)
 			continue

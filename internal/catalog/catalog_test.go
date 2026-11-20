@@ -116,6 +116,35 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
+func TestMergeKeepsCAWhenAListingOmitsIt(t *testing.T) {
+	src := Source{Provider: "akamai", Account: "work"}
+	c := &Catalog{}
+	t0 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	c.Merge(src, []provider.Cluster{{ID: "101", Name: "a", Endpoints: provider.Endpoints{Public: "https://a:443"}, CAData: []byte("CA")}}, t0)
+
+	tests := []struct {
+		name   string
+		listed provider.Cluster
+		wantCA string
+	}{
+		{"CA missing, same server", provider.Cluster{ID: "101", Name: "a", Endpoints: provider.Endpoints{Public: "https://a:443"}}, "CA"},
+		{"new CA", provider.Cluster{ID: "101", Name: "a", Endpoints: provider.Endpoints{Public: "https://a:443"}, CAData: []byte("CA2")}, "CA2"},
+		{"CA missing, server moved", provider.Cluster{ID: "101", Name: "a", Endpoints: provider.Endpoints{Public: "https://b:443"}}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c.Merge(src, []provider.Cluster{tt.listed}, t0.Add(time.Hour))
+			got, err := c.Get("a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got.CAData) != tt.wantCA {
+				t.Fatalf("CAData = %q, want %q", got.CAData, tt.wantCA)
+			}
+		})
+	}
+}
+
 func TestLoad(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, content string) string {

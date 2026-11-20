@@ -1,0 +1,27 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: coreweave
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/coreweave
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-coreweave}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-coreweave}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-coreweave}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-coreweave}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-coreweave.exe}
+  secrets:
+  - {name: api_token, prompt: "CoreWeave API access token"}
+  env: []
+  network: [api.coreweave.com]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "API endpoint override (https)"}
+      auth: {type: string, enum: [managed, oidc], description: "managed (default) uses the API token; oidc uses the cluster's OIDC issuer"}
+      zone: {type: string, description: "only list clusters in this availability zone"}
+

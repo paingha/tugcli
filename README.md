@@ -6,8 +6,9 @@ points each terminal at one cluster without touching `~/.kube/config`.
 
 > Status: early development. Phase 0 (foundations) and most of Phase 1 are in
 > place: sessions, catalog, credentials, the plugin protocol and host,
-> guardrails, the daily commands and the plugin tooling. Cloud providers (EKS,
-> GKE, Akamai LKE, CoreWeave CKS) and `doctor` are next.
+> guardrails, the daily commands, the plugin tooling, and the EKS, GKE,
+> Akamai LKE and CoreWeave CKS providers. `doctor` and local clusters (kind,
+> k3d, minikube) as their own provider are next.
 
 ## Quick start
 
@@ -40,6 +41,23 @@ tug unlock 15m                  # allow writes on a read-only (env=prod) session
 Targets are fuzzy: exact beats prefix beats fuzzy, workloads beat bare pods,
 and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 
+## Providers
+
+| Provider | Ships as | Accounts | Credentials |
+| --- | --- | --- | --- |
+| `kubeconfig` | built-in | `~/.kube/config`, `$KUBECONFIG`, files you name | as in the file; embedded tokens and keys move to the keychain |
+| `aws` (EKS) | built-in | `~/.aws` profiles; `--set regions=us-east-1,eu-west-1` | short-lived token from a presigned STS request; no AWS CLI needed |
+| `google` (GKE) | built-in | gcloud configurations (one account per project) | short-lived OAuth token from Application Default Credentials, else `gke-gcloud-auth-plugin` |
+| `akamai` (LKE) | plugin, [plugins/akamai](plugins/akamai) | personal access token with Kubernetes read/write | the kubeconfig's token, kept in the keychain; `rotate` regenerates it |
+| `coreweave` (CKS) | plugin, [plugins/coreweave](plugins/coreweave) | API access token | the API token (managed auth), or the cluster's OIDC issuer with `--set auth=oidc` |
+
+```bash
+tug import aws --account work --set regions=eu-west-1
+tug import google --account my-project
+make plugins && tug plugin link plugins/akamai
+tug import akamai --account work          # asks for the token once, keeps it in the keychain
+```
+
 Every kubeconfig tug writes authenticates with `tug auth token`, so no secret is
 written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 
@@ -64,6 +82,7 @@ written to disk. kubectl, helm and k9s follow the session through `KUBECONFIG`.
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
 | Logs, exec, port-forward, rollouts (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
+| First-party plugins (Akamai LKE, CoreWeave CKS) | [plugins](plugins) |
 | Example plugin | [examples/tug-provider-example](examples/tug-provider-example) |
 
 ## Provider plugins

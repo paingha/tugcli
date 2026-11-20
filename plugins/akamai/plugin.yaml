@@ -1,0 +1,25 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: akamai
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/akamai
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, rotate, checkAccess]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-akamai}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-akamai}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-akamai}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-akamai}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-akamai.exe}
+  secrets:
+  - {name: api_token, prompt: "Akamai Cloud personal access token (Kubernetes read/write)"}
+  env: []
+  network: [api.linode.com]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "API endpoint override (https)"}
+

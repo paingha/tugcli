@@ -24,6 +24,27 @@ build: ## Build bin/tug
 example-plugin: ## Build the example provider plugin
 	go build -o examples/tug-provider-example/bin/tug-provider-example ./examples/tug-provider-example
 
+PLUGINS        := akamai coreweave
+PLUGIN_HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
+PLUGIN_EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
+PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64
+
+.PHONY: plugins
+plugins: ## Build the first-party plugins for this machine
+	@for p in $(PLUGINS); do \
+		CGO_ENABLED=0 go build -trimpath -o plugins/$$p/bin/$(PLUGIN_HOST)/tug-provider-$$p$(PLUGIN_EXT) ./plugins/$$p/cmd/tug-provider-$$p || exit 1; \
+	done
+
+.PHONY: plugins-dist
+plugins-dist: build ## Build the plugins for every platform and archive them in dist/plugins
+	@for p in $(PLUGINS); do \
+		for t in $(PLUGIN_TARGETS); do \
+			os=$${t%_*}; arch=$${t#*_}; ext=; [ $$os = windows ] && ext=.exe; \
+			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -o plugins/$$p/bin/$$t/tug-provider-$$p$$ext ./plugins/$$p/cmd/tug-provider-$$p || exit 1; \
+		done; \
+		$(BIN) plugin package plugins/$$p -o dist/plugins || exit 1; \
+	done
+
 .PHONY: test
 test: ## Run unit and in-process end-to-end tests
 	go test -race ./...

@@ -16,6 +16,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/builtin/aws"
+	"github.com/paingha/tugcli/internal/builtin/google"
 	"github.com/paingha/tugcli/internal/builtin/kubeconfig"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/config"
@@ -143,9 +145,15 @@ func (a *app) registry() *registry.Registry {
 		return a.reg
 	}
 	r := registry.New(a.cfg.Plugins.AllowOverride)
-	kc := kubeconfig.New(kubeconfig.WithSkipDirs(a.paths.Runtime))
-	if err := r.Add(kc, registry.KindBuiltin, ""); err != nil {
-		a.log.Warn("registering built-in provider", "err", err)
+	builtins := []registry.Provider{
+		kubeconfig.New(kubeconfig.WithSkipDirs(a.paths.Runtime)),
+		aws.New(),
+		google.New(),
+	}
+	for _, p := range builtins {
+		if err := r.Add(p, registry.KindBuiltin, ""); err != nil {
+			a.log.Warn("registering built-in provider", "err", err)
+		}
 	}
 	plugins, problems := plugin.NewDirs(a.paths.Data).Discover()
 	a.problems = problems
