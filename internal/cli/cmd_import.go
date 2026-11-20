@@ -134,7 +134,7 @@ func (a *app) importSources(ctx context.Context, cat *catalog.Catalog, args []st
 
 // discoverSources asks every provider that can list local accounts.
 func (a *app) discoverSources(ctx context.Context, cat *catalog.Catalog, yes bool) ([]catalog.Source, error) {
-	var found []catalog.Source
+	var found []foundSource
 	for _, name := range a.registry().Names() {
 		p, _ := a.registry().Get(name)
 		if !p.Info().Capabilities.Has(provider.CapAccounts) {
@@ -150,37 +150,47 @@ func (a *app) discoverSources(ctx context.Context, cat *catalog.Catalog, yes boo
 	return a.chooseSources(cat, found, yes)
 }
 
-func (a *app) providerAccounts(ctx context.Context, p registry.Provider) ([]catalog.Source, error) {
+// foundSource is an account a provider found, with its description for
+// the picker; the catalog keeps only the source.
+type foundSource struct {
+	catalog.Source
+	Description string
+}
+
+func (a *app) providerAccounts(ctx context.Context, p registry.Provider) ([]foundSource, error) {
 	accts, err := p.Accounts(ctx)
 	if err != nil {
 		return nil, err
 	}
 	name := p.Info().Name
-	out := make([]catalog.Source, 0, len(accts))
+	out := make([]foundSource, 0, len(accts))
 	for _, acct := range accts {
-		out = append(out, catalog.Source{Provider: name, Account: acct.ID, Config: acct.Config})
+		out = append(out, foundSource{Source: catalog.Source{Provider: name, Account: acct.ID, Config: acct.Config}, Description: acct.Description})
 	}
 	return out, nil
 }
 
 // chooseSources drops sources already in the catalog and asks which of the
 // rest to import.
-func (a *app) chooseSources(cat *catalog.Catalog, found []catalog.Source, yes bool) ([]catalog.Source, error) {
+func (a *app) chooseSources(cat *catalog.Catalog, found []foundSource, yes bool) ([]catalog.Source, error) {
 	var fresh []catalog.Source
+	labels := make([]string, 0, len(found))
 	for _, s := range found {
-		if _, ok := cat.Source(s.Provider, s.Account); !ok {
-			fresh = append(fresh, s)
+		if _, ok := cat.Source(s.Provider, s.Account); ok {
+			continue
 		}
+		fresh = append(fresh, s.Source)
+		label := s.Key()
+		switch path, ok := s.Config[kubeconfig.ConfigPath].(string); {
+		case ok:
+			label += "  " + path
+		case s.Description != "" && s.Description != s.Account:
+			label += "  " + s.Description
+		}
+		labels = append(labels, label)
 	}
 	if len(fresh) == 0 || yes {
 		return fresh, nil
-	}
-	labels := make([]string, len(fresh))
-	for i, s := range fresh {
-		labels[i] = s.Key()
-		if path, ok := s.Config[kubeconfig.ConfigPath].(string); ok {
-			labels[i] += "  " + path
-		}
 	}
 	picked, err := a.pickMany("Found these accounts:", labels)
 	if errors.Is(err, errNotInteractive) {

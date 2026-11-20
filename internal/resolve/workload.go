@@ -21,6 +21,7 @@ const (
 	KindDeployment  Kind = "deployment"
 	KindStatefulSet Kind = "statefulset"
 	KindDaemonSet   Kind = "daemonset"
+	KindJob         Kind = "job"
 	KindPod         Kind = "pod"
 )
 
@@ -39,7 +40,7 @@ func (k Kind) Short() string {
 }
 
 // ParseKind accepts kubectl's names for a kind: deploy, deployment,
-// deployments, sts, ds, po, pod and so on.
+// deployments, sts, ds, job, po, pod and so on.
 func ParseKind(s string) (Kind, error) {
 	switch strings.ToLower(s) {
 	case "deploy", "deployment", "deployments":
@@ -48,10 +49,12 @@ func ParseKind(s string) (Kind, error) {
 		return KindStatefulSet, nil
 	case "ds", "daemonset", "daemonsets":
 		return KindDaemonSet, nil
+	case "job", "jobs":
+		return KindJob, nil
 	case "po", "pod", "pods":
 		return KindPod, nil
 	default:
-		return "", fmt.Errorf("unsupported kind %q (want deploy, sts, ds or pod)", s)
+		return "", fmt.Errorf("unsupported kind %q (want deploy, sts, ds, job or pod)", s)
 	}
 }
 
@@ -95,9 +98,10 @@ func ParseQuery(s string) (Query, error) {
 }
 
 // Workloads lists the targets in a namespace. When kind is "", it returns
-// deployments, statefulsets, daemonsets and the pods that no controller owns
-// (pods of a listed workload are reached through the workload). When kind is
-// KindPod, every pod is returned.
+// deployments, statefulsets, daemonsets, jobs and the pods that no controller
+// owns (pods of a listed workload are reached through the workload, except a
+// Job's, which stay reachable by name). When kind is KindPod, every pod is
+// returned.
 func Workloads(ctx context.Context, cs kubernetes.Interface, ns string, kind Kind) ([]Target, error) {
 	var out []Target
 	want := func(k Kind) bool { return kind == "" || kind == k }
@@ -141,6 +145,22 @@ func Workloads(ctx context.Context, cs kubernetes.Interface, ns string, kind Kin
 			out = append(out, Target{Kind: KindDaemonSet, Name: d.Name, Namespace: ns, Selector: sel})
 		}
 	}
+	if want(KindJob) {
+		list, err := cs.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		for _, j := range list.Items {
+			if j.Spec.Selector == nil {
+				continue
+			}
+			sel, err := metav1.LabelSelectorAsSelector(j.Spec.Selector)
+			if err != nil {
+				continue
+			}
+			out = append(out, Target{Kind: KindJob, Name: j.Name, Namespace: ns, Selector: sel})
+		}
+	}
 	if want(KindPod) {
 		list, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -167,7 +187,7 @@ func ownedByWorkload(p *corev1.Pod) bool {
 	case "ReplicaSet", "StatefulSet", "DaemonSet":
 		return true
 	default:
-		return false // Jobs and others stay reachable by name
+		return false // a Job's pods and others stay reachable by name
 	}
 }
 

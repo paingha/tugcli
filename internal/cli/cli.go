@@ -12,27 +12,37 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/rest"
 
 	"github.com/paingha/tugcli/internal/browser"
+	"github.com/paingha/tugcli/internal/builtin/argocd"
 	"github.com/paingha/tugcli/internal/builtin/aws"
+	"github.com/paingha/tugcli/internal/builtin/azure"
+	"github.com/paingha/tugcli/internal/builtin/capi"
+	"github.com/paingha/tugcli/internal/builtin/clusterprofile"
 	"github.com/paingha/tugcli/internal/builtin/google"
 	"github.com/paingha/tugcli/internal/builtin/kubeconfig"
 	"github.com/paingha/tugcli/internal/builtin/local"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/credentials"
+	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/importer"
+	"github.com/paingha/tugcli/internal/kube"
 	"github.com/paingha/tugcli/internal/oidc"
 	"github.com/paingha/tugcli/internal/passthrough"
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/session"
+	"github.com/paingha/tugcli/internal/tunnel"
+	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -53,6 +63,8 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		stderr: stderr,
 		now:    time.Now,
 	}
+	defer a.closeTunnels()
+	defer a.closePlugins()
 	root := newRootCmd(a)
 	root.SetArgs(args)
 	root.SetIn(stdin)
@@ -90,10 +102,11 @@ type app struct {
 
 	// mu guards the pieces below, which load on first use. tugd asks for
 	// them from concurrent proxy requests.
-	mu       sync.Mutex
-	store    credentials.Store
-	reg      *registry.Registry
-	problems []plugin.Problem
+	mu         sync.Mutex
+	tunnelPool *tunnel.Pool
+	store      credentials.Store
+	reg        *registry.Registry
+	problems   []plugin.Problem
 }
 
 // exitError carries a specific exit code without printing anything more.
@@ -161,7 +174,11 @@ func (a *app) registry() *registry.Registry {
 		kubeconfig.New(kubeconfig.WithSkipDirs(a.paths.Runtime)),
 		local.New(local.WithSkipDirs(a.paths.Runtime)),
 		aws.New(),
+		azure.New(),
 		google.New(),
+		registry.FromSDK(capi.New(capi.WithClusterConfig(a.managementConfig))),
+		registry.FromSDK(argocd.New(argocd.WithClusterConfig(a.managementConfig))),
+		registry.FromSDK(clusterprofile.New(clusterprofile.WithClusterConfig(a.managementConfig))),
 	}
 	for _, p := range builtins {
 		if err := r.Add(p, registry.KindBuiltin, ""); err != nil {
@@ -179,6 +196,7 @@ func (a *app) registry() *registry.Registry {
 			Name:     p.Name(),
 			Env:      p.Manifest.Spec.Env,
 			Timeouts: a.cfg.PluginTimeouts(),
+			Serve:    p.Manifest.Spec.Capabilities.Has(provider.CapServe),
 			Log:      a.log,
 		}
 		kind := registry.KindPlugin
@@ -193,6 +211,54 @@ func (a *app) registry() *registry.Registry {
 	return r
 }
 
+// managementConfig returns a client config for a catalog cluster that a
+// built-in provider reads other clusters from: a Cluster API management
+// cluster, the cluster Argo CD runs on or a ClusterProfile hub. The
+// providers only read, so the config refuses writes.
+func (a *app) managementConfig(ctx context.Context, cluster string) (*rest.Config, error) {
+	cat, err := a.loadCatalog()
+	if err != nil {
+		return nil, err
+	}
+	cl, err := cat.Get(cluster)
+	if errors.Is(err, catalog.ErrNotFound) {
+		return nil, provider.Errorf(provider.NotFound, "%s is not in the catalog", cluster).
+			WithHint("import the management cluster first, for example with `tug import kubeconfig <file>`; `tug ls` lists the names")
+	}
+	if err != nil {
+		return nil, err
+	}
+	// A management cluster whose own credential comes from a provider that
+	// reads it from that same cluster would recurse forever.
+	if slices.Contains(managing(ctx), cl.ID) {
+		return nil, provider.Errorf(provider.InvalidConfig, "%s gets its credential through itself", cl.Name).
+			WithHint("set the account's cluster setting to a cluster imported from another source")
+	}
+	_, broker, err := a.services(cat)
+	if err != nil {
+		return nil, err
+	}
+	f := &kube.Factory{
+		Cluster:   cl,
+		Broker:    broker,
+		Guard:     &guard.Policy{Cluster: cl.Name, ReadOnly: true, Now: a.now},
+		CacheDir:  a.paths.Cache,
+		UserAgent: "tug/" + version.String(),
+		// A management cluster may itself be private.
+		Tunnels: a.tunnels(),
+	}
+	return f.RESTConfig(context.WithValue(ctx, managingKey{}, append(managing(ctx), cl.ID)))
+}
+
+// managingKey holds, in a context, the IDs of the management clusters whose
+// configs are being built.
+type managingKey struct{}
+
+func managing(ctx context.Context) []string {
+	ids, _ := ctx.Value(managingKey{}).([]string)
+	return slices.Clip(ids)
+}
+
 // services returns the importer and credential broker for a catalog.
 func (a *app) services(cat *catalog.Catalog) (*importer.Service, *credentials.Broker, error) {
 	store, err := a.credentialStore()
@@ -203,6 +269,43 @@ func (a *app) services(cat *catalog.Catalog) (*importer.Service, *credentials.Br
 	broker := &credentials.Broker{Store: store, Now: a.now, Fetch: svc.Fetcher(cat), OIDC: a.oidcClient(store, a.implicitSignIn())}
 	svc.Broker = broker
 	return svc, broker, nil
+}
+
+// tunnels returns the pool that keeps this process's tunnels open.
+func (a *app) tunnels() *tunnel.Pool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.tunnelPool == nil {
+		a.tunnelPool = tunnel.NewPool(tunnel.WithLogger(a.log))
+	}
+	return a.tunnelPool
+}
+
+// closePlugins stops plugins running in serve mode.
+func (a *app) closePlugins() {
+	a.mu.Lock()
+	reg := a.reg
+	a.mu.Unlock()
+	if reg == nil {
+		return
+	}
+	for _, name := range reg.Names() {
+		if p, err := reg.Get(name); err == nil {
+			if c, ok := p.(io.Closer); ok {
+				_ = c.Close() // best effort on the way out
+			}
+		}
+	}
+}
+
+// closeTunnels ends every tunnel this process opened.
+func (a *app) closeTunnels() {
+	a.mu.Lock()
+	p := a.tunnelPool
+	a.mu.Unlock()
+	if p != nil {
+		_ = p.Close() // best effort on the way out
+	}
 }
 
 // oidcClient returns the client that signs in to OpenID Connect issuers.

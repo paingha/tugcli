@@ -29,7 +29,7 @@ func newPluginCmd(a *app) *cobra.Command {
 	}
 	cmd.AddCommand(
 		newPluginLsCmd(a), newPluginInstallCmd(a), newPluginRemoveCmd(a),
-		newPluginLinkCmd(a), newPluginUnlinkCmd(a), newPluginDescribeCmd(a),
+		newPluginLinkCmd(a), newPluginUnlinkCmd(a), newPluginDescribeCmd(a), newPluginSearchCmd(a), newPluginIndexCmd(a),
 		newPluginNewCmd(a), newPluginTestCmd(a), newPluginPackageCmd(a),
 	)
 	return cmd
@@ -72,6 +72,8 @@ type installOptions struct {
 	sha256 string
 	yes    bool
 	force  bool
+	// wantName is the plugin an index promised the archive holds.
+	wantName string
 }
 
 func newPluginInstallCmd(a *app) *cobra.Command {
@@ -85,8 +87,12 @@ manifest. Archives from a URL also need --sha256, which pins the archive
 itself. Before installing, tug shows the publisher, the secrets the plugin
 will receive and the hosts it talks to, and asks you to confirm.
 
-Installing by name from the reviewed plugin index arrives in v1.`,
-		Example: `  tug plugin install ./tug-provider-acme_0.1.0.tar.gz
+A plain name, or name@version, installs from the signed plugin indexes in
+plugins.indexes: the index's signature, the archive's sha256 and every
+binary's sha256 are all checked.`,
+		Example: `  tug plugin install acme
+  tug plugin install acme@0.1.0
+  tug plugin install ./tug-provider-acme_0.1.0.tar.gz
   tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz --sha256 9f2c...`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -115,10 +121,19 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 			return err
 		}
 	} else if _, err := os.Stat(src); err != nil {
-		if !strings.ContainsAny(src, `/\.`) {
-			return fmt.Errorf("installing %q by name needs the plugin index, which arrives in v1; install from a file or URL", src)
+		if strings.ContainsAny(src, `/\`) || strings.HasSuffix(src, ".gz") || strings.HasSuffix(src, ".zip") {
+			return err
 		}
-		return err
+		// A bare name, or name@version, comes from a signed index, which
+		// pins the archive's sha256.
+		m, v, err := a.resolveIndexed(ctx, src)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stderr, "%s %s from index %s\n", m.Plugin.Name, v.Version, m.Index)
+		o.sha256 = v.SHA256
+		o.wantName = m.Plugin.Name
+		return a.installPlugin(ctx, v.URL, o)
 	}
 
 	staged, err := dirs.Stage(archive, o.sha256)
@@ -127,6 +142,9 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	}
 	defer staged.Discard()
 	m := staged.Plugin.Manifest
+	if o.wantName != "" && m.Metadata.Name != o.wantName {
+		return fmt.Errorf("the index lists %s, but the archive holds %s; not installed", o.wantName, m.Metadata.Name)
+	}
 	if e, ok := a.registry().Entry(m.Metadata.Name); ok && e.Kind == registry.KindBuiltin &&
 		!slices.Contains(a.cfg.Plugins.AllowOverride, m.Metadata.Name) {
 		return fmt.Errorf("%s is a built-in provider; a plugin may replace it only if plugins.allowOverride in config.yaml lists it", m.Metadata.Name)

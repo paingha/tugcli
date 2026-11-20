@@ -24,8 +24,12 @@ const ConfigAPIURL = "apiURL"
 
 // Client calls one provider API with a bearer token.
 type Client struct {
-	BaseURL   string
-	Token     string
+	BaseURL string
+	// Token is sent as a bearer token, unless Sign is set.
+	Token string
+	// Sign, when set, authenticates each request in place of Token, for
+	// APIs that sign requests. It is called once the request is complete.
+	Sign      func(req *http.Request) error
 	HTTP      *http.Client
 	UserAgent string
 	// Message extracts a readable error message from an error body.
@@ -39,12 +43,18 @@ func BaseURL(acct provider.Account, def string) (string, error) {
 	if raw == "" {
 		return def, nil
 	}
+	return CheckURL(ConfigAPIURL, raw)
+}
+
+// CheckURL checks raw, the value of the account setting key, the way
+// BaseURL checks apiURL, and returns it without a trailing slash.
+func CheckURL(key, raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return "", provider.Errorf(provider.InvalidConfig, "%s %q is not a URL", ConfigAPIURL, raw)
+		return "", provider.Errorf(provider.InvalidConfig, "%s %q is not a URL", key, raw)
 	}
 	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
-		return "", provider.Errorf(provider.InvalidConfig, "%s must use https", ConfigAPIURL)
+		return "", provider.Errorf(provider.InvalidConfig, "%s must use https", key)
 	}
 	return strings.TrimSuffix(raw, "/"), nil
 }
@@ -72,13 +82,19 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) err
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
+	}
+	if c.Sign != nil {
+		if err := c.Sign(req); err != nil {
+			return err
+		}
+	} else {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	hc := c.HTTP
 	if hc == nil {

@@ -15,6 +15,8 @@ tug import [[.Name]] --account demo --set clusters=dev=https://127.0.0.1:6443
 Implement `list_clusters` and `credential` in `tug-provider-[[.Name]]` with
 calls to your provider's API.
 
+For typed helpers and less protocol code, use the [Python SDK](https://github.com/paingha/tugcli/tree/main/sdk/python) instead.
+
 ## Release
 
 `tug plugin package . -o dist` writes an installable archive and prints its

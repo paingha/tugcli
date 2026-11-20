@@ -1,13 +1,25 @@
 # tug shell integration for PowerShell. Add this to your $PROFILE:
 #   Invoke-Expression (& tug init powershell | Out-String)
 # Set $env:TUG_PROMPT_DISABLE = '1' to keep your prompt unchanged and use $global:TugPrompt yourself.
+# Set $env:TUG_PIN_DISABLE = '1' to ignore .tug.yaml pin files.
 $global:_TugBin = {{.Bin}}
 
 if ($env:TUG_SESSION_PID -ne "$PID") {
     & $global:_TugBin session new --shell powershell --pid $PID --parent "$env:TUG_SESSION" | Out-String | Invoke-Expression
 }
 
+# _TugPin applies the .tug.yaml of a new directory, if it is allowed.
+function global:_TugPin {
+    if ($env:TUG_PIN_DISABLE -eq '1') { return }
+    $here = (Get-Location).ProviderPath
+    if ($here -ne $global:_TugPinPwd) {
+        $global:_TugPinPwd = $here
+        & $global:_TugBin session pin --dir $here
+    }
+}
+
 function global:_TugSync {
+    _TugPin
     $f = if ($env:TUG_SESSION_DIR) { Join-Path $env:TUG_SESSION_DIR 'kubeconfig' } else { $null }
     if ($f -and (Test-Path -LiteralPath $f)) {
         $env:KUBECONFIG = $f

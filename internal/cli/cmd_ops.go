@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/kube"
@@ -201,14 +202,34 @@ func newLogsCmd(a *app) *cobra.Command {
 	return cmd
 }
 
+// debugStartTimeout is how long tug sh waits for a debug container to start.
+const debugStartTimeout = 2 * time.Minute
+
+type shOptions struct {
+	namespace string
+	container string
+	debug     bool
+	image     string
+}
+
 func newShCmd(a *app) *cobra.Command {
-	var namespace, container string
+	var o shOptions
 	cmd := &cobra.Command{
 		Use:   "sh <target> [-- command...]",
 		Short: "Open a shell (bash, else sh) in a pod, or run a command",
+		Long: `Open a shell in a pod's container: bash when the image has it, else sh. With a
+command after --, run that instead.
+
+When the container has no shell, as in distroless images, tug offers to add
+an ephemeral debug container that shares the container's processes, and
+opens the shell there; --debug-container does so without asking. The
+container's files are under /proc/1/root. A debug container stays in the pod
+until the pod is replaced, and adding one is a write.`,
 		Example: `  tug sh api
   tug sh api -c sidecar
-  tug sh api -- env`,
+  tug sh api -- env
+  tug sh api --debug-container              # a busybox shell beside the app's processes
+  tug sh api --debug-container --image nicolaka/netshoot -- tcpdump -i any`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dash := cmd.ArgsLenAtDash(); dash > 1 || (dash < 0 && len(args) > 1) {
@@ -219,7 +240,7 @@ func newShCmd(a *app) *cobra.Command {
 				command = args[dash:]
 			}
 			ctx := cmd.Context()
-			env, err := a.opsEnv(ctx, namespace)
+			env, err := a.opsEnv(ctx, o.namespace)
 			if err != nil {
 				return err
 			}
@@ -231,41 +252,149 @@ func newShCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c := container
+			c := o.container
 			if c == "" {
 				c = resolve.DefaultContainer(pod)
+			}
+			if o.debug {
+				return a.debugShell(ctx, env, pod.Name, c, o.image, command)
 			}
 			if err := a.ensureWritable(env, fmt.Sprintf("Run a command in pod/%s", pod.Name)); err != nil {
 				return err
 			}
-			return a.exec(ctx, env, pod.Name, c, command)
+			err = a.exec(ctx, env, pod.Name, c, command)
+			if len(command) > 0 || !ops.NoShell(err) {
+				return err
+			}
+			if !a.confirm(fmt.Sprintf("Container %s of pod/%s has no shell. Add an ephemeral debug container (%s) to the pod?", c, pod.Name, o.image), false) {
+				return fmt.Errorf("container %s of pod/%s has no shell; to open one in an ephemeral debug container, run `%s`",
+					c, pod.Name, debugCommand(cmd, args[0], o))
+			}
+			return a.debugShell(ctx, env, pod.Name, c, o.image, command)
 		},
 	}
-	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace (default: the session's)")
-	cmd.Flags().StringVarP(&container, "container", "c", "", "container (default: the pod's default container)")
+	f := cmd.Flags()
+	f.StringVarP(&o.namespace, "namespace", "n", "", "namespace (default: the session's)")
+	f.StringVarP(&o.container, "container", "c", "", "container (default: the pod's default container)")
+	f.BoolVar(&o.debug, "debug-container", false, "open the shell in an ephemeral debug container that shares the container's processes")
+	f.StringVar(&o.image, "image", ops.DefaultDebugImage, "image of the debug container")
 	return cmd
+}
+
+// debugCommand is the tug sh command line that adds a debug container.
+func debugCommand(cmd *cobra.Command, target string, o shOptions) string {
+	line := "tug sh " + target + " --debug-container"
+	if o.namespace != "" {
+		line += " -n " + o.namespace
+	}
+	if o.container != "" {
+		line += " -c " + o.container
+	}
+	if cmd.Flags().Changed("image") {
+		line += " --image " + o.image
+	}
+	return line
+}
+
+// debugShell adds an ephemeral debug container beside a pod's container,
+// waits for it to start and attaches to it. A command it runs may finish
+// before tug can attach; its logs are shown then.
+func (a *app) debugShell(ctx context.Context, env *opsEnv, pod, target, image string, command []string) error {
+	if err := a.ensureWritable(env, fmt.Sprintf("Add a debug container to pod/%s", pod)); err != nil {
+		return err
+	}
+	name, err := ops.AddDebugContainer(ctx, env.cs, ops.DebugOptions{
+		Namespace: env.namespace, Pod: pod, Target: target, Image: image, Command: command, TTY: a.localTTY(),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stderr, "%s\n", a.colors().Dim(fmt.Sprintf(
+		"Added debug container %s (%s) to pod/%s, sharing the processes of %s; waiting for it to start", name, image, pod, target)))
+
+	wait, cancel := context.WithTimeout(ctx, debugStartTimeout)
+	defer cancel()
+	state, err := ops.WaitForEphemeralContainer(wait, env.cs, env.namespace, pod, name)
+	var start *ops.StartError
+	switch {
+	case errors.As(err, &start) && start.Image():
+		return fmt.Errorf("%w; choose another image with --image", err)
+	case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		return fmt.Errorf("debug container %s did not start within %s; `tug why pod/%s` may say why", name, debugStartTimeout, pod)
+	case err != nil:
+		return err
+	}
+
+	if t := state.Terminated; t != nil {
+		err := ops.Logs(ctx, env.cs, resolve.Target{Kind: resolve.KindPod, Name: pod, Namespace: env.namespace},
+			ops.LogOptions{Container: name, Tail: -1}, ops.LogSink{
+				Line: func(l ops.LogLine) { fmt.Fprintln(a.stdout, l.Text) },
+				Error: func(pod, container string, err error) {
+					fmt.Fprintf(a.stderr, "%s %s/%s: %v\n", a.colors().Yellow("warning:"), pod, container, err)
+				},
+			})
+		if err != nil {
+			return err
+		}
+		if t.ExitCode != 0 {
+			return &exitError{code: int(t.ExitCode)}
+		}
+		return nil
+	}
+	banner := fmt.Sprintf("pod/%s, debug container %s; exit to leave, and press Enter if there is no prompt", pod, name)
+	err = a.interact(banner, func(r remoteIO) error {
+		return ops.Attach(ctx, env.cfg, env.cs, ops.AttachOptions{
+			Namespace: env.namespace, Pod: pod, Container: name,
+			Stdin: r.stdin, Stdout: a.stdout, Stderr: a.stderr, TTY: r.tty, Sizes: r.sizes,
+		})
+	})
+	if code, ok := ops.ExitCode(err); ok {
+		return &exitError{code: code}
+	}
+	return err
 }
 
 // exec runs a command in a container, with a raw TTY when interactive.
 func (a *app) exec(ctx context.Context, env *opsEnv, pod, container string, command []string) error {
+	banner := fmt.Sprintf("pod/%s, container %s; exit to leave", pod, container)
+	err := a.interact(banner, func(r remoteIO) error {
+		return ops.Exec(ctx, env.cfg, env.cs, ops.ExecOptions{
+			Namespace: env.namespace, Pod: pod, Container: container, Command: command,
+			Stdin: r.stdin, Stdout: a.stdout, Stderr: a.stderr, TTY: r.tty, Sizes: r.sizes,
+		})
+	})
+	if code, ok := ops.ExitCode(err); ok {
+		return &exitError{code: code}
+	}
+	return err
+}
+
+// remoteIO is the local end of an exec or attach.
+type remoteIO struct {
+	stdin io.Reader
+	tty   bool
+	sizes remotecommand.TerminalSizeQueue
+}
+
+// localTTY reports whether stdin and stdout are both terminals, so that a
+// remote shell can have one too.
+func (a *app) localTTY() bool {
 	in, inIsFile := a.stdin.(*os.File)
 	out, outIsFile := a.stdout.(*os.File)
-	tty := inIsFile && outIsFile && term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
+	return inIsFile && outIsFile && term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
+}
 
-	o := ops.ExecOptions{
-		Namespace: env.namespace,
-		Pod:       pod,
-		Container: container,
-		Command:   command,
-		Stdout:    a.stdout,
-		Stderr:    a.stderr,
-		TTY:       tty,
+// interact runs an exec or attach with the local streams: in raw mode with
+// resizes when both ends are terminals, else with piped input.
+func (a *app) interact(banner string, run func(remoteIO) error) error {
+	r := remoteIO{tty: a.localTTY()}
+	in, inIsFile := a.stdin.(*os.File)
+	out, _ := a.stdout.(*os.File)
+	if r.tty || !inIsFile || !term.IsTerminal(int(in.Fd())) {
+		r.stdin = a.stdin // a terminal, or piped input
 	}
-	if tty || !inIsFile || !term.IsTerminal(int(in.Fd())) {
-		o.Stdin = a.stdin // a terminal, or piped input
-	}
-	if tty {
-		fmt.Fprintf(a.stderr, "%s\n", a.colors().Dim(fmt.Sprintf("pod/%s, container %s; exit to leave", pod, container)))
+	if r.tty {
+		fmt.Fprintf(a.stderr, "%s\n", a.colors().Dim(banner))
 		state, err := term.MakeRaw(int(in.Fd()))
 		if err != nil {
 			return err
@@ -273,24 +402,26 @@ func (a *app) exec(ctx context.Context, env *opsEnv, pod, container string, comm
 		defer term.Restore(int(in.Fd()), state) //nolint:errcheck // best effort on the way out
 		sizes, stop := watchTerminalSize(out)
 		defer stop()
-		o.Sizes = sizes
+		r.sizes = sizes
 	}
-	err := ops.Exec(ctx, env.cfg, env.cs, o)
-	if code, ok := ops.ExitCode(err); ok {
-		return &exitError{code: code}
-	}
-	return err
+	return run(r)
 }
 
 func newPfCmd(a *app) *cobra.Command {
-	var namespace string
+	var namespace, name string
 	var addresses []string
 	cmd := &cobra.Command{
 		Use:   "pf <target> [[local:]port...]",
 		Short: "Port-forward to a workload by short name",
+		Long: `Port-forward to a running pod of a workload until Ctrl-C. With --name, tugd
+runs the forward in the background instead, keeps the same local ports, and
+starts it again on a new pod when the old one goes away. tug pf ls lists
+named forwards and tug pf stop ends them; a workload called ls or stop is
+deploy/ls or deploy/stop.`,
 		Example: `  tug pf api 8080          # localhost:8080 -> container port 8080
   tug pf api 9000:http     # localhost:9000 -> the port named http
-  tug pf db                # every declared port to the same local port`,
+  tug pf db                # every declared port to the same local port
+  tug pf db 5432 --name db # in the background, through tugd`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -310,6 +441,9 @@ func newPfCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if name != "" {
+				return a.startNamedForward(ctx, env, t, name, args[1:], addresses)
+			}
 			fmt.Fprintf(a.stderr, "%s\n", a.colors().Dim(fmt.Sprintf("%s via pod/%s; Ctrl-C to stop", t, pod.Name)))
 			err = ops.PortForward(ctx, env.cfg, env.cs, ops.ForwardOptions{
 				Namespace: env.namespace,
@@ -327,6 +461,8 @@ func newPfCmd(a *app) *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace (default: the session's)")
 	cmd.Flags().StringSliceVar(&addresses, "address", []string{"localhost"}, "addresses to listen on")
+	cmd.Flags().StringVar(&name, "name", "", "run in the background through tugd under this name, reconnecting when the pod goes away")
+	cmd.AddCommand(newPfLsCmd(a), newPfStopCmd(a))
 	return cmd
 }
 

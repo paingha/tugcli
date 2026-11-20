@@ -24,7 +24,11 @@ type ForwardOptions struct {
 	// Addresses to listen on; defaults to localhost.
 	Addresses []string
 	// Ready is closed once the listeners are up.
-	Ready  chan struct{}
+	Ready chan struct{}
+	// Bound, when set, is called once the listeners are up with the
+	// local:remote ports actually bound, so a port given as :80 can be
+	// kept the same next time.
+	Bound  func(ports []string)
 	Out    io.Writer
 	ErrOut io.Writer
 }
@@ -57,6 +61,26 @@ func PortForward(ctx context.Context, cfg *rest.Config, cs kubernetes.Interface,
 	fw, err := portforward.NewOnAddressesWithContext(ctx, dialer, addrs, o.Ports, ready, o.Out, o.ErrOut)
 	if err != nil {
 		return err
+	}
+	if o.Bound != nil {
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-ready:
+			case <-done:
+				return
+			}
+			fps, err := fw.GetPorts()
+			if err != nil {
+				return
+			}
+			bound := make([]string, len(fps))
+			for i, p := range fps {
+				bound[i] = fmt.Sprintf("%d:%d", p.Local, p.Remote)
+			}
+			o.Bound(bound)
+		}()
 	}
 	return fw.ForwardPorts()
 }

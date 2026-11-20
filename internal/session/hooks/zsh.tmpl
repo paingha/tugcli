@@ -1,6 +1,7 @@
 # tug shell integration for zsh. Add this to the end of ~/.zshrc:
 #   eval "$(tug init zsh)"
 # Set TUG_PROMPT_DISABLE=1 to keep your prompt unchanged and use $TUG_PROMPT yourself.
+# Set TUG_PIN_DISABLE=1 to ignore .tug.yaml pin files.
 typeset -g _tug_bin={{.Bin}}
 
 if [[ "${TUG_SESSION_PID:-}" != "$$" ]]; then
@@ -28,6 +29,11 @@ _tug_sync() {
   fi
 }
 
+# _tug_pin applies the .tug.yaml of the new directory, if it is allowed.
+_tug_pin() {
+  [[ "${TUG_PIN_DISABLE:-}" == 1 ]] || "$_tug_bin" session pin --dir "$PWD"
+}
+
 _tug_exit() {
   [[ "${TUG_SESSION_PID:-}" == "$$" ]] && "$_tug_bin" session end --id "$TUG_SESSION" >/dev/null 2>&1
 }
@@ -41,6 +47,7 @@ tug() {
 
 autoload -Uz add-zsh-hook
 add-zsh-hook precmd _tug_sync
+add-zsh-hook chpwd _tug_pin
 add-zsh-hook zshexit _tug_exit
 
 if [[ "${TUG_PROMPT_DISABLE:-}" != 1 && "$PROMPT" != *'${TUG_PROMPT}'* ]]; then
@@ -48,4 +55,5 @@ if [[ "${TUG_PROMPT_DISABLE:-}" != 1 && "$PROMPT" != *'${TUG_PROMPT}'* ]]; then
   PROMPT='${TUG_PROMPT}'"$PROMPT"
 fi
 
+_tug_pin
 _tug_sync

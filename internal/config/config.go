@@ -127,6 +127,18 @@ type PluginsConfig struct {
 	AllowOverride []string `json:"allowOverride,omitempty"`
 	// Timeouts per operation, for example {list: 60s}.
 	Timeouts map[string]Duration `json:"timeouts,omitempty"`
+	// Indexes are the signed plugin indexes that tug plugin search and
+	// tug plugin install <name> use, in order.
+	Indexes []PluginIndex `json:"indexes,omitempty"`
+}
+
+// PluginIndex is one signed plugin index.
+type PluginIndex struct {
+	Name string `json:"name"`
+	// URL is the index file; its signature is at URL + ".sig".
+	URL string `json:"url"`
+	// PublicKey is the base64 ed25519 key the index must be signed with.
+	PublicKey string `json:"publicKey"`
 }
 
 // SessionsConfig controls session cleanup.

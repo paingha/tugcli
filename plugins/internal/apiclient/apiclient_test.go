@@ -31,6 +31,16 @@ func TestBaseURL(t *testing.T) {
 	}
 }
 
+func TestCheckURL(t *testing.T) {
+	if got, err := CheckURL("url", "https://rancher.example.com/"); err != nil || got != "https://rancher.example.com" {
+		t.Errorf(`CheckURL("url", "https://rancher.example.com/") = %q, %v, want "https://rancher.example.com"`, got, err)
+	}
+	_, err := CheckURL("url", "http://rancher.example.com")
+	if pe := provider.AsError(err); pe.Code != provider.InvalidConfig || pe.Message != "url must use https" {
+		t.Errorf(`CheckURL("url", "http://rancher.example.com") = %+v, want InvalidConfig naming the setting`, pe)
+	}
+}
+
 func TestDo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -59,5 +69,29 @@ func TestDo(t *testing.T) {
 	err = bad.Do(context.Background(), http.MethodGet, "/x", nil, nil)
 	if pe := provider.AsError(err); pe.Code != provider.Unauthenticated || pe.Message != `GET /x: parsed: {"why":"bad token"}` {
 		t.Fatalf("401: %+v", pe)
+	}
+}
+
+func TestDoSign(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Header.Get("Authorization"), "Signed GET /v1/x?a=1"; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/v1", Token: "unused", Sign: func(req *http.Request) error {
+		req.Header.Set("Authorization", "Signed "+req.Method+" "+req.URL.RequestURI())
+		return nil
+	}}
+	if err := c.Do(context.Background(), http.MethodGet, "/x?a=1", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	failing := &Client{BaseURL: srv.URL, Sign: func(*http.Request) error {
+		return provider.Errorf(provider.Unauthenticated, "no key")
+	}}
+	if err := failing.Do(context.Background(), http.MethodGet, "/x", nil, nil); provider.CodeOf(err) != provider.Unauthenticated {
+		t.Fatalf("Do with a failing Sign = %v, want its error", err)
 	}
 }

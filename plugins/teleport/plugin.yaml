@@ -1,0 +1,23 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: teleport
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/teleport
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-teleport}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-teleport}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-teleport}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-teleport}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-teleport.exe}
+  env: [TELEPORT_HOME]
+  network: []
+  accountConfig:
+    type: object
+    properties:
+      proxy: {type: string, description: "Teleport proxy address, as for tsh --proxy (default: the active tsh profile's)"}
+      cluster: {type: string, description: "Teleport cluster, root or leaf (default: the tsh profile's current cluster)"}
