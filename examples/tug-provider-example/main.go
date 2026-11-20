@@ -28,9 +28,10 @@ type example struct{}
 
 func (example) Info() provider.Info {
 	return provider.Info{
-		Name:    "example",
-		Version: "0.1.0",
-		Secrets: []provider.SecretSpec{{Name: "api_token", Prompt: "Example API token (starts with ex_)"}},
+		Name:        "example",
+		Version:     "0.1.0",
+		Description: "Example clusters, for learning the plugin protocol",
+		Secrets:     []provider.SecretSpec{{Name: "api_token", Prompt: "Example API token (starts with ex_)"}},
 	}
 }
 

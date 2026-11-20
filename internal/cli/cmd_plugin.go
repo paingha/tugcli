@@ -16,6 +16,7 @@ import (
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
 )
@@ -34,7 +35,13 @@ func newPluginCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-func (a *app) pluginDirs() plugin.Dirs { return plugin.NewDirs(a.paths.Data) }
+// pluginDirs locates plugins for this tug, which refuses plugins that need
+// a newer one.
+func (a *app) pluginDirs() plugin.Dirs {
+	d := plugin.NewDirs(a.paths.Data)
+	d.TugVersion = version.String()
+	return d
+}
 
 func newPluginLsCmd(a *app) *cobra.Command {
 	return &cobra.Command{
@@ -126,6 +133,7 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	}
 
 	a.printManifest(m)
+	a.warnUnknownFields(m, "which it ignores")
 	if !o.yes {
 		if !a.interactive() {
 			return fmt.Errorf("review the plugin above, then pass --yes to install it without a terminal")
@@ -163,6 +171,35 @@ func (a *app) printManifest(m *plugin.Manifest) {
 	fmt.Fprintf(a.stderr, "  environment:   %s\n", dash(strings.Join(m.Spec.Env, ", ")))
 	fmt.Fprintf(a.stderr, "  network hosts: %s\n", dash(strings.Join(m.Spec.Network, ", ")))
 	fmt.Fprintf(a.stderr, "  platforms:     %s\n", strings.Join(platforms, ", "))
+	for i, s := range m.Settings() {
+		label := ""
+		if i == 0 {
+			label = "settings:"
+		}
+		fmt.Fprintf(a.stderr, "  %-15s%s\n", label, describeSetting(s))
+	}
+}
+
+// describeSetting shows an account setting as `tug import --set` takes it.
+func describeSetting(s plugin.Setting) string {
+	out := s.Name
+	if len(s.Enum) > 0 {
+		out += " (" + strings.Join(s.Enum, ", ") + ")"
+	}
+	if s.Description != "" {
+		out += ": " + s.Description
+	}
+	return out
+}
+
+// warnUnknownFields names the plugin.yaml fields this tug does not know,
+// which are usually typos, and says what became of them.
+func (a *app) warnUnknownFields(m *plugin.Manifest, fate string) {
+	if len(m.Unknown) == 0 {
+		return
+	}
+	fmt.Fprintf(a.stderr, "%s %s's plugin.yaml has fields this tug does not know, %s: %s\n",
+		a.colors().Yellow("warning:"), m.Metadata.Name, fate, strings.Join(m.Unknown, ", "))
 }
 
 func newPluginRemoveCmd(a *app) *cobra.Command {
@@ -200,6 +237,7 @@ func newPluginLinkCmd(a *app) *cobra.Command {
 				fmt.Fprintf(a.stderr, "%s %s is a built-in provider name; the plugin is ignored unless plugins.allowOverride lists it\n",
 					a.colors().Yellow("warning:"), p.Name())
 			}
+			a.warnUnknownFields(p.Manifest, "which it ignores")
 			_, err = fmt.Fprintf(a.stdout, "Linked %s %s from %s %s\n", p.Name(), p.Manifest.Metadata.Version, p.Dir,
 				a.colors().Yellow("(dev: not checksummed)"))
 			return err
@@ -213,7 +251,12 @@ func newPluginUnlinkCmd(a *app) *cobra.Command {
 		Short: "Stop using a linked plugin",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.pluginDirs().Unlink(args[0])
+			dir, err := a.pluginDirs().Unlink(args[0])
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(a.stdout, "Unlinked %s (%s)\n", args[0], dir)
+			return err
 		},
 	}
 }
@@ -237,7 +280,9 @@ func newPluginDescribeCmd(a *app) *cobra.Command {
 				return err
 			}
 			a.printManifest(pp.Plugin().Manifest)
+			fmt.Fprintf(a.stderr, "  description:   %s\n", dash(d.Description))
 			fmt.Fprintf(a.stderr, "  protocols:     %s\n  executable:    %s\n", strings.Join(d.Protocols, ", "), pp.Plugin().Bin)
+			a.warnUnknownFields(pp.Plugin().Manifest, "which it ignores")
 			if d.Name != pp.Plugin().Name() {
 				fmt.Fprintf(a.stderr, "%s describe says %q but the manifest says %q\n", a.colors().Yellow("warning:"), d.Name, pp.Plugin().Name())
 			}
@@ -262,6 +307,7 @@ func newPluginNewCmd(a *app) *cobra.Command {
 			}
 			files, err := plugin.Scaffold(plugin.ScaffoldOptions{
 				Name: args[0], Lang: l, Dir: dir, Module: module, SDKReplace: sdkReplace,
+				SDKVersion: sdkVersion(),
 			})
 			if err != nil {
 				return err
@@ -273,6 +319,11 @@ func newPluginNewCmd(a *app) *cobra.Command {
 			fmt.Fprintf(a.stdout, "\nNext:\n  cd %s\n", root)
 			if l == plugin.LangGo {
 				fmt.Fprintln(a.stdout, "  go mod tidy && make test && make conformance")
+				if sdkReplace == "" {
+					// The SDK lives in this repository, which may not be
+					// reachable from everywhere yet.
+					fmt.Fprintln(a.stderr, a.colors().Dim("go mod tidy fetches the SDK, github.com/paingha/tugcli. If you cannot reach it, set GOPRIVATE=github.com/paingha/tugcli with access to the repository, or scaffold again with --sdk-replace <tugcli checkout>."))
+				}
 			} else {
 				fmt.Fprintf(a.stdout, "  python3 -m unittest && tug plugin link . && TUG_SECRET_API_TOKEN=demo_test tug plugin test %s --set clusters=dev=https://127.0.0.1:6443\n", args[0])
 			}
@@ -285,6 +336,15 @@ func newPluginNewCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVar(&sdkReplace, "sdk-replace", "", "use a local tugcli checkout for the SDK")
 	_ = cmd.Flags().MarkHidden("sdk-replace")
 	return cmd
+}
+
+// sdkVersion pins new plugins to this tug's SDK when tug is a release;
+// development builds leave the version to `go mod tidy`.
+func sdkVersion() string {
+	if v := version.String(); version.IsRelease(v) {
+		return v
+	}
+	return ""
 }
 
 func newPluginPackageCmd(a *app) *cobra.Command {
@@ -303,6 +363,7 @@ func newPluginPackageCmd(a *app) *cobra.Command {
 				return err
 			}
 			c := a.colors()
+			a.warnUnknownFields(res.Manifest, "which are left out of the archive")
 			for _, p := range res.Missing {
 				fmt.Fprintf(a.stderr, "%s %s/%s: %s is not built\n", c.Yellow("left out"), p.OS, p.Arch, p.Bin)
 			}

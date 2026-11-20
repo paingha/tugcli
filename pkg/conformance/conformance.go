@@ -199,6 +199,8 @@ func (r *runner) checkDescribe() provider.Description {
 		r.fail(name, "protocols %v include none of %v", d.Protocols, provider.SupportedAPIVersions())
 	case !d.Capabilities.Has(provider.CapList | provider.CapCredential):
 		r.fail(name, "capabilities %v must include list and credential", d.Capabilities)
+	case d.Description != "":
+		r.pass(name, "%s %s (%s) speaks %v", d.Name, d.Version, d.Description, d.Protocols)
 	default:
 		r.pass(name, "%s %s speaks %v", d.Name, d.Version, d.Protocols)
 	}

@@ -74,3 +74,15 @@ func TestGetLinkerValuesWinOverBuildInfo(t *testing.T) {
 		t.Fatal("Get().Version is empty, want a fallback")
 	}
 }
+
+func TestIsRelease(t *testing.T) {
+	for v, want := range map[string]bool{
+		"v0.4.0": true, "v1.12.3": true,
+		"dev": false, "0.4.0": false, "v0.4.0-rc.1": false,
+		"v0.0.0-20261120195036-d92e7b0a68cf+dirty": false,
+	} {
+		if got := IsRelease(v); got != want {
+			t.Errorf("IsRelease(%q) = %v, want %v", v, got, want)
+		}
+	}
+}

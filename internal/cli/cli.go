@@ -165,21 +165,18 @@ func (a *app) registry() *registry.Registry {
 			a.log.Warn("registering built-in provider", "err", err)
 		}
 	}
-	plugins, problems := plugin.NewDirs(a.paths.Data).Discover()
+	plugins, problems := a.pluginDirs().Discover()
 	a.problems = problems
 	for _, prob := range problems {
 		a.log.Debug("skipping plugin", "location", prob.Location, "err", prob.Err)
 	}
 	for _, p := range plugins {
 		runner := &plugin.Runner{
-			Bin:  p.Bin,
-			Name: p.Name(),
-			Env:  p.Manifest.Spec.Env,
-			Timeouts: map[string]time.Duration{
-				provider.OpList:       a.cfg.Timeout(provider.OpList, plugin.DefaultListTimeout),
-				provider.OpCredential: a.cfg.Timeout(provider.OpCredential, plugin.DefaultCredentialTimeout),
-			},
-			Log: a.log,
+			Bin:      p.Bin,
+			Name:     p.Name(),
+			Env:      p.Manifest.Spec.Env,
+			Timeouts: a.cfg.PluginTimeouts(),
+			Log:      a.log,
 		}
 		kind := registry.KindPlugin
 		if p.Dev {

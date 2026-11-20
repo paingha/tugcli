@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -221,6 +222,7 @@ func TestManifestValidation(t *testing.T) {
 		{"no protocols", func(m *Manifest) { m.Spec.Protocols = []string{"provider/v9"} }, "spec.protocols"},
 		{"escaping bin", func(m *Manifest) { m.Spec.Platforms[0].Bin = "../../bin/sh" }, "inside the plugin directory"},
 		{"bad env", func(m *Manifest) { m.Spec.Env = []string{"A=B"} }, "spec.env"},
+		{"bad minTugVersion", func(m *Manifest) { m.Spec.MinTugVersion = "soon" }, "spec.minTugVersion"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -276,8 +278,11 @@ func TestDiscoverPrecedence(t *testing.T) {
 	if plugins[0].Dir != devDir || !plugins[0].Dev {
 		t.Fatalf("link not preferred: %+v", plugins[0])
 	}
-	if err := d.Unlink("script"); err != nil {
-		t.Fatal(err)
+	if got, err := d.Unlink("script"); err != nil || got != devDir {
+		t.Fatalf("Unlink(script) = %q, %v, want %q", got, err, devDir)
+	}
+	if _, err := d.Unlink("script"); err == nil {
+		t.Fatal("Unlink of a plugin that is not linked succeeded")
 	}
 }
 
@@ -317,5 +322,105 @@ func TestCheckAccess(t *testing.T) {
 	p.Manifest.Spec.Capabilities &^= provider.CapCheckAccess
 	if _, err := prov.CheckAccess(context.Background(), provider.AccessRequest{}); provider.CodeOf(err) != provider.Unimplemented {
 		t.Fatalf("a plugin without checkAccess: %v", err)
+	}
+}
+
+func TestCheckTugVersion(t *testing.T) {
+	tests := []struct {
+		need, tug string
+		ok        bool
+	}{
+		{"", "v0.1.0", true},
+		{"0.5.0", "v0.4.0", false},
+		{"v0.5.0", "v0.4.9", false},
+		{"0.5.0", "v0.5.0", true},
+		{"0.5", "v0.10.0", true},
+		{"9.0.0", "dev", true},                     // a development build cannot be compared
+		{"9.0.0", "v0.4.0-3-g1a2b3c4-dirty", true}, // nor can a local build between releases
+	}
+	for _, tt := range tests {
+		m := &Manifest{Metadata: Metadata{Name: "acme"}, Spec: Spec{MinTugVersion: tt.need}}
+		err := m.CheckTugVersion(tt.tug)
+		if (err == nil) != tt.ok {
+			t.Errorf("CheckTugVersion(%q) with minTugVersion %q = %v, want ok=%v", tt.tug, tt.need, err, tt.ok)
+		}
+	}
+}
+
+func TestTooNewPluginRefused(t *testing.T) {
+	dir := writeScriptPlugin(t)
+	path := filepath.Join(dir, ManifestFile)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = []byte(strings.Replace(string(b), "spec:\n", "spec:\n  minTugVersion: 9.0.0\n", 1))
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(PathEnv, dir)
+
+	d := NewDirs(t.TempDir())
+	d.TugVersion = "v0.4.0"
+	if plugins, problems := d.Discover(); len(plugins) != 0 || len(problems) != 1 || !strings.Contains(problems[0].Err.Error(), "needs tug v9.0.0") {
+		t.Fatalf("Discover() = %v, %v, want the plugin refused", plugins, problems)
+	}
+	if _, err := d.Link(dir); err == nil {
+		t.Fatal("Link of a plugin that needs a newer tug succeeded")
+	}
+
+	d.TugVersion = "dev"
+	if plugins, problems := d.Discover(); len(plugins) != 1 || len(problems) != 0 {
+		t.Fatalf("Discover() on a development build = %v, %v, want the plugin", plugins, problems)
+	}
+}
+
+func TestManifestUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+colour: blue
+metadata: {name: acme, version: 1.0.0, publsher: acme}
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  platforms:
+  - {os: linux, arch: amd64, bin: tug-provider-acme, sha: abc}
+  secrets:
+  - {name: api_token, promt: "Token"}
+  hosts: [api.acme.example]
+  accountConfig:
+    type: object
+    properties:
+      region: {type: string, description: "where clusters live"}
+      auth: {type: string, enum: [token, oidc]}
+`
+	if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"colour", "metadata.publsher", "spec.hosts", "spec.platforms[0].sha", "spec.secrets[0].promt"}
+	if !slices.Equal(m.Unknown, want) {
+		t.Errorf("Unknown = %v, want %v", m.Unknown, want)
+	}
+
+	settings := m.Settings()
+	if len(settings) != 2 || settings[0].Name != "auth" || !slices.Equal(settings[0].Enum, []string{"token", "oidc"}) ||
+		settings[1].Name != "region" || settings[1].Description != "where clusters live" {
+		t.Errorf("Settings() = %+v", settings)
+	}
+	if got := m.UnknownSettings(map[string]any{"region": "eu", "regoin": "eu", "auth": "oidc"}); !slices.Equal(got, []string{"regoin"}) {
+		t.Errorf("UnknownSettings = %v, want [regoin]", got)
+	}
+
+	m.Spec.AccountConfig["additionalProperties"] = true
+	if got := m.UnknownSettings(map[string]any{"anything": "x"}); len(got) != 0 {
+		t.Errorf("UnknownSettings with additionalProperties = %v, want none", got)
+	}
+	if got := (&Manifest{}).UnknownSettings(map[string]any{"x": "y"}); len(got) != 0 {
+		t.Errorf("UnknownSettings without a schema = %v, want none", got)
 	}
 }

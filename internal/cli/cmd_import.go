@@ -16,6 +16,7 @@ import (
 	"github.com/paingha/tugcli/internal/builtin/kubeconfig"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/importer"
+	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/pkg/provider"
@@ -111,6 +112,7 @@ func (a *app) importSources(ctx context.Context, cat *catalog.Catalog, args []st
 	if err != nil {
 		return nil, err
 	}
+	a.warnUnknownSettings(p, settings)
 	switch {
 	case len(files) > 0:
 		if name != kubeconfig.Name {
@@ -517,4 +519,25 @@ func newForgetCmd(a *app) *cobra.Command {
 			return forgetErr
 		},
 	}
+}
+
+// warnUnknownSettings names --set keys that a plugin's accountConfig schema
+// does not describe, which are usually typos. The plugin may still accept
+// them, so they are passed on.
+func (a *app) warnUnknownSettings(p registry.Provider, settings map[string]any) {
+	pp, ok := p.(*plugin.Provider)
+	if !ok {
+		return
+	}
+	m := pp.Plugin().Manifest
+	unknown := m.UnknownSettings(settings)
+	if len(unknown) == 0 {
+		return
+	}
+	known := make([]string, 0, len(m.Settings()))
+	for _, s := range m.Settings() {
+		known = append(known, s.Name)
+	}
+	fmt.Fprintf(a.stderr, "%s %s does not describe the setting %s; it knows %s\n", a.colors().Yellow("warning:"),
+		m.Metadata.Name, strings.Join(unknown, ", "), dash(strings.Join(known, ", ")))
 }

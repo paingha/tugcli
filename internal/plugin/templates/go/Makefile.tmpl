@@ -1,12 +1,13 @@
 PLUGIN  := [[.Name]]
 BIN     := tug-provider-$(PLUGIN)
 HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
+EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
 TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64
 
 .PHONY: build build-all test link conformance package clean
 
 build: ## Build for this machine
-	CGO_ENABLED=0 go build -o bin/$(HOST)/$(BIN) .
+	CGO_ENABLED=0 go build -o bin/$(HOST)/$(BIN)$(EXT) .
 
 build-all: ## Build every platform in plugin.yaml
 	@for t in $(TARGETS); do \

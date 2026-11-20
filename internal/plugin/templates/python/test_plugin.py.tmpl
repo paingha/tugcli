@@ -32,6 +32,16 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(resp["code"], "Unauthenticated")
 
+    def test_request_for_another_version_or_operation(self):
+        for header in ({"apiVersion": "provider/v9", "kind": "ListRequest"}, {"kind": "CredentialRequest"}, {}):
+            request = dict(header, account=ACCOUNT, secrets={"api_token": "demo_x"})
+            code, resp = call("list", request)
+            if not header:  # apiVersion and kind may be left out
+                self.assertEqual(code, 0, resp)
+                continue
+            self.assertEqual(code, 1, header)
+            self.assertEqual(resp["code"], "InvalidConfig")
+
 
 if __name__ == "__main__":
     unittest.main()

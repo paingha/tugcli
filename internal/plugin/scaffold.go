@@ -47,6 +47,9 @@ type ScaffoldOptions struct {
 	Dir string
 	// Module is the Go module path; defaults to example.com/tug-provider-<name>.
 	Module string
+	// SDKVersion pins the SDK module, normally to the running tug's release.
+	// Empty leaves the version to `go mod tidy`.
+	SDKVersion string
 	// SDKReplace points the Go module at a local tugcli checkout, for working
 	// on the SDK itself.
 	SDKReplace string
@@ -110,8 +113,8 @@ func Scaffold(o ScaffoldOptions) ([]string, error) {
 	}
 
 	data := struct {
-		Name, Ident, Module, SDKReplace string
-	}{o.Name, goIdent(o.Name) + "Provider", o.Module, o.SDKReplace}
+		Name, Ident, Module, SDKReplace, SDKVersion string
+	}{o.Name, goIdent(o.Name) + "Provider", o.Module, o.SDKReplace, o.SDKVersion}
 
 	var written []string
 	for _, f := range scaffoldFiles(o.Lang, o.Name) {

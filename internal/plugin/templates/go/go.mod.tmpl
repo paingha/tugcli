@@ -6,4 +6,7 @@ go 1.26.0
 require github.com/paingha/tugcli v0.0.0
 
 replace github.com/paingha/tugcli => [[.SDKReplace]]
+[[- else if .SDKVersion]]
+
+require github.com/paingha/tugcli [[.SDKVersion]]
 [[- end]]
