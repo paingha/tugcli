@@ -19,6 +19,11 @@ output=json
 [profile work]
 s3 =
   max_concurrent_requests = 20
+  multipart_threshold = 64MB
+
+[profile indented]
+  region = eu-west-1
+  output = json
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +32,10 @@ s3 =
 		{"", "top", "level"},
 		{"default", "region", "us-east-1"},
 		{"default", "output", "json"},
-		{"profile work", "s3", "\nmax_concurrent_requests = 20"},
+		{"profile work", "s3", "\nmax_concurrent_requests = 20\nmultipart_threshold = 64MB"},
+		// Keys at the same indentation are siblings, not continuations.
+		{"profile indented", "region", "eu-west-1"},
+		{"profile indented", "output", "json"},
 		{"missing", "x", ""},
 	}
 	for _, tt := range tests {
