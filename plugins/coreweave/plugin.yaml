@@ -22,6 +22,6 @@ spec:
     type: object
     properties:
       apiURL: {type: string, description: "API endpoint override (https)"}
-      auth: {type: string, enum: [managed, oidc], description: "managed (default) uses the API token; oidc uses the cluster's OIDC issuer, which tug cannot sign in with yet"}
+      auth: {type: string, enum: [managed, oidc], description: "managed (default) uses the API token; oidc signs in to the cluster's OIDC issuer with tug auth login"}
       zone: {type: string, description: "only list clusters in this availability zone"}
 
