@@ -9,6 +9,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,9 +18,11 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
+	"github.com/paingha/tugcli/internal/session"
 	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/provider"
 )
@@ -26,8 +30,16 @@ import (
 // Name of the provider.
 const Name = "kubeconfig"
 
-// ConfigPath is the account config key holding the kubeconfig file path.
-const ConfigPath = "path"
+// Account config keys.
+const (
+	// ConfigPath holds the kubeconfig file path.
+	ConfigPath = "path"
+	// ConfigSkipLocal, when true, leaves out contexts of local clusters
+	// (kind, k3d, minikube, Docker Desktop, OrbStack, Rancher Desktop),
+	// which the local provider imports instead. Accounts sets it on the
+	// files it discovers; files named on the command line import everything.
+	ConfigSkipLocal = "skipLocal"
+)
 
 // fileCredentialTTL bounds how long a credential read from a referenced file
 // (tokenFile, client-certificate) is cached, so rotated files are picked up.
@@ -78,9 +90,30 @@ func (p *Provider) Info() provider.Info {
 	}
 }
 
-// Accounts returns one account per kubeconfig file found: ~/.kube/config, the
-// files in $KUBECONFIG, and other *.yaml files directly under ~/.kube.
+// Accounts returns one account per file that Files finds.
 func (p *Provider) Accounts(_ context.Context) ([]provider.Account, error) {
+	var accounts []provider.Account
+	used := map[string]bool{}
+	for _, path := range p.Files() {
+		id := AccountID(path, p.home)
+		for base, i := id, 2; used[id]; i++ {
+			id = fmt.Sprintf("%s-%d", base, i)
+		}
+		used[id] = true
+		accounts = append(accounts, provider.Account{
+			ID:          id,
+			Description: path,
+			Config:      map[string]any{ConfigPath: path, ConfigSkipLocal: true},
+		})
+	}
+	return accounts, nil
+}
+
+// Files returns the kubeconfig files on this machine, as absolute paths:
+// ~/.kube/config, the files in $KUBECONFIG, and other *.yaml, *.yml and
+// *.kubeconfig files directly under ~/.kube. The local provider reads the same
+// files, so a local context that skipLocal leaves out is always found there.
+func (p *Provider) Files() []string {
 	var paths []string
 	add := func(path string) {
 		if path == "" {
@@ -97,7 +130,7 @@ func (p *Provider) Accounts(_ context.Context) ([]provider.Account, error) {
 	}
 	kubeDir := filepath.Join(p.home, ".kube")
 	add(filepath.Join(kubeDir, "config"))
-	for _, f := range filepath.SplitList(p.getenv("KUBECONFIG")) {
+	for _, f := range p.envFiles() {
 		add(f)
 	}
 	for _, pattern := range []string{"*.yaml", "*.yml", "*.kubeconfig"} {
@@ -106,22 +139,22 @@ func (p *Provider) Accounts(_ context.Context) ([]provider.Account, error) {
 			add(m)
 		}
 	}
+	return paths
+}
 
-	var accounts []provider.Account
-	used := map[string]bool{}
-	for _, path := range paths {
-		id := AccountID(path, p.home)
-		for base, i := id, 2; used[id]; i++ {
-			id = fmt.Sprintf("%s-%d", base, i)
+// envFiles returns the files $KUBECONFIG names. Inside a tug session it names
+// the session's own file, in a skipped directory; that entry stands for the
+// files in $TUG_ORIG_KUBECONFIG, the value the session replaced.
+func (p *Provider) envFiles() []string {
+	var out []string
+	for _, f := range filepath.SplitList(p.getenv("KUBECONFIG")) {
+		if abs, err := filepath.Abs(f); err == nil && p.skipped(abs) {
+			out = append(out, filepath.SplitList(p.getenv(session.EnvOrigKubeconfig))...)
+			continue
 		}
-		used[id] = true
-		accounts = append(accounts, provider.Account{
-			ID:          id,
-			Description: path,
-			Config:      map[string]any{ConfigPath: path},
-		})
+		out = append(out, f)
 	}
-	return accounts, nil
+	return out
 }
 
 func (p *Provider) skipped(path string) bool {
@@ -161,38 +194,138 @@ func (p *Provider) List(_ context.Context, req provider.ListRequest) ([]provider
 	}
 	slices.Sort(names)
 
+	skipLocal, _ := req.Account.Config[ConfigSkipLocal].(bool)
 	var out []provider.Cluster
 	for _, name := range names {
-		kctx := cfg.Contexts[name]
-		auth := cfg.AuthInfos[kctx.AuthInfo]
-		if auth != nil && isTugExec(auth.Exec) {
-			continue // one of tug's own session files
-		}
-		cl, ok := cfg.Clusters[kctx.Cluster]
-		if !ok || cl.Server == "" {
+		if skipLocal && LocalDistro(cfg, name) != "" {
 			continue
 		}
-		pc := provider.Cluster{
-			ID:                    name,
-			Name:                  name,
-			Endpoints:             provider.Endpoints{Public: cl.Server},
-			TLSServerName:         cl.TLSServerName,
-			InsecureSkipTLSVerify: cl.InsecureSkipTLSVerify,
-			ProxyURL:              cl.ProxyURL,
-			DefaultNamespace:      kctx.Namespace,
-		}
-		pc.CAData, err = caData(cl, path)
+		pc, ok, err := p.ContextCluster(cfg, name, path)
 		if err != nil {
-			return nil, provider.Errorf(provider.InvalidConfig, "context %s: %v", name, err)
+			return nil, err
 		}
-		if auth != nil {
-			if c, inline, err := p.credential(auth, path); err == nil && inline {
-				pc.Credential = &c
-			}
+		if ok {
+			out = append(out, pc)
 		}
-		out = append(out, pc)
 	}
 	return out, nil
+}
+
+// ContextCluster converts one context of a kubeconfig into a cluster, with
+// the credential inline when the file embeds it. path is the file the
+// kubeconfig came from, for resolving relative paths; it may be "" for
+// kubeconfigs with embedded data. ok is false for contexts tug skips: its own
+// session files and contexts without a cluster.
+func (p *Provider) ContextCluster(cfg *clientcmdapi.Config, name, path string) (provider.Cluster, bool, error) {
+	kctx, ok := cfg.Contexts[name]
+	if !ok {
+		return provider.Cluster{}, false, nil
+	}
+	auth := cfg.AuthInfos[kctx.AuthInfo]
+	if auth != nil && isTugExec(auth.Exec) {
+		return provider.Cluster{}, false, nil
+	}
+	cl, ok := cfg.Clusters[kctx.Cluster]
+	if !ok || cl.Server == "" {
+		return provider.Cluster{}, false, nil
+	}
+	pc := provider.Cluster{
+		ID:                    name,
+		Name:                  name,
+		Endpoints:             provider.Endpoints{Public: cl.Server},
+		TLSServerName:         cl.TLSServerName,
+		InsecureSkipTLSVerify: cl.InsecureSkipTLSVerify,
+		ProxyURL:              cl.ProxyURL,
+		DefaultNamespace:      kctx.Namespace,
+	}
+	ca, err := caData(cl, path)
+	if err != nil {
+		return provider.Cluster{}, false, provider.Errorf(provider.InvalidConfig, "context %s: %v", name, err)
+	}
+	pc.CAData = ca
+	if auth != nil {
+		if c, inline, err := p.credential(auth, path); err == nil && inline {
+			pc.Credential = &c
+		}
+	}
+	return pc, true, nil
+}
+
+// ContextCredential returns the credential of one context's user.
+func (p *Provider) ContextCredential(cfg *clientcmdapi.Config, name, path string) (provider.Credential, error) {
+	kctx, ok := cfg.Contexts[name]
+	if !ok {
+		return provider.Credential{}, provider.Errorf(provider.NotFound, "context %q is not in the kubeconfig", name)
+	}
+	auth, ok := cfg.AuthInfos[kctx.AuthInfo]
+	if !ok {
+		return provider.Credential{}, provider.Errorf(provider.NotFound, "context %q has no user", name)
+	}
+	c, _, err := p.credential(auth, path)
+	return c, err
+}
+
+// Local distributions recognised by LocalDistro.
+const (
+	DistroKind           = "kind"
+	DistroK3d            = "k3d"
+	DistroMinikube       = "minikube"
+	DistroDockerDesktop  = "docker-desktop"
+	DistroOrbStack       = "orbstack"
+	DistroRancherDesktop = "rancher-desktop"
+)
+
+// LocalDistro names the local Kubernetes distribution behind a context, or
+// returns "" for any other cluster. It goes by the names the tools give
+// their contexts, kind's and k3d's loopback servers, and the cluster_info
+// extension minikube writes.
+func LocalDistro(cfg *clientcmdapi.Config, name string) string {
+	kctx, ok := cfg.Contexts[name]
+	if !ok {
+		return ""
+	}
+	switch name {
+	case DistroDockerDesktop, DistroOrbStack, DistroRancherDesktop:
+		return name
+	}
+	cl := cfg.Clusters[kctx.Cluster]
+	if cl == nil {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(name, "kind-") && loopback(cl.Server):
+		return DistroKind
+	case strings.HasPrefix(name, "k3d-") && loopback(cl.Server):
+		return DistroK3d
+	case isMinikube(cl.Extensions):
+		return DistroMinikube
+	}
+	return ""
+}
+
+func loopback(server string) bool {
+	u, err := url.Parse(server)
+	if err != nil {
+		return false
+	}
+	switch host := u.Hostname(); host {
+	case "localhost", "0.0.0.0", "host.docker.internal":
+		return true
+	default:
+		ip := net.ParseIP(host)
+		return ip != nil && ip.IsLoopback()
+	}
+}
+
+// isMinikube looks for the cluster_info extension minikube adds to the
+// clusters it writes.
+func isMinikube(ext map[string]runtime.Object) bool {
+	obj, ok := ext["cluster_info"]
+	if !ok {
+		return false
+	}
+	u, ok := obj.(*runtime.Unknown)
+	return ok && strings.Contains(string(u.Raw), "minikube.sigs.k8s.io")
 }
 
 // Credential reads the context's user from the file again.
