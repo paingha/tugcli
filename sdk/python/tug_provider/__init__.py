@@ -4,6 +4,7 @@ A provider is anything that can list Kubernetes clusters and hand out
 credentials for them. A plugin is an executable named tug-provider-<name>.
 For each operation tug starts it with the operation as its only argument,
 writes one JSON request to stdin and reads one JSON response from stdout.
+In serve mode one process answers many requests, one JSON line each.
 Anything written to stderr goes to tug's log.
 
 Most plugins subclass Provider and hand it to main::
@@ -55,7 +56,8 @@ from ._protocol import (
     is_known_op,
     supported_api_versions,
 )
-from ._provider import EXIT_ERROR, EXIT_OK, EXIT_USAGE, Canceled, Provider, capabilities, main, run
+from ._main import main, run
+from ._provider import EXIT_ERROR, EXIT_OK, EXIT_USAGE, Canceled, Provider, canceled, capabilities, sleep
 from ._types import (
     API_VERSION,
     CAP_ACCOUNTS,
@@ -112,6 +114,8 @@ __all__ = [
     "main",
     "run",
     "Canceled",
+    "canceled",
+    "sleep",
     "EXIT_OK",
     "EXIT_ERROR",
     "EXIT_USAGE",

@@ -135,11 +135,11 @@ class RunTest(unittest.TestCase):
         d = decode_describe(out)
         self.assertEqual((d.name, d.version, d.description), ("fake", "1.2.3", "Fake clusters"))
         self.assertEqual(d.protocols, [API_VERSION])
-        self.assertEqual(d.capabilities, ["list", "credential"])
+        self.assertEqual(d.capabilities, ["list", "credential", "serve"])
         self.assertEqual(
             out,
             b'{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse","name":"fake","version":"1.2.3",'
-            b'"description":"Fake clusters","protocols":["provider/v1alpha1"],"capabilities":["list","credential"],'
+            b'"description":"Fake clusters","protocols":["provider/v1alpha1"],"capabilities":["list","credential","serve"],'
             b'"secrets":[{"name":"api_token"}]}\n',
         )
 
@@ -151,8 +151,8 @@ class RunTest(unittest.TestCase):
             def rotate(self, request):
                 return token("t", None)
 
-        self.assertEqual(capabilities(Fake()), ["list", "credential"])
-        self.assertEqual(capabilities(Full()), ["accounts", "list", "credential", "rotate", "checkAccess"])
+        self.assertEqual(capabilities(Fake()), ["list", "credential", "serve"])
+        self.assertEqual(capabilities(Full()), ["accounts", "list", "credential", "rotate", "checkAccess", "serve"])
         self.assertEqual(capabilities(Serving()), ["list", "credential", "rotate", "serve"])
 
     def test_list_round_trip(self):
@@ -173,7 +173,7 @@ class RunTest(unittest.TestCase):
         self.assertIn("list: Unauthenticated: bad token", err)
 
     def test_unimplemented_and_unknown(self):
-        for op in (OP_ACCOUNTS, OP_ROTATE, OP_CHECK_ACCESS, "serve"):
+        for op in (OP_ACCOUNTS, OP_ROTATE, OP_CHECK_ACCESS):
             with self.subTest(op):
                 code, out, _ = call(Fake(), op, stdin=Unreadable())
                 self.assertEqual(code, EXIT_ERROR)

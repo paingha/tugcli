@@ -82,10 +82,10 @@ func TestExampleConforms(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the Python example plugin does not conform")
 	}
-	// With an account, secrets and the accounts operation, every check but
-	// serve has something to test, so a skip means a check did not run.
+	// With an account, secrets, accounts and serve, every check has
+	// something to test, so a skip means a check did not run.
 	for _, x := range r.Results {
-		if x.Status == conformance.Skip && x.Name != "serve answers like one-shot mode" {
+		if x.Status == conformance.Skip {
 			t.Errorf("%s was skipped: %s", x.Name, x.Detail)
 		}
 	}

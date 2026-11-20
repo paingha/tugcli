@@ -46,7 +46,7 @@ class ExampleTest(unittest.TestCase):
         code, out = call(OP_DESCRIBE)
         self.assertEqual(code, 0)
         d = decode_describe(out)
-        self.assertEqual((d.name, d.capabilities), ("pyexample", ["accounts", "list", "credential"]))
+        self.assertEqual((d.name, d.capabilities), ("pyexample", ["accounts", "list", "credential", "serve"]))
 
     def test_list(self):
         code, out = call(OP_LIST, ListRequest(account=DEMO, secrets={"api_token": "ex_x"}))

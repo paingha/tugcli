@@ -1,13 +1,13 @@
-"""The Provider base class and main, which runs one as a plugin process."""
+"""The Provider base class, cancellation, and answering one request."""
 
 from __future__ import annotations
 
 import abc
 import io
-import signal
-import sys
+import threading
+import time
 import traceback
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, Union
 
 from ._errors import INTERNAL, INVALID_CONFIG, UNAVAILABLE, UNIMPLEMENTED, ProviderError, as_error, find_provider_error
 from ._protocol import (
@@ -31,7 +31,6 @@ from ._protocol import (
     OP_ROTATE,
     OP_SERVE,
     envelope,
-    is_known_op,
     supported_api_versions,
 )
 from ._types import (
@@ -40,6 +39,7 @@ from ._types import (
     CAP_CREDENTIAL,
     CAP_LIST,
     CAP_ROTATE,
+    CAP_SERVE,
     AccessRequest,
     Account,
     Cluster,
@@ -58,8 +58,6 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_USAGE = 2
 
-_USAGE = "usage: %s <describe|accounts|list|credential|rotate|checkAccess>"
-
 
 class Provider(abc.ABC):
     """What a plugin implements.
@@ -68,6 +66,9 @@ class Provider(abc.ABC):
     check_access are optional: override one to support it, and describe
     lists its capability. Raise ProviderError for failures tug should
     classify; any other exception reaches tug as Internal.
+
+    In serve mode one process answers many requests, each in a thread of
+    its own, so the methods may run concurrently.
     """
 
     @abc.abstractmethod
@@ -114,56 +115,111 @@ def _implements(provider: Any, method: str) -> bool:
 
 
 def capabilities(provider: Any) -> list[str]:
-    """Returns the capability names of provider, in describe's order: list
-    and credential, the ones info() declares, and one for each optional
-    operation the provider overrides."""
-    names = set(provider.info().capabilities) | {CAP_LIST, CAP_CREDENTIAL}
+    """Returns the capability names of provider, in describe's order: list,
+    credential and serve, the ones info() declares, and one for each
+    optional operation the provider overrides. Every SDK plugin can serve;
+    tug uses serve mode only when plugin.yaml lists it too."""
+    names = set(provider.info().capabilities) | {CAP_LIST, CAP_CREDENTIAL, CAP_SERVE}
     names.update(cap for method, cap in _OPTIONAL if _implements(provider, method))
     return sort_capabilities(names)
 
 
 class Canceled(BaseException):
-    """Raised in the main thread when main receives SIGTERM or SIGINT, which
-    tug sends when an operation times out or the user presses Ctrl-C.
+    """Raised when the request a provider is answering is cancelled.
+
+    In one-shot mode main raises it in the main thread, wherever the
+    provider is, when the plugin receives SIGTERM or SIGINT, which tug sends
+    when an operation times out or the user presses Ctrl-C. In serve mode
+    sleep raises it once the host cancels the request or the plugin is told
+    to stop; see canceled.
 
     It derives from BaseException, as KeyboardInterrupt does, so that
-    `except Exception` in a provider does not swallow it. main answers
-    Unavailable and exits 1. Catch it only to clean up, then raise it again.
+    `except Exception` in a provider does not swallow it. The SDK answers
+    Unavailable. Catch it only to clean up, then raise it again.
     """
 
 
-def _read_all(stream: Any) -> bytes:
-    if stream is None:
-        return b""
-    data = stream.read(MAX_MESSAGE_BYTES + 1)
-    if isinstance(data, str):
-        data = data.encode("utf-8", "surrogateescape")
-    return bytes(data or b"")
+class _Call:
+    """One request being answered, and whether it has been cancelled."""
+
+    def __init__(self, op: str, request_id: str = "") -> None:
+        self.op = op
+        self.id = request_id
+        self.reason = ""
+        self._event = threading.Event()
+
+    def cancel(self, reason: str) -> None:
+        """Marks the call cancelled; the first reason given is kept."""
+        if not self._event.is_set():
+            self.reason = reason
+            self._event.set()
+
+    def is_canceled(self) -> bool:
+        """Reports whether the call has been cancelled."""
+        return self._event.is_set()
+
+    def wait(self, timeout: float) -> bool:
+        """Waits up to timeout seconds for the call to be cancelled and
+        reports whether it was."""
+        return self._event.wait(timeout)
 
 
-def _read_request(stdin: Any, kind: str, optional: bool) -> Optional[dict[str, Any]]:
-    """Reads and checks one request message. When optional is true an empty
-    stdin is accepted and None returned. As in the Go SDK, a request may
-    leave out apiVersion and kind, but one for another protocol version or
-    operation is refused rather than misread."""
-    try:
-        data = _read_all(stdin)
-    except Canceled as c:
-        raise ProviderError(UNAVAILABLE, "cancelled while reading the request: %s" % c) from None
-    except (OSError, ValueError) as e:
-        raise ProviderError(INTERNAL, "reading request: %s" % e) from None
-    if len(data) > MAX_MESSAGE_BYTES:
-        raise ProviderError(INVALID_CONFIG, "request exceeds %d bytes" % MAX_MESSAGE_BYTES)
-    if not data.strip():
-        if optional:
-            return None
-        raise ProviderError(INVALID_CONFIG, "empty request; expected %s on stdin" % kind)
-    try:
-        msg = loads(data)
-    except ValueError as e:
-        raise ProviderError(INVALID_CONFIG, "request is not JSON: %s" % e) from None
-    if msg is None:  # Go reads null as an empty object
-        msg = {}
+_local = threading.local()
+
+
+def current_call() -> Optional[_Call]:
+    """Returns the call this thread is answering, or None."""
+    return getattr(_local, "call", None)
+
+
+def set_current_call(call: Optional[_Call]) -> None:
+    """Records the call this thread is answering."""
+    _local.call = call
+
+
+def canceled() -> bool:
+    """Reports whether the request this thread is answering has been
+    cancelled: in serve mode by the host or by SIGTERM, and in one-shot
+    mode by SIGTERM, which main also turns into Canceled.
+
+    In serve mode the SDK does not interrupt a provider whose request is
+    cancelled: check canceled() between steps of long work, and wait with
+    sleep, so that the request stops promptly. Outside a request it
+    returns False.
+    """
+    call = current_call()
+    return call is not None and call.is_canceled()
+
+
+def sleep(seconds: float) -> None:
+    """Waits like time.sleep, but raises Canceled as soon as the request
+    this thread is answering is cancelled, and at once if it already has
+    been. Use it for waits such as polling for a replacement credential."""
+    call = current_call()
+    if call is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + max(0.0, seconds)
+    while True:
+        # Short waits let a signal handler run in the main thread even where
+        # a lock wait cannot be interrupted.
+        remaining = deadline - time.monotonic()
+        if call.wait(min(max(0.0, remaining), 0.1)):
+            raise Canceled(call.reason or "cancelled")
+        if remaining <= 0.1:
+            return
+
+
+# A reader returns the decoded request message for the kind of request an
+# operation expects, or None when an optional request is empty, and raises
+# ProviderError for a request it refuses.
+Reader = Callable[[str, bool], Optional[dict]]
+
+
+def check_message(msg: Any, kind: str) -> dict[str, Any]:
+    """Checks a decoded, non-empty request message. As in the Go SDK, a
+    request may leave out apiVersion and kind, but one for another protocol
+    version or operation is refused rather than misread."""
     if not isinstance(msg, dict):
         raise ProviderError(INVALID_CONFIG, "request is not JSON: %s is not an object" % json_type(msg))
     version, got = msg.get("apiVersion"), msg.get("kind")
@@ -178,6 +234,49 @@ def _read_request(stdin: Any, kind: str, optional: bool) -> Optional[dict[str, A
     if got and got != kind:
         raise ProviderError(INVALID_CONFIG, "expected kind %s, got %s" % (kind, quote(got)))
     return msg
+
+
+def empty_request(kind: str, optional: bool) -> None:
+    """Answers an empty request: None when it is optional, else the error
+    both modes give."""
+    if optional:
+        return None
+    raise ProviderError(INVALID_CONFIG, "empty request; expected %s on stdin" % kind)
+
+
+def _read_all(stream: Any) -> bytes:
+    if stream is None:
+        return b""
+    data = stream.read(MAX_MESSAGE_BYTES + 1)
+    if isinstance(data, str):
+        data = data.encode("utf-8", "surrogateescape")
+    return bytes(data or b"")
+
+
+def stream_reader(stdin: Any) -> Reader:
+    """Returns a reader for one-shot mode, which reads the request from
+    stdin."""
+
+    def read(kind: str, optional: bool) -> Optional[dict]:
+        try:
+            data = _read_all(stdin)
+        except Canceled as c:
+            raise ProviderError(UNAVAILABLE, "cancelled while reading the request: %s" % c) from None
+        except (OSError, ValueError) as e:
+            raise ProviderError(INTERNAL, "reading request: %s" % e) from None
+        if len(data) > MAX_MESSAGE_BYTES:
+            raise ProviderError(INVALID_CONFIG, "request exceeds %d bytes" % MAX_MESSAGE_BYTES)
+        if not data.strip():
+            return empty_request(kind, optional)
+        try:
+            msg = loads(data)
+        except ValueError as e:
+            raise ProviderError(INVALID_CONFIG, "request is not JSON: %s" % e) from None
+        if msg is None:  # Go reads null as an empty object
+            msg = {}
+        return check_message(msg, kind)
+
+    return read
 
 
 def _parse(cls: Any, msg: Optional[dict[str, Any]], kind: str) -> Any:
@@ -212,7 +311,7 @@ def _unsupported(provider: Any, method: str, op: str) -> None:
         raise ProviderError(UNIMPLEMENTED, "%s is not supported" % op)
 
 
-def _dispatch(provider: Any, op: str, stdin: Any) -> dict[str, Any]:
+def _dispatch(provider: Any, op: str, read: Reader) -> dict[str, Any]:
     if op == OP_DESCRIBE:
         info = provider.info()
         desc = Description(
@@ -227,54 +326,75 @@ def _dispatch(provider: Any, op: str, stdin: Any) -> dict[str, Any]:
 
     if op == OP_ACCOUNTS:
         _unsupported(provider, "accounts", op)
-        _read_request(stdin, KIND_ACCOUNTS_REQUEST, True)
+        read(KIND_ACCOUNTS_REQUEST, True)
         accounts = _items(provider.accounts(), Account, op)
         return envelope(KIND_ACCOUNTS_RESPONSE, {"accounts": [a.to_dict() for a in accounts]})
 
     if op == OP_LIST:
-        req = _parse(ListRequest, _read_request(stdin, KIND_LIST_REQUEST, False), KIND_LIST_REQUEST)
+        req = _parse(ListRequest, read(KIND_LIST_REQUEST, False), KIND_LIST_REQUEST)
         clusters = _items(provider.list(req), Cluster, op)
         return envelope(KIND_LIST_RESPONSE, {"clusters": [c.to_dict() for c in clusters]})
 
     if op == OP_CREDENTIAL:
-        req = _parse(CredentialRequest, _read_request(stdin, KIND_CREDENTIAL_REQUEST, False), KIND_CREDENTIAL_REQUEST)
+        req = _parse(CredentialRequest, read(KIND_CREDENTIAL_REQUEST, False), KIND_CREDENTIAL_REQUEST)
         return _credential_response(provider.credential(req), op)
 
     if op == OP_ROTATE:
         _unsupported(provider, "rotate", op)
-        req = _parse(CredentialRequest, _read_request(stdin, KIND_ROTATE_REQUEST, False), KIND_ROTATE_REQUEST)
+        req = _parse(CredentialRequest, read(KIND_ROTATE_REQUEST, False), KIND_ROTATE_REQUEST)
         return _credential_response(provider.rotate(req), op)
 
     if op == OP_CHECK_ACCESS:
         _unsupported(provider, "check_access", op)
-        req = _parse(AccessRequest, _read_request(stdin, KIND_CHECK_ACCESS_REQUEST, False), KIND_CHECK_ACCESS_REQUEST)
+        req = _parse(AccessRequest, read(KIND_CHECK_ACCESS_REQUEST, False), KIND_CHECK_ACCESS_REQUEST)
         findings = _items(provider.check_access(req), Finding, op)
         return envelope(KIND_CHECK_ACCESS_RESPONSE, {"findings": [x.to_dict() for x in findings]})
 
     if op == OP_SERVE:
-        raise ProviderError(UNIMPLEMENTED, "serve mode is not supported by this SDK version")
+        raise ProviderError(INVALID_CONFIG, "serve is a mode, not a request")
 
     raise ProviderError(INVALID_CONFIG, "unknown operation %s" % quote(op))
 
 
-def _log(stderr: Any, line: str) -> None:
-    """Writes one line to stderr, which may be a text or a binary stream.
-    Failures are ignored: there is nowhere left to report them."""
+def answer(provider: Any, op: str, read: Reader, stderr: Any) -> Union[bytes, ProviderError]:
+    """Answers one request for op and returns the encoded response message,
+    without a newline, or the ProviderError to send instead. Canceled
+    propagates."""
+    try:
+        return dumps(_dispatch(provider, op, read))
+    except ProviderError as e:
+        return e
+    except Exception as e:  # every failure must reach tug as an Error
+        found = find_provider_error(e)
+        if found is None:
+            # A bug in the provider: the traceback goes to tug's log.
+            log(stderr, traceback.format_exc().rstrip("\n"))
+            found = as_error(e)
+        return found
+
+
+_log_lock = threading.Lock()
+
+
+def log(stderr: Any, line: str) -> None:
+    """Writes one line to stderr, which may be a text or a binary stream,
+    without interleaving it with lines from other threads. Failures are
+    ignored: there is nowhere left to report them."""
     if stderr is None:
         return
-    try:
-        if isinstance(stderr, (io.RawIOBase, io.BufferedIOBase)):
-            stderr.write((line + "\n").encode("utf-8", "backslashreplace"))
-        else:
-            stderr.write(line + "\n")
-        stderr.flush()
-    except (OSError, ValueError):
-        pass
+    with _log_lock:
+        try:
+            if isinstance(stderr, (io.RawIOBase, io.BufferedIOBase)):
+                stderr.write((line + "\n").encode("utf-8", "backslashreplace"))
+            else:
+                stderr.write(line + "\n")
+            stderr.flush()
+        except (OSError, ValueError):
+            pass
 
 
-def _write(stdout: Any, data: bytes) -> None:
-    """Writes the response to stdout, which may be a binary or a text
-    stream."""
+def write(stdout: Any, data: bytes) -> None:
+    """Writes data to stdout, which may be a binary or a text stream."""
     if stdout is None:
         raise OSError("there is no stdout")
     if isinstance(stdout, io.TextIOBase):
@@ -284,141 +404,9 @@ def _write(stdout: Any, data: bytes) -> None:
     stdout.flush()
 
 
-def _error_message(e: ProviderError) -> bytes:
-    return dumps(envelope(KIND_ERROR, e.to_dict())) + b"\n"
-
-
-def _write_error(stdout: Any, stderr: Any, prog: str, op: str, e: ProviderError) -> None:
+def error_message(e: ProviderError) -> bytes:
+    """Returns the encoded Error message for e, without a newline. A missing
+    code is sent as Internal."""
     if not e.code:
         e.code = INTERNAL
-    try:
-        _write(stdout, _error_message(e))
-    except (OSError, ValueError) as werr:
-        _log(stderr, "writing error response: %s" % werr)
-    _log(stderr, "%s %s: %s" % (prog, op, e))
-
-
-def _outcome(provider: Any, args: list[str], stdin: Any, stderr: Any) -> tuple[int, Any]:
-    """Runs the operation args names and returns the exit code with what to
-    write: the encoded response, the ProviderError to send instead, or None
-    for a usage error, which sends nothing."""
-    if len(args) != 1:
-        return EXIT_USAGE, None
-    op = args[0]
-    if not is_known_op(op):
-        return EXIT_USAGE, ProviderError(INVALID_CONFIG, "unknown operation %s" % quote(op))
-    try:
-        return EXIT_OK, dumps(_dispatch(provider, op, stdin)) + b"\n"
-    except ProviderError as e:
-        return EXIT_ERROR, e
-    except Exception as e:  # every failure must reach tug as an Error
-        found = find_provider_error(e)
-        if found is None:
-            # A bug in the provider: the traceback goes to tug's log.
-            _log(stderr, traceback.format_exc().rstrip("\n"))
-            found = as_error(e)
-        return EXIT_ERROR, found
-
-
-def _run(provider: Any, args: list[str], stdin: Any, stdout: Any, stderr: Any, prog: str, disarm: Callable[[], None]) -> int:
-    op = args[0] if len(args) == 1 else ""
-    try:
-        try:
-            code, result = _outcome(provider, args, stdin, stderr)
-        finally:
-            # From here on a signal must not cut the response short. One that
-            # arrives before this line is caught below.
-            disarm()
-    except Canceled as c:
-        code, result = EXIT_ERROR, ProviderError(UNAVAILABLE, "%s cancelled: %s" % (op, c))
-    if result is None:
-        _log(stderr, _USAGE % prog)
-        return code
-    if isinstance(result, ProviderError):
-        _write_error(stdout, stderr, prog, op, result)
-        return code
-    try:
-        _write(stdout, result)
-    except (OSError, ValueError) as e:
-        _log(stderr, "writing response: %s" % e)
-        return EXIT_ERROR
-    return code
-
-
-def _prog_name() -> str:
-    return sys.argv[0] if sys.argv and sys.argv[0] else "tug-provider"
-
-
-def run(provider: Any, args: list[str], stdin: Any, stdout: Any, stderr: Any) -> int:
-    """Runs one operation and returns the exit code: main with explicit
-    arguments and streams, for tests and for hosts that embed a provider.
-
-    args are the arguments after the program name, normally one operation.
-    stdin and stdout are binary streams, such as io.BytesIO; text streams
-    work too. stderr is a text stream. run does not handle signals.
-    """
-    return _run(provider, list(args), stdin, stdout, stderr, _prog_name(), lambda: None)
-
-
-class _SignalGuard:
-    """Turns the first SIGTERM or SIGINT into Canceled in the main thread
-    until disarmed, then restores the previous handlers."""
-
-    def __init__(self) -> None:
-        self._armed = True
-        self._previous: dict[int, Any] = {}
-
-    def __enter__(self) -> _SignalGuard:
-        for name in ("SIGTERM", "SIGINT"):
-            signum = getattr(signal, name, None)
-            if signum is None:
-                continue
-            try:
-                self._previous[signum] = signal.signal(signum, self._handle)
-            except (OSError, ValueError):
-                pass  # not the main thread, or not a signal this platform delivers
-        return self
-
-    def _handle(self, signum: int, _frame: Any) -> None:
-        if self._armed:
-            self._armed = False
-            raise Canceled("received %s" % signal.Signals(signum).name)
-
-    def disarm(self) -> None:
-        """Stops turning signals into Canceled."""
-        self._armed = False
-
-    def __exit__(self, *exc: Any) -> None:
-        self._armed = False
-        for signum, previous in self._previous.items():
-            try:
-                signal.signal(signum, previous if previous is not None else signal.SIG_DFL)
-            except (OSError, ValueError):
-                pass
-
-
-def main(provider: Any, argv: Optional[list[str]] = None) -> int:
-    """Runs provider as a plugin process and returns the exit code.
-
-    The operation comes from argv (sys.argv by default), the request from
-    stdin, and the response goes to stdout; errors and logs go to stderr.
-    SIGTERM and SIGINT raise Canceled in the provider, and main answers
-    Unavailable. While the provider runs, sys.stdout points at stderr, so a
-    stray print() reaches tug's log instead of breaking the response. A
-    plugin's script typically ends:
-
-        if __name__ == "__main__":
-            sys.exit(main(MyProvider()))
-    """
-    argv = list(sys.argv if argv is None else argv)
-    prog = argv[0] if argv and argv[0] else "tug-provider"
-    stdin = getattr(sys.stdin, "buffer", sys.stdin)
-    stdout = getattr(sys.stdout, "buffer", sys.stdout)
-    stderr = sys.stderr
-    real_stdout = sys.stdout
-    sys.stdout = sys.stderr
-    try:
-        with _SignalGuard() as guard:
-            return _run(provider, argv[1:], stdin, stdout, stderr, prog, guard.disarm)
-    finally:
-        sys.stdout = real_stdout
+    return dumps(envelope(KIND_ERROR, e.to_dict()))

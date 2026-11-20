@@ -9,7 +9,7 @@ metadata:
   publisher: tug
 spec:
   protocols: [provider/v1alpha1]
-  capabilities: [list, credential, accounts]
+  capabilities: [list, credential, accounts, serve]
   # One script serves every platform with python3. Windows is left out
   # because it cannot run the script directly.
   platforms:
