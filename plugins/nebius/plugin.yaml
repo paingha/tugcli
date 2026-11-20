@@ -7,7 +7,7 @@ metadata:
   homepage: https://github.com/paingha/tugcli/tree/main/plugins/nebius
 spec:
   protocols: [provider/v1alpha1]
-  capabilities: [list, credential]
+  capabilities: [list, credential, serve]
   # The plugin drives the nebius CLI, which Nebius ships for macOS and Linux.
   platforms:
   - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-nebius}

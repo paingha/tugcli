@@ -7,7 +7,7 @@ metadata:
   homepage: https://github.com/paingha/tugcli/tree/main/plugins/crusoe
 spec:
   protocols: [provider/v1alpha1]
-  capabilities: [list, credential]
+  capabilities: [list, credential, serve]
   platforms:
   - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-crusoe}
   - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-crusoe}
