@@ -3,9 +3,12 @@ package python
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -159,6 +162,40 @@ func wirePayloads() []struct {
 	}
 }
 
+func sortedLines(s string) []string {
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if s == "" {
+		lines = nil
+	}
+	slices.Sort(lines)
+	return lines
+}
+
+// lineDiff lists the lines only one of two sorted lists has.
+func lineDiff(want, got []string) string {
+	count := map[string]int{}
+	for _, l := range want {
+		count[l]++
+	}
+	for _, l := range got {
+		count[l]--
+	}
+	var b strings.Builder
+	for _, l := range want {
+		if count[l] > 0 {
+			fmt.Fprintf(&b, "missing: %s\n", l)
+			count[l]--
+		}
+	}
+	for _, l := range got {
+		if count[l] < 0 {
+			fmt.Fprintf(&b, "extra:   %s\n", l)
+			count[l]++
+		}
+	}
+	return b.String()
+}
+
 func TestWireFormatMatchesGoSDK(t *testing.T) {
 	python := needPython(t)
 	script := filepath.Join("testdata", "wire.py")
@@ -222,6 +259,64 @@ func TestWireFormatMatchesGoSDK(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("serve session", func(t *testing.T) {
+		// Every one-shot case with one operation becomes a frame, followed by
+		// frames that only serve mode has: cancels, and lines it cannot read.
+		var frames []string
+		for _, tt := range tests {
+			if len(tt.args) != 1 {
+				continue
+			}
+			id, err := json.Marshal(tt.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame := `{"id":` + string(id) + `,"op":"` + tt.args[0] + `"`
+			if tt.stdin != "" {
+				frame += `,"request":` + tt.stdin
+			}
+			frames = append(frames, frame+"}")
+		}
+		frames = append(frames,
+			`{"id":"no op"}`,
+			`{"id":"null request","op":"credential","request":null}`,
+			`{"id":"a cancel for no request","cancel":true}`,
+			``,
+			`   `,
+			`this is not JSON`,
+			`{"op":"describe"}`,
+			`{"id":"","op":"describe"}`,
+			`{"id":7,"op":"describe"}`,
+			`{"id":"bad cancel","op":"describe","cancel":"yes"}`,
+			`{"id":"bad op","op":1}`,
+			`[1]`,
+			`null`,
+		)
+		stdin := strings.Join(frames, "\n") + "\n"
+
+		var want bytes.Buffer
+		// Requests run in goroutines that log concurrently, so the Go side's
+		// stderr is discarded rather than shared.
+		wantCode := provider.Run(context.Background(), wirePlugin{}, []string{provider.OpServe}, strings.NewReader(stdin), &want, io.Discard)
+
+		cmd := exec.Command(python, script, provider.OpServe)
+		cmd.Env = env
+		cmd.Stdin = strings.NewReader(stdin)
+		var got, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &got, &stderr
+		gotCode := exitCode(cmd.Run())
+
+		// Answers may come in any order, so compare them as sorted lines;
+		// each line holds its request's id.
+		wantLines, gotLines := sortedLines(want.String()), sortedLines(got.String())
+		if gotCode != wantCode || !slices.Equal(gotLines, wantLines) {
+			t.Errorf("wire.py serve exited %d, want %d\n%s\nstderr:\n%s", gotCode, wantCode, lineDiff(wantLines, gotLines), stderr.String())
+		}
+		if len(wantLines) < len(frames)-5 {
+			t.Errorf("the Go SDK answered only %d of %d frames:\n%s", len(wantLines), len(frames), want.String())
+		}
+	})
 
 	t.Run("encode_request", func(t *testing.T) {
 		cmd := exec.Command(python, script, "encode")
