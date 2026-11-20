@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -72,13 +74,14 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 // Client talks to a running tugd over its control socket.
 type Client struct {
+	sock string
 	http *http.Client
 }
 
 // NewClient returns a client for the tugd of a runtime directory.
 func NewClient(runtimeDir string) *Client {
 	sock := SocketPath(runtimeDir)
-	return &Client{http: &http.Client{
+	return &Client{sock: sock, http: &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -90,6 +93,14 @@ func NewClient(runtimeDir string) *Client {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, out any) error {
+	// Whoever answers on the socket is trusted with the proxy address and
+	// CA, so the socket must be in a directory only this user can use.
+	if err := checkPrivateDir(filepath.Dir(c.sock)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: %w", ErrNotRunning, err)
+		}
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, method, "http://tugd"+path, nil)
 	if err != nil {
 		return err

@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,9 +39,10 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 			"tug proxy: missing or wrong session token; use the kubeconfig of a tug session")
 		return
 	}
-	sess, err := s.cfg.Sessions.Open(sessionID)
-	if err != nil || !sess.State.Connected() {
-		writeStatus(w, http.StatusGone, metav1.StatusReasonGone, "tug proxy: this tug session has ended or is not connected; run `tug connect`")
+	sess, ok := s.usesProxy(sessionID)
+	if !ok {
+		writeStatus(w, http.StatusGone, metav1.StatusReasonGone,
+			"tug proxy: this tug session has ended, is not connected, or is not using the proxy; run `tug connect --proxy`")
 		return
 	}
 
@@ -88,19 +90,31 @@ func bearer(r *http.Request) string {
 }
 
 // upstream returns the cached proxy for a cluster, building a new one when
-// there is none or it is older than upstreamTTL.
+// there is none or it is older than upstreamTTL. Requests that miss the
+// cache together wait for one build, so a client opening many connections
+// at once asks for the cluster's credential once.
 func (s *Server) upstream(ctx context.Context, clusterID string) (*upstream, error) {
-	s.mu.Lock()
-	up, ok := s.upstreams[clusterID]
-	s.mu.Unlock()
-	if ok && s.cfg.Now().Sub(up.created) < upstreamTTL {
+	if up := s.cachedUpstream(clusterID); up != nil {
 		return up, nil
 	}
+	s.mu.Lock()
+	build, ok := s.building[clusterID]
+	if !ok {
+		build = &sync.Mutex{}
+		s.building[clusterID] = build
+	}
+	s.mu.Unlock()
+	build.Lock()
+	defer build.Unlock()
+	if up := s.cachedUpstream(clusterID); up != nil {
+		return up, nil // built while this request waited
+	}
+
 	cfg, err := s.cfg.Upstream(ctx, clusterID)
 	if err != nil {
 		return nil, err
 	}
-	up, err = newUpstream(cfg, s.cfg.Now())
+	up, err := newUpstream(cfg, s.cfg.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +122,16 @@ func (s *Server) upstream(ctx context.Context, clusterID string) (*upstream, err
 	s.upstreams[clusterID] = up
 	s.mu.Unlock()
 	return up, nil
+}
+
+// cachedUpstream returns a cluster's proxy if it is younger than upstreamTTL.
+func (s *Server) cachedUpstream(clusterID string) *upstream {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if up, ok := s.upstreams[clusterID]; ok && s.cfg.Now().Sub(up.created) < upstreamTTL {
+		return up
+	}
+	return nil
 }
 
 func newUpstream(cfg *rest.Config, now time.Time) (*upstream, error) {

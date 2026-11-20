@@ -14,6 +14,7 @@ import (
 
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/config"
+	"github.com/paingha/tugcli/internal/filelock"
 )
 
 // AuthCommand is how a session kubeconfig calls back into tug for
@@ -44,29 +45,46 @@ func (s *Session) Connect(cl *catalog.Cluster, namespace string, readOnly bool, 
 	if namespace == "" {
 		namespace = "default"
 	}
-	s.State.ClusterID = cl.ID
-	s.State.ClusterName = cl.Name
-	s.State.Namespace = namespace
-	s.State.ReadOnly = readOnly
-	s.State.UnlockedUntil = time.Time{}
-	s.State.ProxyURL = auth.ProxyURL
-	if err := writeKubeconfig(s.KubeconfigPath(), Kubeconfig(cl, namespace, s.State.ID, auth)); err != nil {
-		return err
-	}
-	return s.saveWithPrompt()
+	return s.update(func() (bool, error) {
+		s.State.ClusterID = cl.ID
+		s.State.ClusterName = cl.Name
+		s.State.Namespace = namespace
+		s.State.ReadOnly = readOnly
+		s.State.UnlockedUntil = time.Time{}
+		s.State.ProxyURL = auth.ProxyURL
+		return true, writeKubeconfig(s.KubeconfigPath(), Kubeconfig(cl, namespace, s.State.ID, auth))
+	})
 }
 
 // SetProxy repoints a proxied session at tugd's current address and
-// certificate, for example after tugd restarted on another port.
-func (s *Session) SetProxy(proxyURL string, ca []byte) error {
-	if s.State.ProxyURL == "" {
-		return nil
-	}
-	cfg, err := clientcmd.LoadFromFile(s.KubeconfigPath())
-	if err != nil {
-		return fmt.Errorf("reading session kubeconfig: %w", err)
-	}
-	server := ProxyServer(proxyURL, s.State.ID)
+// certificate, for example after tugd restarted on another port. It changes
+// nothing else, and nothing at all when the session no longer uses the
+// proxy. It reports whether the kubeconfig changed: a client that loaded it
+// before still has the old address.
+func (s *Session) SetProxy(proxyURL string, ca []byte) (changed bool, err error) {
+	err = s.update(func() (bool, error) {
+		if s.State.ProxyURL == "" {
+			return false, nil
+		}
+		cfg, err := clientcmd.LoadFromFile(s.KubeconfigPath())
+		if err != nil {
+			return false, fmt.Errorf("reading session kubeconfig: %w", err)
+		}
+		if !repoint(cfg, proxyURL, ca, s.State.ID) && s.State.ProxyURL == proxyURL {
+			return false, nil
+		}
+		changed = true
+		s.State.ProxyURL = proxyURL
+		return true, writeKubeconfig(s.KubeconfigPath(), cfg)
+	})
+	return changed, err
+}
+
+// repoint points a proxied session kubeconfig at tugd's proxyURL for
+// sessionID: the server address, the CA it trusts, and the session its exec
+// entry asks a token for. It reports whether anything changed.
+func repoint(cfg *clientcmdapi.Config, proxyURL string, ca []byte, sessionID string) bool {
+	server := ProxyServer(proxyURL, sessionID)
 	changed := false
 	for _, cl := range cfg.Clusters {
 		if cl.Server != server || !bytes.Equal(cl.CertificateAuthorityData, ca) {
@@ -74,14 +92,18 @@ func (s *Session) SetProxy(proxyURL string, ca []byte) error {
 			changed = true
 		}
 	}
-	if !changed {
-		return nil
+	for _, ai := range cfg.AuthInfos {
+		if ai.Exec == nil {
+			continue
+		}
+		for i := 0; i+1 < len(ai.Exec.Args); i++ {
+			if ai.Exec.Args[i] == "--session" && ai.Exec.Args[i+1] != sessionID {
+				ai.Exec.Args[i+1] = sessionID
+				changed = true
+			}
+		}
 	}
-	if err := writeKubeconfig(s.KubeconfigPath(), cfg); err != nil {
-		return err
-	}
-	s.State.ProxyURL = proxyURL
-	return s.Save()
+	return changed
 }
 
 // ProxyServer is a session's API server address on tugd's proxy.
@@ -91,47 +113,78 @@ func ProxyServer(proxyURL, sessionID string) string {
 
 // SetNamespace changes the namespace of a connected session.
 func (s *Session) SetNamespace(ns string) error {
-	if !s.State.Connected() {
-		return errors.New("not connected; run `tug connect` first")
-	}
-	cfg, err := clientcmd.LoadFromFile(s.KubeconfigPath())
-	if err != nil {
-		return fmt.Errorf("reading session kubeconfig: %w", err)
-	}
-	kctx, ok := cfg.Contexts[cfg.CurrentContext]
-	if !ok {
-		return fmt.Errorf("session kubeconfig has no current context")
-	}
-	kctx.Namespace = ns
-	if err := writeKubeconfig(s.KubeconfigPath(), cfg); err != nil {
-		return err
-	}
-	s.State.Namespace = ns
-	return s.saveWithPrompt()
+	return s.update(func() (bool, error) {
+		if !s.State.Connected() {
+			return false, errors.New("not connected; run `tug connect` first")
+		}
+		cfg, err := clientcmd.LoadFromFile(s.KubeconfigPath())
+		if err != nil {
+			return false, fmt.Errorf("reading session kubeconfig: %w", err)
+		}
+		kctx, ok := cfg.Contexts[cfg.CurrentContext]
+		if !ok {
+			return false, fmt.Errorf("session kubeconfig has no current context")
+		}
+		kctx.Namespace = ns
+		s.State.Namespace = ns
+		return true, writeKubeconfig(s.KubeconfigPath(), cfg)
+	})
 }
 
 // Unlock allows writes on a read-only session for d.
 func (s *Session) Unlock(d time.Duration) error {
-	s.State.UnlockedUntil = s.m.now().Add(d)
-	return s.saveWithPrompt()
+	return s.update(func() (bool, error) {
+		s.State.UnlockedUntil = s.m.now().Add(d)
+		return true, nil
+	})
 }
 
 // Lock ends an unlock early.
 func (s *Session) Lock() error {
-	s.State.UnlockedUntil = time.Time{}
-	return s.saveWithPrompt()
+	return s.update(func() (bool, error) {
+		s.State.UnlockedUntil = time.Time{}
+		return true, nil
+	})
 }
 
 // Disconnect forgets the cluster. The shell hook then restores the original
 // KUBECONFIG.
 func (s *Session) Disconnect() error {
-	for _, f := range []string{kubeconfigFileName, promptFileName} {
-		if err := os.Remove(filepath.Join(s.dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+	return s.update(func() (bool, error) {
+		for _, f := range []string{kubeconfigFileName, promptFileName} {
+			if err := os.Remove(filepath.Join(s.dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return false, err
+			}
 		}
+		s.State = State{ID: s.State.ID, PID: s.State.PID, Created: s.State.Created}
+		return true, nil
+	})
+}
+
+// update changes the session with every other tug process kept out: it
+// takes the session's lock, reads the state from disk again, runs fn, and
+// saves when fn says so. A change made through a Session opened earlier
+// therefore never undoes one made since, such as `tug lock` while
+// `proxy-token` repoints the session. fn must not call update.
+func (s *Session) update(fn func() (save bool, err error)) error {
+	unlock, err := filelock.Lock(filepath.Join(s.dir, lockFileName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: session %s has ended", ErrNoSession, s.State.ID)
+		}
+		return fmt.Errorf("locking session %s: %w", s.State.ID, err)
 	}
-	s.State = State{ID: s.State.ID, PID: s.State.PID, Created: s.State.Created}
-	return s.Save()
+	defer unlock()
+	fresh, err := s.m.Open(s.State.ID)
+	if err != nil {
+		return err
+	}
+	s.State = fresh.State
+	save, err := fn()
+	if err != nil || !save {
+		return err
+	}
+	return s.saveWithPrompt()
 }
 
 // PromptStyle returns how the prompt should look at time now.

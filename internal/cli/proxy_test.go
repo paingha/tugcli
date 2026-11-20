@@ -101,6 +101,27 @@ func TestProxySessionGuardsEveryClient(t *testing.T) {
 		t.Fatalf("the unlocked delete should reach the cluster once, got %d", writes.Load())
 	}
 
+	// A client that loaded the kubeconfig before tugd moved is told to run
+	// again, not handed a token for an address that no longer answers; the
+	// kubeconfig is repointed for the next run.
+	stale := bytes.ReplaceAll(kc, []byte(st.ProxyURL), []byte("https://127.0.0.1:1"))
+	if err := os.WriteFile(st.Kubeconfig, stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := os.Getenv("TUG_SESSION")
+	var stderr bytes.Buffer
+	moved := exec.Command(bin, "auth", "proxy-token", "--session", sessionID)
+	moved.Stderr = &stderr
+	if out, err := moved.Output(); err == nil || !strings.Contains(stderr.String(), "run the command again") {
+		t.Fatalf("proxy-token after tugd moved: %v\n%s%s", err, out, stderr.String())
+	}
+	if kc2, _ := os.ReadFile(st.Kubeconfig); !bytes.Contains(kc2, []byte(st.ProxyURL+"/s/"+sessionID)) {
+		t.Fatalf("kubeconfig not repointed:\n%s", kc2)
+	}
+	if out := run("auth", "proxy-token", "--session", sessionID); !strings.Contains(out, "ExecCredential") {
+		t.Fatalf("proxy-token once repointed: %s", out)
+	}
+
 	if out := run("daemon", "status", "-o", "json"); !strings.Contains(out, `"sessions": 1`) {
 		t.Fatalf("daemon status: %s", out)
 	}

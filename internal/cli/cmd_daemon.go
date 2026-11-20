@@ -214,11 +214,19 @@ func newProxyTokenCmd(a *app) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("session %s: %w", sessionID, err)
 			}
-			// A tugd that restarted on another port repoints the session;
-			// the next request uses the new address.
+			// tugd keeps its port and certificate across restarts, but when
+			// it could not, the session's kubeconfig is repointed. The client
+			// that ran this command loaded the old one and would send the
+			// token to an address that no longer answers, so it is told to
+			// run again instead.
 			if s, err := a.sessions().Open(sessionID); err == nil {
-				if err := s.SetProxy(reg.ProxyURL, reg.ProxyCA); err != nil {
+				changed, err := s.SetProxy(reg.ProxyURL, reg.ProxyCA)
+				switch {
+				case err != nil:
 					a.log.Warn("updating the session's proxy address", "err", err)
+				case changed:
+					return fmt.Errorf("tugd moved to %s and this session's kubeconfig now points there; "+
+						"run the command again, and restart long-running clients such as k9s", reg.ProxyURL)
 				}
 			}
 			return json.NewEncoder(a.stdout).Encode(&clientauthv1.ExecCredential{

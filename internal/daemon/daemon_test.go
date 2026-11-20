@@ -12,7 +12,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -81,6 +84,9 @@ type fixture struct {
 	cluster *fakeCluster
 	proxy   *httptest.Server
 	token   string
+
+	upstreamCalls atomic.Int32
+	upstreamDelay time.Duration // how long building an upstream takes
 }
 
 // setup connects a read-only session to a fake cluster and registers it.
@@ -102,6 +108,8 @@ func setup(t *testing.T) *fixture {
 		RuntimeDir: f.runtime,
 		Sessions:   mgr,
 		Upstream: func(context.Context, string) (*rest.Config, error) {
+			f.upstreamCalls.Add(1)
+			time.Sleep(f.upstreamDelay)
 			return &rest.Config{Host: f.cluster.srv.URL, BearerToken: upstreamToken, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}, nil
 		},
 	})
@@ -275,7 +283,11 @@ func TestRunServesTheControlAPI(t *testing.T) {
 		t.Fatalf("status = %+v", st)
 	}
 	second := New(Config{RuntimeDir: f.runtime, Sessions: session.NewManager(f.runtime)})
-	if err := second.Run(context.Background()); !errors.Is(err, ErrAlreadyRunning) {
+	// A deadline, so a second tugd that wrongly starts returns nil and fails
+	// the test instead of serving forever.
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelSecond()
+	if err := second.Run(secondCtx); !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("a second tugd: %v, want ErrAlreadyRunning", err)
 	}
 	reg, err := c.Register(context.Background(), f.sess.State.ID)
@@ -303,8 +315,24 @@ func TestRunServesTheControlAPI(t *testing.T) {
 	if _, err := c.Status(context.Background()); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("status after shutdown: %v, want ErrNotRunning", err)
 	}
-	if _, err := os.Stat(stateFile(f.runtime)); !os.IsNotExist(err) {
-		t.Fatal("state file left behind")
+
+	// The next tugd listens where this one did, so session kubeconfigs keep
+	// working after tug daemon stop or an idle exit.
+	restarted := New(Config{RuntimeDir: f.runtime, Sessions: session.NewManager(f.runtime)})
+	go func() { done <- restarted.Run(ctx) }()
+	deadline = time.Now().Add(5 * time.Second)
+	for restarted.ProxyURL() == "" {
+		if time.Now().After(deadline) {
+			t.Fatal("the restarted tugd did not start")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := restarted.ProxyURL(); got != st.ProxyURL {
+		t.Fatalf("restarted on %s, want the previous %s", got, st.ProxyURL)
+	}
+	restarted.Shutdown()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -324,16 +352,136 @@ func TestRunStopsWhenIdle(t *testing.T) {
 }
 
 func TestSocketPathStaysShort(t *testing.T) {
-	short := SocketPath("/run/user/1000/tug")
-	if short != "/run/user/1000/tug/tugd.sock" {
-		t.Fatalf("short runtime dir: %s", short)
+	dir := filepath.Join(string(filepath.Separator)+"run", "user", "1000", "tug")
+	if got, want := SocketPath(dir), filepath.Join(dir, "tugd.sock"); got != want {
+		t.Fatalf("short runtime dir: %s, want %s", got, want)
 	}
-	long := SocketPath("/" + strings.Repeat("very-long-directory/", 8))
+	longDir := filepath.Join(string(filepath.Separator)+"home", strings.Repeat("very-long-directory", 6))
+	long := SocketPath(longDir)
 	if len(long) >= 104 || !strings.HasPrefix(long, os.TempDir()) {
 		t.Fatalf("long runtime dir gave %s", long)
 	}
-	if long != SocketPath("/"+strings.Repeat("very-long-directory/", 8)) {
+	// In a directory of its own, which tugd keeps private, never loose in
+	// the shared temp directory.
+	if filepath.Dir(long) == filepath.Clean(os.TempDir()) {
+		t.Fatalf("the fallback socket %s is not in a directory of its own", long)
+	}
+	if long != SocketPath(longDir) {
 		t.Fatal("the fallback path must be stable")
+	}
+}
+
+func TestRunRefusesDirectoriesOthersCanChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permissions")
+	}
+	// Short directories, so the socket goes in the runtime directory itself.
+	short := func() string {
+		dir, err := os.MkdirTemp("", "tugd-test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		return dir
+	}
+	shared := short()
+	if err := os.Chmod(shared, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(short(), "link")
+	if err := os.Symlink(short(), link); err != nil {
+		t.Fatal(err)
+	}
+	// A long runtime directory whose fallback socket directory, in the shared
+	// temp directory, someone else made first.
+	long := filepath.Join(t.TempDir(), strings.Repeat("x", 80))
+	if err := os.MkdirAll(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	taken := filepath.Dir(SocketPath(long))
+	if err := os.Mkdir(taken, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(taken) })
+	if err := os.Chmod(taken, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{"writable by others": shared, "a link": link, "behind a fallback directory made by someone else": long} {
+		if len(filepath.Join(dir, "tugd.sock")) >= 100 && dir != long {
+			t.Fatalf("%s is too long for this test", dir)
+		}
+		srv := New(Config{RuntimeDir: dir, Sessions: session.NewManager(dir)})
+		// A deadline, so a tugd that wrongly starts returns nil and fails the
+		// test instead of serving forever.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := srv.Run(ctx)
+		cancel()
+		if err == nil || !strings.Contains(err.Error(), "refusing to use") {
+			t.Errorf("tugd in a directory that is %s: %v", name, err)
+		}
+		// Clients refuse to trust whatever answers there, too.
+		if _, err := NewClient(dir).Status(context.Background()); err == nil || errors.Is(err, ErrNotRunning) {
+			t.Errorf("client of a directory that is %s: %v", name, err)
+		}
+	}
+}
+
+func TestIdleForgetsSessionsNotUsingTheProxy(t *testing.T) {
+	f := setup(t)
+	tokens := func() int {
+		f.srv.mu.Lock()
+		defer f.srv.mu.Unlock()
+		return len(f.srv.tokens)
+	}
+	f.srv.idle()
+	if tokens() != 1 {
+		t.Fatal("forgot a session that uses the proxy")
+	}
+
+	// Reconnected without --proxy: the old token no longer works, and tugd
+	// forgets it, so it can stop when idle.
+	cl := &catalog.Cluster{ID: "kubeconfig/x/prod", Name: "prod", Server: f.cluster.srv.URL}
+	if err := f.sess.Connect(cl, "default", true, session.AuthCommand{Command: "tug"}); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := f.do(t, http.MethodGet, "/api/v1/namespaces", f.token); code != http.StatusGone {
+		t.Fatalf("a session not using the proxy = %d, want 410", code)
+	}
+	f.srv.idle()
+	if tokens() != 0 {
+		t.Fatal("kept the token of a session that no longer uses the proxy")
+	}
+
+	// Disconnected.
+	tok, err := f.srv.Register(f.sess.State.ID)
+	if err != nil || tok == "" {
+		t.Fatal(err)
+	}
+	if err := f.sess.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.idle()
+	if tokens() != 0 {
+		t.Fatal("kept the token of a disconnected session")
+	}
+}
+
+func TestConcurrentRequestsBuildOneUpstream(t *testing.T) {
+	f := setup(t)
+	f.upstreamDelay = 50 * time.Millisecond
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if code, body := f.do(t, http.MethodGet, "/api/v1/namespaces", f.token); code != http.StatusOK {
+				t.Errorf("GET = %d %s", code, body)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := f.upstreamCalls.Load(); n != 1 {
+		t.Fatalf("built the upstream %d times, want once", n)
 	}
 }
 

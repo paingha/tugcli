@@ -27,6 +27,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/paingha/tugcli/internal/config"
+	"github.com/paingha/tugcli/internal/filelock"
 	"github.com/paingha/tugcli/internal/session"
 )
 
@@ -65,6 +66,7 @@ type Server struct {
 	mu         sync.Mutex
 	tokens     map[string]string // session ID to its proxy token
 	upstreams  map[string]*upstream
+	building   map[string]*sync.Mutex // per cluster, held while its upstream is built
 	proxyURL   string
 	proxyCA    []byte
 	lastActive time.Time
@@ -89,19 +91,32 @@ func New(cfg Config) *Server {
 		cfg:       cfg,
 		tokens:    map[string]string{},
 		upstreams: map[string]*upstream{},
+		building:  map[string]*sync.Mutex{},
 		shutdown:  make(chan struct{}),
 	}
 }
 
 // SocketPath is the control socket. Unix socket paths are limited to about
-// 104 bytes, so a long runtime directory falls back to a short path in the
-// system temp directory, named after it.
+// 104 bytes, so a long runtime directory falls back to a short directory of
+// its own in the system temp directory, named after the runtime directory.
+// tugd and its clients only use the socket's directory when it is private to
+// the user (see checkPrivateDir), so another user cannot create it first and
+// answer in tugd's place.
 func SocketPath(runtimeDir string) string {
 	p := filepath.Join(runtimeDir, "tugd.sock")
 	if len(p) < 100 {
 		return p
 	}
-	return filepath.Join(os.TempDir(), "tugd-"+shortHash(runtimeDir)+".sock")
+	return filepath.Join(os.TempDir(), "tugd-"+shortHash(runtimeDir), "tugd.sock")
+}
+
+// ensurePrivateDir creates dir for this user only, or checks that an
+// existing one is private.
+func ensurePrivateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return checkPrivateDir(dir)
 }
 
 func shortHash(s string) string {
@@ -113,10 +128,15 @@ func shortHash(s string) string {
 	return strconv.FormatUint(h, 36)
 }
 
-// stateFile records the running tugd for status and port reuse.
+// stateFile records tugd's last proxy address. It stays after tugd stops, so
+// the next tugd listens on the same port and session kubeconfigs keep working.
 func stateFile(runtimeDir string) string { return filepath.Join(runtimeDir, "tugd.json") }
 
-// State is what a running tugd records about itself.
+// lockFile is held by the running tugd for its whole life.
+func lockFile(runtimeDir string) string { return filepath.Join(runtimeDir, "tugd.lock") }
+
+// State is what tugd records about itself when it starts. Whether tugd is
+// running is told by its control socket, not by this file.
 type State struct {
 	PID      int       `json:"pid"`
 	Version  string    `json:"version"`
@@ -182,13 +202,24 @@ func (s *Server) ProxyCA() []byte {
 // Shutdown asks Run to stop.
 func (s *Server) Shutdown() { s.shutdownOnce.Do(func() { close(s.shutdown) }) }
 
+// usesProxy reports whether a session still goes through tugd: it exists, is
+// connected, and was connected with --proxy.
+func (s *Server) usesProxy(sessionID string) (*session.Session, bool) {
+	sess, err := s.cfg.Sessions.Open(sessionID)
+	if err != nil || !sess.State.Connected() || sess.State.ProxyURL == "" {
+		return nil, false
+	}
+	return sess, true
+}
+
 // idle reports whether no live session has used tugd for IdleTimeout. It
-// forgets the tokens of sessions that have ended.
+// forgets the tokens of sessions that no longer use the proxy: ended,
+// disconnected, or reconnected without --proxy.
 func (s *Server) idle() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id := range s.tokens {
-		if _, err := s.cfg.Sessions.Open(id); err != nil {
+		if _, ok := s.usesProxy(id); !ok {
 			delete(s.tokens, id)
 		}
 	}
@@ -198,15 +229,27 @@ func (s *Server) idle() bool {
 // Run listens on the control socket and the proxy address and serves until
 // ctx ends, Shutdown is called, or tugd has been idle for IdleTimeout.
 func (s *Server) Run(ctx context.Context) error {
-	if err := os.MkdirAll(s.cfg.RuntimeDir, 0o700); err != nil {
+	if err := ensurePrivateDir(s.cfg.RuntimeDir); err != nil {
 		return err
 	}
-	sock := SocketPath(s.cfg.RuntimeDir)
-	// Two commands may start tugd at once; the second must not take over
-	// the first one's socket.
-	if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
-		conn.Close()
+	// The lock is held until Run returns. Two tugds started at once take
+	// turns here, so the second never removes the first one's socket, and
+	// only the holder cleans up.
+	unlock, err := filelock.TryLock(lockFile(s.cfg.RuntimeDir))
+	if errors.Is(err, filelock.ErrLocked) {
 		return ErrAlreadyRunning
+	}
+	if err != nil {
+		return fmt.Errorf("locking %s: %w", lockFile(s.cfg.RuntimeDir), err)
+	}
+	defer unlock()
+
+	sock := SocketPath(s.cfg.RuntimeDir)
+	if dir := filepath.Dir(sock); dir != filepath.Clean(s.cfg.RuntimeDir) {
+		if err := ensurePrivateDir(dir); err != nil {
+			return err
+		}
+		defer os.Remove(dir)
 	}
 	if err := os.Remove(sock); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("removing stale socket: %w", err)
@@ -244,10 +287,10 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Kept after tugd stops: the next tugd reads it to listen on this port.
 	if err := config.WriteFileAtomic(stateFile(s.cfg.RuntimeDir), b, 0o600); err != nil {
 		return err
 	}
-	defer os.Remove(stateFile(s.cfg.RuntimeDir))
 
 	ctlSrv := &http.Server{Handler: s.ControlHandler(), ReadHeaderTimeout: 10 * time.Second}
 	// No write timeout on the proxy: watches, logs -f and exec stream.
