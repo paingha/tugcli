@@ -83,7 +83,8 @@ func TestPluginLifecycle(t *testing.T) {
 	}
 
 	r := tug(t, "plugin", "install", archive, "--yes")
-	if r.code != 0 || !strings.Contains(r.stdout, "Installed acme 0.1.0") || !strings.Contains(r.stderr, "secrets:       api_token") {
+	if r.code != 0 || !strings.Contains(r.stdout, "Installed acme 0.1.0") || !strings.Contains(r.stderr, "secrets:       api_token") ||
+		!strings.Contains(r.stderr, "settings:      clusters: ") {
 		t.Fatalf("install: %+v", r)
 	}
 	if out := mustTug(t, "plugin", "ls"); !strings.Contains(out, "acme") || !strings.Contains(out, "plugin") {
@@ -124,5 +125,87 @@ func TestProviderExecServesBuiltins(t *testing.T) {
 	}
 	if r := tug(t, "provider-exec", "kubeconfig", "bogus"); r.code != provider.ExitUsage {
 		t.Fatalf("unknown op: %+v", r)
+	}
+}
+
+const slowPluginScript = `#!/bin/sh
+cat >/dev/null
+case "$1" in
+  describe)
+    sleep 1
+    printf '{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse","name":"slow","version":"1.0.0","protocols":["provider/v1alpha1"],"capabilities":["list","credential"]}\n'
+    ;;
+  list) printf '{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[]}\n' ;;
+  *) exit 2 ;;
+esac
+`
+
+const slowPluginManifest = `apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata: {name: slow, version: 1.0.0}
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential]
+  platforms:
+  - {os: GOOS, arch: GOARCH, bin: tug-provider-slow}
+  hosts: [api.slow.example]
+  accountConfig:
+    type: object
+    properties:
+      zone: {type: string, description: "only clusters in this zone"}
+`
+
+// TestPluginHostFollowsConfigAndManifest covers what the plugin host takes
+// from config.yaml and plugin.yaml beyond running the plugin: timeouts for
+// every operation, warnings about fields and settings it does not know, and
+// saying what unlink removed.
+func TestPluginHostFollowsConfigAndManifest(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plugin")
+	}
+	home := isolate(t)
+	dir := t.TempDir()
+	manifest := strings.NewReplacer("GOOS", runtime.GOOS, "GOARCH", runtime.GOARCH).Replace(slowPluginManifest)
+	if err := os.WriteFile(filepath.Join(dir, "plugin.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tug-provider-slow"), []byte(slowPluginScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setDescribeTimeout := func(d string) {
+		t.Helper()
+		cfg := filepath.Join(home, "config", "config.yaml")
+		if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfg, []byte("plugins:\n  timeouts:\n    describe: "+d+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r := tug(t, "plugin", "link", dir)
+	if r.code != 0 || !strings.Contains(r.stderr, "does not know, which it ignores: spec.hosts") {
+		t.Fatalf("link should warn about spec.hosts: %+v", r)
+	}
+
+	// describe takes a second; a configured timeout shorter than that wins
+	// over the 30s default.
+	setDescribeTimeout("200ms")
+	if r := tug(t, "plugin", "describe", "slow"); r.code == 0 || !strings.Contains(r.stderr, "timed out after 200ms") {
+		t.Fatalf("describe with a 200ms timeout: %+v", r)
+	}
+	setDescribeTimeout("10s")
+	r = tug(t, "plugin", "describe", "slow")
+	if r.code != 0 || !strings.Contains(r.stderr, "settings:      zone: only clusters in this zone") {
+		t.Fatalf("describe should list the account settings: %+v", r)
+	}
+
+	r = tug(t, "import", "slow", "--account", "a", "--set", "zone=x", "--set", "zoen=y")
+	if r.code != 0 || !strings.Contains(r.stderr, "slow does not describe the setting zoen; it knows zone") {
+		t.Fatalf("import should warn about --set zoen: %+v", r)
+	}
+
+	if out := mustTug(t, "plugin", "unlink", "slow"); !strings.Contains(out, "Unlinked slow ("+dir+")") {
+		t.Fatalf("unlink should say what it removed: %q", out)
 	}
 }

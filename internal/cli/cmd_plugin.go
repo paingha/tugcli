@@ -35,7 +35,13 @@ func newPluginCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-func (a *app) pluginDirs() plugin.Dirs { return plugin.NewDirs(a.paths.Data) }
+// pluginDirs locates plugins for this tug, which refuses plugins that need
+// a newer one.
+func (a *app) pluginDirs() plugin.Dirs {
+	d := plugin.NewDirs(a.paths.Data)
+	d.TugVersion = version.String()
+	return d
+}
 
 func newPluginLsCmd(a *app) *cobra.Command {
 	return &cobra.Command{
@@ -164,6 +170,36 @@ func (a *app) printManifest(m *plugin.Manifest) {
 	fmt.Fprintf(a.stderr, "  environment:   %s\n", dash(strings.Join(m.Spec.Env, ", ")))
 	fmt.Fprintf(a.stderr, "  network hosts: %s\n", dash(strings.Join(m.Spec.Network, ", ")))
 	fmt.Fprintf(a.stderr, "  platforms:     %s\n", strings.Join(platforms, ", "))
+	for i, s := range m.Settings() {
+		label := ""
+		if i == 0 {
+			label = "settings:"
+		}
+		fmt.Fprintf(a.stderr, "  %-15s%s\n", label, describeSetting(s))
+	}
+	a.warnUnknownFields(m, "which it ignores")
+}
+
+// describeSetting shows an account setting as `tug import --set` takes it.
+func describeSetting(s plugin.Setting) string {
+	out := s.Name
+	if len(s.Enum) > 0 {
+		out += " (" + strings.Join(s.Enum, ", ") + ")"
+	}
+	if s.Description != "" {
+		out += ": " + s.Description
+	}
+	return out
+}
+
+// warnUnknownFields names the plugin.yaml fields this tug does not know,
+// which are usually typos, and says what became of them.
+func (a *app) warnUnknownFields(m *plugin.Manifest, fate string) {
+	if len(m.Unknown) == 0 {
+		return
+	}
+	fmt.Fprintf(a.stderr, "%s %s's plugin.yaml has fields this tug does not know, %s: %s\n",
+		a.colors().Yellow("warning:"), m.Metadata.Name, fate, strings.Join(m.Unknown, ", "))
 }
 
 func newPluginRemoveCmd(a *app) *cobra.Command {
@@ -201,6 +237,7 @@ func newPluginLinkCmd(a *app) *cobra.Command {
 				fmt.Fprintf(a.stderr, "%s %s is a built-in provider name; the plugin is ignored unless plugins.allowOverride lists it\n",
 					a.colors().Yellow("warning:"), p.Name())
 			}
+			a.warnUnknownFields(p.Manifest, "which it ignores")
 			_, err = fmt.Fprintf(a.stdout, "Linked %s %s from %s %s\n", p.Name(), p.Manifest.Metadata.Version, p.Dir,
 				a.colors().Yellow("(dev: not checksummed)"))
 			return err
@@ -214,7 +251,12 @@ func newPluginUnlinkCmd(a *app) *cobra.Command {
 		Short: "Stop using a linked plugin",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.pluginDirs().Unlink(args[0])
+			dir, err := a.pluginDirs().Unlink(args[0])
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(a.stdout, "Unlinked %s (%s)\n", args[0], dir)
+			return err
 		},
 	}
 }
@@ -319,6 +361,7 @@ func newPluginPackageCmd(a *app) *cobra.Command {
 				return err
 			}
 			c := a.colors()
+			a.warnUnknownFields(res.Manifest, "which are left out of the archive")
 			for _, p := range res.Missing {
 				fmt.Fprintf(a.stderr, "%s %s/%s: %s is not built\n", c.Yellow("left out"), p.OS, p.Arch, p.Bin)
 			}

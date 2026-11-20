@@ -229,6 +229,9 @@ func (d Dirs) Stage(archive, wantSHA256 string) (*Staged, error) {
 		return nil, err
 	}
 	p, err := Load(root, false)
+	if err == nil {
+		err = p.Manifest.CheckTugVersion(d.TugVersion)
+	}
 	if err != nil {
 		s.Discard()
 		return nil, err

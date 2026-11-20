@@ -21,6 +21,9 @@ const PathEnv = "TUG_PLUGIN_PATH"
 type Dirs struct {
 	// Installed is <data>/plugins; each plugin lives in <name>/<version>/.
 	Installed string
+	// TugVersion is the running tug's version. Plugins whose minTugVersion
+	// is newer are refused; empty, or a development build, accepts them all.
+	TugVersion string
 }
 
 // NewDirs returns the plugin directories under tug's data directory.
@@ -44,6 +47,9 @@ func (d Dirs) Discover() ([]*Plugin, []Problem) {
 		seen     = map[string]bool{}
 	)
 	add := func(p *Plugin, err error, loc string) {
+		if err == nil {
+			err = p.Manifest.CheckTugVersion(d.TugVersion)
+		}
 		if err != nil {
 			problems = append(problems, Problem{Location: loc, Err: err})
 			return
@@ -158,6 +164,9 @@ func (d Dirs) Link(dir string) (*Plugin, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := p.Manifest.CheckTugVersion(d.TugVersion); err != nil {
+		return nil, err
+	}
 	links, err := d.Links()
 	if err != nil {
 		return nil, err
@@ -166,17 +175,18 @@ func (d Dirs) Link(dir string) (*Plugin, error) {
 	return p, d.saveLinks(links)
 }
 
-// Unlink removes a linked plugin.
-func (d Dirs) Unlink(name string) error {
+// Unlink removes a linked plugin and returns the directory it was linked to.
+func (d Dirs) Unlink(name string) (string, error) {
 	links, err := d.Links()
 	if err != nil {
-		return err
+		return "", err
 	}
-	if _, ok := links[name]; !ok {
-		return fmt.Errorf("no linked plugin named %q", name)
+	dir, ok := links[name]
+	if !ok {
+		return "", fmt.Errorf("no linked plugin named %q; `tug plugin ls` shows the linked ones", name)
 	}
 	delete(links, name)
-	return d.saveLinks(links)
+	return dir, d.saveLinks(links)
 }
 
 func (d Dirs) saveLinks(links map[string]string) error {

@@ -162,12 +162,17 @@ func (c *Config) Defaults() {
 	}
 }
 
-// Timeout returns the configured timeout for a plugin operation, or def.
-func (c *Config) Timeout(op string, def time.Duration) time.Duration {
-	if d, ok := c.Plugins.Timeouts[op]; ok && d.Duration > 0 {
-		return d.Duration
+// PluginTimeouts returns the configured timeout for each plugin operation
+// that has one. Operations left out, or set to zero, keep the plugin host's
+// defaults.
+func (c *Config) PluginTimeouts() map[string]time.Duration {
+	out := make(map[string]time.Duration, len(c.Plugins.Timeouts))
+	for op, d := range c.Plugins.Timeouts {
+		if d.Duration > 0 {
+			out[op] = d.Duration
+		}
 	}
-	return def
+	return out
 }
 
 // Load reads config.yaml from dir. A missing file gives the defaults.

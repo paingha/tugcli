@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -389,29 +390,23 @@ func TestDurationUnmarshalErrors(t *testing.T) {
 	}
 }
 
-func TestConfigTimeout(t *testing.T) {
+func TestPluginTimeouts(t *testing.T) {
 	c := &Config{Plugins: PluginsConfig{Timeouts: map[string]Duration{
-		"list": {90 * time.Second},
-		"zero": {0},
+		"list":     {90 * time.Second},
+		"rotate":   {2 * time.Minute},
+		"describe": {5 * time.Second},
+		"zero":     {0},
 	}}}
-	const def = 30 * time.Second
-	tests := []struct {
-		op   string
-		want time.Duration
-	}{
-		{"list", 90 * time.Second},
-		{"credential", def},
-		{"zero", def},
+	want := map[string]time.Duration{
+		"list":     90 * time.Second,
+		"rotate":   2 * time.Minute,
+		"describe": 5 * time.Second,
 	}
-	for _, tt := range tests {
-		t.Run(tt.op, func(t *testing.T) {
-			if got := c.Timeout(tt.op, def); got != tt.want {
-				t.Fatalf("Timeout(%q) = %v, want %v", tt.op, got, tt.want)
-			}
-		})
+	if got := c.PluginTimeouts(); !maps.Equal(got, want) {
+		t.Fatalf("PluginTimeouts() = %v, want %v", got, want)
 	}
-	if got := (&Config{}).Timeout("list", def); got != def {
-		t.Fatalf("Timeout with no timeouts = %v, want %v", got, def)
+	if got := (&Config{}).PluginTimeouts(); len(got) != 0 {
+		t.Fatalf("PluginTimeouts() with none configured = %v, want empty", got)
 	}
 }
 
