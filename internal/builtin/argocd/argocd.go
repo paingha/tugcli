@@ -32,7 +32,17 @@ const (
 	ConfigCluster = management.ConfigCluster
 	// ConfigNamespace is Argo CD's namespace, DefaultNamespace by default.
 	ConfigNamespace = management.ConfigNamespace
+	// ConfigAllowExec, set to true, lets execProviderConfig run its command
+	// on this machine. Anyone who can write Secrets in Argo CD's namespace
+	// chooses that command, so it is off unless the user turns it on.
+	ConfigAllowExec = "allowExec"
 )
+
+// allowExec reports whether the account lets cluster Secrets run commands.
+func allowExec(acct provider.Account) bool {
+	v := acct.Config[ConfigAllowExec]
+	return v == true || v == "true"
+}
 
 // DefaultNamespace is where Argo CD is installed unless the namespace
 // setting says otherwise.
@@ -207,7 +217,7 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 		if len(c.namespaces) == 1 {
 			pc.DefaultNamespace = c.namespaces[0]
 		}
-		if cred, err := p.credential(c); err == nil {
+		if cred, err := p.credential(req.Account, c); err == nil {
 			pc.Credential = &cred
 		}
 		out = append(out, pc)
@@ -239,7 +249,7 @@ func (p *Provider) Credential(ctx context.Context, req provider.CredentialReques
 	if err != nil {
 		return provider.Credential{}, err
 	}
-	return p.credential(c)
+	return p.credential(req.Account, c)
 }
 
 func (p *Provider) connect(ctx context.Context, acct provider.Account) (*management.Cluster, corev1client.SecretsGetter, error) {
@@ -264,7 +274,7 @@ func namespace(acct provider.Account) string {
 // credential converts a cluster's config, trying its methods in the order
 // Argo CD does: awsAuthConfig, then execProviderConfig, then the bearer
 // token or client certificate.
-func (p *Provider) credential(c *cluster) (provider.Credential, error) {
+func (p *Provider) credential(acct provider.Account, c *cluster) (provider.Credential, error) {
 	cfg := c.config
 	tls := cfg.TLSClientConfig
 	switch {
@@ -278,6 +288,11 @@ func (p *Provider) credential(c *cluster) (provider.Credential, error) {
 		if e.ProvideClusterInfo {
 			return provider.Credential{}, provider.Errorf(provider.Unimplemented,
 				"Argo CD cluster Secret %s asks for provideClusterInfo, and tug cannot pass cluster information to exec plugins", c.secret)
+		}
+		if !allowExec(acct) {
+			return provider.Credential{}, provider.Errorf(provider.PermissionDenied,
+				"Argo CD cluster Secret %s gets its credential by running %q, and tug runs commands from a cluster only when the account allows it", c.secret, e.Command).
+				WithHint(fmt.Sprintf("if you trust everyone who can write Secrets in namespace %s, import the account again with --set %s=true", namespace(acct), ConfigAllowExec))
 		}
 		cred := provider.Delegate(e.Command, e.Args...)
 		cred.Exec.Env = maps.Clone(e.Env)

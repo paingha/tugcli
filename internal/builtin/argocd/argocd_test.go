@@ -255,7 +255,15 @@ func TestCredential(t *testing.T) {
 		t.Fatalf("Credential(cluster-eks) = %+v %+v, %v; want aws %v", c, c.Exec, err, wantArgs)
 	}
 
-	c, err = get("cluster-gke")
+	// execProviderConfig runs a command the cluster chose: refused unless
+	// the account allows it.
+	_, err = get("cluster-gke")
+	if pe := provider.AsError(err); pe.Code != provider.PermissionDenied || !strings.Contains(pe.Hint, "--set allowExec=true") {
+		t.Fatalf("Credential(cluster-gke) without allowExec = %+v, want PermissionDenied with a hint", pe)
+	}
+	trusting := account("")
+	trusting.Config[ConfigAllowExec] = "true"
+	c, err = p.Credential(context.Background(), provider.CredentialRequest{Account: trusting, ClusterID: "cluster-gke"})
 	if err != nil || c.Type != provider.CredentialDelegate || c.Exec.Command != "argocd-k8s-auth" || !slices.Equal(c.Exec.Args, []string{"gcp"}) ||
 		c.Exec.Env["GOOGLE_PROJECT"] != "acme" || c.Exec.InstallHint != "install argocd-k8s-auth" {
 		t.Fatalf("Credential(cluster-gke) = %+v, %v", c, err)
