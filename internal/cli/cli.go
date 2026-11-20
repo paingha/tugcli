@@ -20,6 +20,7 @@ import (
 
 	"github.com/paingha/tugcli/internal/browser"
 	"github.com/paingha/tugcli/internal/builtin/aws"
+	"github.com/paingha/tugcli/internal/builtin/azure"
 	"github.com/paingha/tugcli/internal/builtin/google"
 	"github.com/paingha/tugcli/internal/builtin/kubeconfig"
 	"github.com/paingha/tugcli/internal/builtin/local"
@@ -161,6 +162,7 @@ func (a *app) registry() *registry.Registry {
 		kubeconfig.New(kubeconfig.WithSkipDirs(a.paths.Runtime)),
 		local.New(local.WithSkipDirs(a.paths.Runtime)),
 		aws.New(),
+		azure.New(),
 		google.New(),
 	}
 	for _, p := range builtins {
