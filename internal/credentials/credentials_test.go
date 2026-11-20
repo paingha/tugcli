@@ -11,6 +11,7 @@ import (
 
 	"github.com/zalando/go-keyring"
 
+	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -214,5 +215,128 @@ func TestBrokerOIDCNotYetSupported(t *testing.T) {
 	_, err := b.ExecCredential(context.Background(), "c", false)
 	if provider.CodeOf(err) != provider.Unimplemented {
 		t.Fatalf("want Unimplemented, got %v", err)
+	}
+}
+
+// TestOpenFileBackend covers the backends that never touch the OS keychain.
+func TestOpenFileBackend(t *testing.T) {
+	paths := config.Paths{Data: t.TempDir()}
+	wantName := "file:" + filepath.Join(paths.Data, "secrets.enc")
+	tests := []struct {
+		name       string
+		backend    string
+		passphrase string
+		wantErr    string // "" means the file store is expected
+	}{
+		{"file", "file", "pass", ""},
+		{"file is case-insensitive", "FILE", "pass", ""},
+		{"file without passphrase", "file", "", PassphraseEnv},
+		{"unknown backend", "vault", "pass", `"vault"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(PassphraseEnv, tt.passphrase)
+			s, err := Open(tt.backend, paths)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Open(%q) = %v, %v; want an error containing %q", tt.backend, s, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Name() != wantName {
+				t.Fatalf("Open(%q).Name() = %q, want %q", tt.backend, s.Name(), wantName)
+			}
+		})
+	}
+}
+
+func TestBrokerForget(t *testing.T) {
+	store := NewMemoryStore()
+	b := &Broker{Store: store}
+	if err := b.Put("c1", provider.Token("t1", provider.NoExpiry)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(DelegateKey("c1"), "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put("c2", provider.Token("t2", provider.NoExpiry)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := b.Forget("c1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := store.Keys(), []string{CredentialKey("c2")}; len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("store keys after Forget(c1) = %v, want %v", got, want)
+	}
+	if err := b.Forget("never-stored"); err != nil {
+		t.Fatalf("Forget of an unknown cluster = %v, want nil", err)
+	}
+}
+
+func TestBrokerPutReplacesDelegateCache(t *testing.T) {
+	store := NewMemoryStore()
+	b := &Broker{Store: store}
+	if err := store.Set(DelegateKey("c1"), `{"token":"old"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Put("c1", provider.Token("new", provider.NoExpiry)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Get(DelegateKey("c1")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cached delegate output survived Put: %v", err)
+	}
+	if err := b.Put("c1", provider.Credential{Type: provider.CredentialToken}); err == nil {
+		t.Fatal("Put of an invalid credential succeeded")
+	}
+	if c, err := b.Credential(context.Background(), "c1", false); err != nil || c.Token != "new" {
+		t.Fatalf("stored credential after a rejected Put = %+v, %v; want token new", c, err)
+	}
+}
+
+func TestBrokerCredentialErrors(t *testing.T) {
+	errDown := errors.New("provider is down")
+	tests := []struct {
+		name    string
+		stored  string // raw value under CredentialKey, "" for none
+		fetch   Fetcher
+		wantErr string
+		wantIs  error
+	}{
+		{name: "nothing stored and no fetcher", wantErr: "no stored credential for c1"},
+		{
+			name:   "fetch fails",
+			fetch:  func(context.Context, string) (provider.Credential, error) { return provider.Credential{}, errDown },
+			wantIs: errDown,
+		},
+		{
+			name: "provider returns an invalid credential",
+			fetch: func(context.Context, string) (provider.Credential, error) {
+				return provider.Credential{Type: provider.CredentialToken}, nil
+			},
+			wantErr: "provider returned an invalid credential",
+		},
+		{name: "corrupt stored credential is not used", stored: "{not json", wantErr: "no stored credential for c1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			if tt.stored != "" {
+				if err := store.Set(CredentialKey("c1"), tt.stored); err != nil {
+					t.Fatal(err)
+				}
+			}
+			b := &Broker{Store: store, Fetch: tt.fetch}
+			_, err := b.Credential(context.Background(), "c1", false)
+			if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
+				t.Fatalf("Credential() error = %v, want %v", err, tt.wantIs)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("Credential() error = %v, want one containing %q", err, tt.wantErr)
+			}
+		})
 	}
 }
