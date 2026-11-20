@@ -36,6 +36,7 @@ tug pf api 8080                 # port-forward by short name
 tug restart api | tug scale api 3 | tug rollback api
 tug get pods                    # anything tug does not know runs as kubectl
 tug unlock 15m                  # allow writes on a read-only (env=prod) session
+tug auth rotate lke-prod        # new credential from the provider; the old one is revoked
 ```
 
 Targets are fuzzy: exact beats prefix beats fuzzy, workloads beat bare pods,
@@ -49,7 +50,7 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 | `local` | built-in | one per tool found: kind and k3d (through their CLIs), minikube, Docker Desktop, OrbStack, Rancher Desktop (through their contexts) | the tool's client certificate, read fresh after a recreate; labelled `local=true`, `distro=<tool>`, `env=dev` |
 | `aws` (EKS) | built-in | `~/.aws` profiles; `--set regions=us-east-1,eu-west-1` | short-lived token from a presigned STS request; no AWS CLI needed |
 | `google` (GKE) | built-in | gcloud configurations (one account per project) | short-lived OAuth token from Application Default Credentials, else `gke-gcloud-auth-plugin` |
-| `akamai` (LKE) | plugin, [plugins/akamai](plugins/akamai) | personal access token with Kubernetes read/write | the kubeconfig's token, kept in the keychain; the plugin can regenerate it (`rotate`), though no tug command asks it to yet |
+| `akamai` (LKE) | plugin, [plugins/akamai](plugins/akamai) | personal access token with Kubernetes read/write | the kubeconfig's token, kept in the keychain; `tug auth rotate` regenerates it |
 | `coreweave` (CKS) | plugin, [plugins/coreweave](plugins/coreweave) | API access token | the API token (managed auth); `--set auth=oidc` returns the cluster's OIDC issuer, but tug cannot sign in with OIDC yet |
 
 ```bash

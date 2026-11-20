@@ -18,7 +18,7 @@ import (
 func newAuthCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Credential commands used by kubectl and other clients",
+		Short: "Rotate cluster credentials, and serve them to kubectl and other clients",
 	}
 	var clusterID string
 	var refresh bool
@@ -52,7 +52,7 @@ file. It answers from the cache, or asks the cluster's provider on a miss.`,
 	token.Flags().StringVar(&clusterID, "cluster", "", "catalog cluster ID or name")
 	token.Flags().BoolVar(&refresh, "refresh", false, "ignore the cache and ask the provider")
 	_ = token.MarkFlagRequired("cluster")
-	cmd.AddCommand(token)
+	cmd.AddCommand(token, newAuthRotateCmd(a))
 	return cmd
 }
 
