@@ -27,6 +27,7 @@ type connectOptions struct {
 	namespace string
 	readOnly  bool
 	readWrite bool
+	proxy     bool
 }
 
 func newConnectCmd(a *app) *cobra.Command {
@@ -53,6 +54,7 @@ while, or --read-write to connect without the guard.`,
 	cmd.Flags().StringVarP(&o.namespace, "namespace", "n", "", "namespace for this session")
 	cmd.Flags().BoolVar(&o.readOnly, "read-only", false, "open read-only whatever the cluster's labels")
 	cmd.Flags().BoolVar(&o.readWrite, "read-write", false, "open read-write even on a production cluster")
+	cmd.Flags().BoolVar(&o.proxy, "proxy", false, "go through tugd's local API proxy, so the guard applies to every client")
 	cmd.MarkFlagsMutuallyExclusive("read-only", "read-write")
 	return cmd
 }
@@ -74,7 +76,19 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	case o.readWrite:
 		readOnly = false
 	}
-	if err := s.Connect(cl, o.namespace, readOnly, session.AuthCommand{Command: selfPath()}); err != nil {
+	auth := session.AuthCommand{Command: selfPath()}
+	if o.proxy {
+		c, err := a.ensureDaemon(ctx)
+		if err != nil {
+			return err
+		}
+		reg, err := c.Register(ctx, s.State.ID)
+		if err != nil {
+			return err
+		}
+		auth.ProxyURL, auth.ProxyCA = reg.ProxyURL, reg.ProxyCA
+	}
+	if err := s.Connect(cl, o.namespace, readOnly, auth); err != nil {
 		return err
 	}
 
@@ -84,6 +98,9 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 		mode = c.Red("read-only") + c.Dim(" (tug unlock 15m to allow writes)")
 	}
 	fmt.Fprintf(a.stdout, "Connected to %s, namespace %s, %s\n", c.Bold(cl.Name), s.State.Namespace, mode)
+	if o.proxy {
+		fmt.Fprintln(a.stdout, c.Dim("Every client goes through tugd at "+auth.ProxyURL+", so the guard applies to kubectl, helm and k9s too"))
+	}
 	if cl.Stale {
 		fmt.Fprintln(a.stderr, c.Yellow("warning: this cluster was not listed by its provider at the last sync"))
 	}
@@ -167,6 +184,7 @@ type statusView struct {
 	Writable      bool       `json:"writable"`
 	UnlockedUntil *time.Time `json:"unlockedUntil,omitempty"`
 	Kubeconfig    string     `json:"kubeconfig,omitempty"`
+	ProxyURL      string     `json:"proxyURL,omitempty"`
 }
 
 func newStatusCmd(a *app) *cobra.Command {
@@ -193,6 +211,7 @@ func newStatusCmd(a *app) *cobra.Command {
 				Namespace: st.Namespace,
 				ReadOnly:  st.ReadOnly,
 				Writable:  st.Writable(a.now()),
+				ProxyURL:  st.ProxyURL,
 			}
 			if st.Connected() {
 				v.Kubeconfig = s.KubeconfigPath()
@@ -221,6 +240,9 @@ func newStatusCmd(a *app) *cobra.Command {
 			}
 			fmt.Fprintf(a.stdout, "cluster:    %s\nnamespace:  %s\nmode:       %s\nkubeconfig: %s\n",
 				c.Bold(st.ClusterName), st.Namespace, mode, v.Kubeconfig)
+			if st.ProxyURL != "" {
+				fmt.Fprintf(a.stdout, "proxy:      %s (tugd guards every client)\n", st.ProxyURL)
+			}
 			return nil
 		},
 	}
