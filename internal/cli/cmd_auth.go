@@ -92,8 +92,10 @@ func (a *app) rotateCredential(ctx context.Context, args []string, yes bool) err
 	if err := svc.Rotate(ctx, cat, cl.ID); err != nil {
 		return fmt.Errorf("rotating the credential for %s: %w", cl.Name, err)
 	}
+	// tugd rebuilds each cluster's upstream at least once a minute, which
+	// reads the new credential from the store.
 	fmt.Fprintln(a.stderr, a.colors().Dim(fmt.Sprintf(
-		"Other machines keep the old credential until they ask again: tug auth token --cluster %s --refresh", cl.Name)))
+		"Sessions that go through tugd switch to it within a minute. Other machines keep the old credential until they ask again: tug auth token --cluster %s --refresh", cl.Name)))
 	_, err = fmt.Fprintf(a.stdout, "Rotated the credential for %s\n", cl.Name)
 	return err
 }
