@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/scrypt"
@@ -23,9 +24,11 @@ type FileStore struct {
 	path       string
 	passphrase string
 
-	// cached key for the salt it was derived from
-	salt []byte
-	key  []byte
+	// cached key for the salt it was derived from; keyMu guards both, since
+	// tugd reads credentials from concurrent proxy requests
+	keyMu sync.Mutex
+	salt  []byte
+	key   []byte
 }
 
 // NewFileStore returns a store backed by the encrypted file at path.
@@ -56,6 +59,8 @@ type fileEnvelope struct {
 }
 
 func (f *FileStore) deriveKey(salt []byte, n, r, p int) ([]byte, error) {
+	f.keyMu.Lock()
+	defer f.keyMu.Unlock()
 	if f.key != nil && string(f.salt) == string(salt) {
 		return f.key, nil
 	}

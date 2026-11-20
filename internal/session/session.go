@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"time"
 
+	"k8s.io/client-go/tools/clientcmd"
+
 	"github.com/paingha/tugcli/internal/config"
 )
 
@@ -26,6 +28,7 @@ const (
 	kubeconfigFileName = "kubeconfig"
 	stateFileName      = "state.json"
 	promptFileName     = "prompt"
+	lockFileName       = "lock"
 )
 
 // ErrNoSession is returned when the terminal has no tug session.
@@ -42,8 +45,10 @@ type State struct {
 	Namespace     string    `json:"namespace,omitempty"`
 	ReadOnly      bool      `json:"readOnly,omitempty"`
 	UnlockedUntil time.Time `json:"unlockedUntil,omitempty"`
-	Created       time.Time `json:"created"`
-	Updated       time.Time `json:"updated"`
+	// ProxyURL is set when the session goes through tugd's API proxy.
+	ProxyURL string    `json:"proxyURL,omitempty"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
 }
 
 // Connected reports whether the session points at a cluster.
@@ -111,12 +116,34 @@ func (m *Manager) Create(pid int, parentID string) (*Session, error) {
 	return s, nil
 }
 
+// copyConnection starts the session where its parent is. A proxied parent's
+// kubeconfig names the parent's session in its server address and exec
+// entry, so the copy is pointed at this session instead: the child's own
+// guard state and lock/unlock then govern its clients.
 func (s *Session) copyConnection(parent *Session) error {
 	s.State.ClusterID = parent.State.ClusterID
 	s.State.ClusterName = parent.State.ClusterName
 	s.State.Namespace = parent.State.Namespace
 	s.State.ReadOnly = parent.State.ReadOnly
+	s.State.ProxyURL = parent.State.ProxyURL
+	if s.State.ProxyURL != "" {
+		cfg, err := clientcmd.LoadFromFile(parent.KubeconfigPath())
+		if err != nil {
+			return fmt.Errorf("reading the parent session's kubeconfig: %w", err)
+		}
+		var ca []byte
+		for _, cl := range cfg.Clusters {
+			ca = cl.CertificateAuthorityData
+		}
+		repoint(cfg, s.State.ProxyURL, ca, s.State.ID)
+		if err := writeKubeconfig(s.KubeconfigPath(), cfg); err != nil {
+			return err
+		}
+	}
 	for _, f := range []string{kubeconfigFileName, promptFileName} {
+		if f == kubeconfigFileName && s.State.ProxyURL != "" {
+			continue // written above
+		}
 		b, err := os.ReadFile(filepath.Join(parent.dir, f))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
