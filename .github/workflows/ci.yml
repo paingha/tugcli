@@ -53,16 +53,14 @@ jobs:
       - run: make build
       - run: TUG_BIN=$PWD/bin/tug KIND_CLUSTER=tug-e2e ./scripts/e2e-kind.sh
 
-  release-check:
+  # A fast config check on every push. The full snapshot build (about ten
+  # minutes for six targets) runs in release-snapshot.yml only when release
+  # configuration changes.
+  goreleaser-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --snapshot --clean --skip=sign
+          args: check
