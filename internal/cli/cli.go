@@ -148,7 +148,7 @@ func (a *app) registry() *registry.Registry {
 	r := registry.New(a.cfg.Plugins.AllowOverride)
 	builtins := []registry.Provider{
 		kubeconfig.New(kubeconfig.WithSkipDirs(a.paths.Runtime)),
-		local.New(),
+		local.New(local.WithSkipDirs(a.paths.Runtime)),
 		aws.New(),
 		google.New(),
 	}

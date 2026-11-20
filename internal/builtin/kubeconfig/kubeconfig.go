@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
+	"github.com/paingha/tugcli/internal/session"
 	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/provider"
 )
@@ -89,9 +90,30 @@ func (p *Provider) Info() provider.Info {
 	}
 }
 
-// Accounts returns one account per kubeconfig file found: ~/.kube/config, the
-// files in $KUBECONFIG, and other *.yaml files directly under ~/.kube.
+// Accounts returns one account per file that Files finds.
 func (p *Provider) Accounts(_ context.Context) ([]provider.Account, error) {
+	var accounts []provider.Account
+	used := map[string]bool{}
+	for _, path := range p.Files() {
+		id := AccountID(path, p.home)
+		for base, i := id, 2; used[id]; i++ {
+			id = fmt.Sprintf("%s-%d", base, i)
+		}
+		used[id] = true
+		accounts = append(accounts, provider.Account{
+			ID:          id,
+			Description: path,
+			Config:      map[string]any{ConfigPath: path, ConfigSkipLocal: true},
+		})
+	}
+	return accounts, nil
+}
+
+// Files returns the kubeconfig files on this machine, as absolute paths:
+// ~/.kube/config, the files in $KUBECONFIG, and other *.yaml, *.yml and
+// *.kubeconfig files directly under ~/.kube. The local provider reads the same
+// files, so a local context that skipLocal leaves out is always found there.
+func (p *Provider) Files() []string {
 	var paths []string
 	add := func(path string) {
 		if path == "" {
@@ -108,7 +130,7 @@ func (p *Provider) Accounts(_ context.Context) ([]provider.Account, error) {
 	}
 	kubeDir := filepath.Join(p.home, ".kube")
 	add(filepath.Join(kubeDir, "config"))
-	for _, f := range filepath.SplitList(p.getenv("KUBECONFIG")) {
+	for _, f := range p.envFiles() {
 		add(f)
 	}
 	for _, pattern := range []string{"*.yaml", "*.yml", "*.kubeconfig"} {
@@ -117,22 +139,22 @@ func (p *Provider) Accounts(_ context.Context) ([]provider.Account, error) {
 			add(m)
 		}
 	}
+	return paths
+}
 
-	var accounts []provider.Account
-	used := map[string]bool{}
-	for _, path := range paths {
-		id := AccountID(path, p.home)
-		for base, i := id, 2; used[id]; i++ {
-			id = fmt.Sprintf("%s-%d", base, i)
+// envFiles returns the files $KUBECONFIG names. Inside a tug session it names
+// the session's own file, in a skipped directory; that entry stands for the
+// files in $TUG_ORIG_KUBECONFIG, the value the session replaced.
+func (p *Provider) envFiles() []string {
+	var out []string
+	for _, f := range filepath.SplitList(p.getenv("KUBECONFIG")) {
+		if abs, err := filepath.Abs(f); err == nil && p.skipped(abs) {
+			out = append(out, filepath.SplitList(p.getenv(session.EnvOrigKubeconfig))...)
+			continue
 		}
-		used[id] = true
-		accounts = append(accounts, provider.Account{
-			ID:          id,
-			Description: path,
-			Config:      map[string]any{ConfigPath: path, ConfigSkipLocal: true},
-		})
+		out = append(out, f)
 	}
-	return accounts, nil
+	return out
 }
 
 func (p *Provider) skipped(path string) bool {
@@ -258,13 +280,13 @@ const (
 // their contexts, kind's and k3d's loopback servers, and the cluster_info
 // extension minikube writes.
 func LocalDistro(cfg *clientcmdapi.Config, name string) string {
-	switch name {
-	case DistroDockerDesktop, DistroOrbStack, DistroRancherDesktop:
-		return name
-	}
 	kctx, ok := cfg.Contexts[name]
 	if !ok {
 		return ""
+	}
+	switch name {
+	case DistroDockerDesktop, DistroOrbStack, DistroRancherDesktop:
+		return name
 	}
 	cl := cfg.Clusters[kctx.Cluster]
 	if cl == nil {

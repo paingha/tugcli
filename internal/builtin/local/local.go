@@ -55,6 +55,7 @@ type Provider struct {
 	lookPath func(string) (string, error)
 	getenv   func(string) string
 	home     string
+	skipDirs []string
 }
 
 var _ provider.AccountLister = (*Provider)(nil)
@@ -76,6 +77,12 @@ func WithHome(dir string) Option { return func(p *Provider) { p.home = dir } }
 // WithGetenv replaces os.Getenv, for tests.
 func WithGetenv(f func(string) string) Option { return func(p *Provider) { p.getenv = f } }
 
+// WithSkipDirs excludes kubeconfig files under these directories, such as
+// tug's own session directory, as kubeconfig.WithSkipDirs does.
+func WithSkipDirs(dirs ...string) Option {
+	return func(p *Provider) { p.skipDirs = append(p.skipDirs, dirs...) }
+}
+
 // New returns the local provider.
 func New(opts ...Option) *Provider {
 	p := &Provider{run: runCommand, lookPath: exec.LookPath, getenv: os.Getenv}
@@ -85,7 +92,7 @@ func New(opts ...Option) *Provider {
 	if p.home == "" {
 		p.home, _ = os.UserHomeDir()
 	}
-	p.kc = kubeconfig.New(kubeconfig.WithHome(p.home), kubeconfig.WithGetenv(p.getenv))
+	p.kc = kubeconfig.New(kubeconfig.WithHome(p.home), kubeconfig.WithGetenv(p.getenv), kubeconfig.WithSkipDirs(p.skipDirs...))
 	return p
 }
 
@@ -141,26 +148,16 @@ func (p *Provider) Accounts(_ context.Context) ([]provider.Account, error) {
 	return out, nil
 }
 
-// kubeconfigFiles are the files local tools write contexts to: the default
-// kubeconfig ($KUBECONFIG, else ~/.kube/config) and OrbStack's own file.
+// kubeconfigFiles are the files to look for local contexts in: every file the
+// kubeconfig provider finds, whose imports leave local contexts to this
+// provider, and OrbStack's own file.
 func (p *Provider) kubeconfigFiles() []string {
-	var files []string
-	if env := p.getenv("KUBECONFIG"); env != "" {
-		files = filepath.SplitList(env)
-	} else {
-		files = []string{filepath.Join(p.home, ".kube", "config")}
+	files := p.kc.Files()
+	orb := filepath.Join(p.home, ".orbstack", "k8s", "config.yml")
+	if st, err := os.Stat(orb); err == nil && st.Mode().IsRegular() && !slices.Contains(files, orb) {
+		files = append(files, orb)
 	}
-	files = append(files, filepath.Join(p.home, ".orbstack", "k8s", "config.yml"))
-	var out []string
-	for _, f := range files {
-		if f == "" || slices.Contains(out, f) {
-			continue
-		}
-		if _, err := os.Stat(f); err == nil {
-			out = append(out, f)
-		}
-	}
-	return out
+	return files
 }
 
 func distro(acct provider.Account) string {
@@ -287,13 +284,15 @@ func (p *Provider) listCLI(ctx context.Context, tool string) ([]provider.Cluster
 }
 
 // listFiles lists a tool's contexts across the kubeconfig files. A context
-// in more than one file is listed once, from the first.
+// in more than one file is listed once, from the first. Files that are not
+// kubeconfigs, such as a kind cluster config saved in ~/.kube, are skipped,
+// as Accounts and Credential skip them.
 func (p *Provider) listFiles(d string) ([]provider.Cluster, error) {
 	var out []provider.Cluster
 	for _, f := range p.kubeconfigFiles() {
 		cfg, err := clientcmd.LoadFromFile(f)
 		if err != nil {
-			return nil, provider.Errorf(provider.InvalidConfig, "reading %s: %v", f, err)
+			continue
 		}
 		names := make([]string, 0, len(cfg.Contexts))
 		for name := range cfg.Contexts {

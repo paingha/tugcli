@@ -135,7 +135,16 @@ func TestAccounts(t *testing.T) {
 	if err := os.WriteFile(sessionFile, []byte(sample), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := map[string]string{"KUBECONFIG": extra + string(os.PathListSeparator) + sessionFile}
+	orig := filepath.Join(t.TempDir(), "before-session.yaml")
+	if err := os.WriteFile(orig, []byte(sample), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Inside a session, the session's own file stands for what $KUBECONFIG
+	// was before the session replaced it.
+	env := map[string]string{
+		"KUBECONFIG":          extra + string(os.PathListSeparator) + sessionFile,
+		"TUG_ORIG_KUBECONFIG": orig,
+	}
 	p := New(WithHome(home), WithGetenv(func(k string) string { return env[k] }), WithSkipDirs(skipped))
 
 	accts, err := p.Accounts(context.Background())
@@ -146,7 +155,7 @@ func TestAccounts(t *testing.T) {
 	for _, a := range accts {
 		ids = append(ids, a.ID)
 	}
-	want := []string{"default", "lke-kubeconfig", "work"}
+	want := []string{"default", "lke-kubeconfig", "before-session", "work"}
 	if len(ids) != len(want) {
 		t.Fatalf("accounts = %v, want %v", ids, want)
 	}
@@ -191,6 +200,7 @@ contexts:
 		"work-minikube":  DistroMinikube, // found by minikube's extension, not its name
 		"prod":           "",
 		"missing":        "",
+		"orbstack":       "", // a desktop tool's name, but not a context in this file
 	}
 	for name, want := range tests {
 		if got := LocalDistro(cfg, name); got != want {

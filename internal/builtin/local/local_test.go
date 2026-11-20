@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -231,6 +232,119 @@ func TestListFromKubeconfigFiles(t *testing.T) {
 	_, err = p.Credential(context.Background(), provider.CredentialRequest{Account: provider.Account{ID: "minikube"}, ClusterID: "gone"})
 	if pe := provider.AsError(err); pe.Code != provider.NotFound || !strings.Contains(pe.Hint, "start the cluster") {
 		t.Fatalf("missing context: %+v", pe)
+	}
+}
+
+// writeFile writes body to path, creating its directory.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// listIDs lists an account's clusters and returns their IDs, comma-separated.
+func listIDs(t *testing.T, p *Provider, account string) string {
+	t.Helper()
+	clusters, err := p.List(context.Background(), provider.ListRequest{Account: provider.Account{ID: account}})
+	if err != nil {
+		t.Fatalf("listing %s: %v", account, err)
+	}
+	var ids []string
+	for _, c := range clusters {
+		ids = append(ids, c.ID)
+	}
+	return strings.Join(ids, ",")
+}
+
+// envOf returns a getenv function that answers from env.
+func envOf(env map[string]string) func(string) string {
+	return func(k string) string { return env[k] }
+}
+
+// The kubeconfig provider leaves local contexts out of every file it finds,
+// so this provider has to look in the same files.
+func TestListFromEveryKubeconfigFile(t *testing.T) {
+	home := writeHome(t)
+	writeFile(t, filepath.Join(home, ".kube", "work.yaml"), kubeconfigFor(t, "rancher-desktop", "https://127.0.0.1:6443"))
+	// Not a kubeconfig: kind's own cluster config, which people keep in ~/.kube.
+	writeFile(t, filepath.Join(home, ".kube", "kind-cluster.yaml"), "kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\nnodes:\n- role: control-plane\n")
+	other := filepath.Join(t.TempDir(), "other.yaml")
+	writeFile(t, other, kubeconfigFor(t, "prod-us", "https://prod-us.example.com"))
+	// $KUBECONFIG names another file, but ~/.kube/config is still read.
+	p := New(WithRunner(fakeRunner(nil, nil)), WithLookPath(noTools), WithHome(home), WithGetenv(envOf(map[string]string{"KUBECONFIG": other})))
+
+	if got := listIDs(t, p, "rancher-desktop"); got != "rancher-desktop" {
+		t.Errorf("rancher-desktop from ~/.kube/work.yaml: %q", got)
+	}
+	if got := listIDs(t, p, "minikube"); got != "dev-mk" {
+		t.Errorf("minikube from ~/.kube/config: %q", got)
+	}
+	accts, err := p.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(accts, func(a provider.Account) bool { return a.ID == "rancher-desktop" }) {
+		t.Errorf("no rancher-desktop account in %+v", accts)
+	}
+}
+
+// Inside a tug session, $KUBECONFIG names the session's own file, so the
+// files from before the session are read instead.
+func TestListInsideSession(t *testing.T) {
+	home := writeHome(t)
+	sessions := filepath.Join(t.TempDir(), "run")
+	sessionFile := filepath.Join(sessions, "abc123", "kubeconfig")
+	// As tug writes it: the cluster's name, and a user that runs tug.
+	writeFile(t, sessionFile, `apiVersion: v1
+kind: Config
+clusters:
+- {name: docker-desktop, cluster: {server: "https://kubernetes.docker.internal:6443"}}
+users:
+- name: docker-desktop
+  user:
+    exec: {apiVersion: client.authentication.k8s.io/v1, command: tug, args: [auth, token, --cluster, docker-desktop]}
+contexts:
+- {name: docker-desktop, context: {cluster: docker-desktop, user: docker-desktop}}
+current-context: docker-desktop
+`)
+	orig := filepath.Join(t.TempDir(), "rancher.yaml")
+	writeFile(t, orig, kubeconfigFor(t, "rancher-desktop", "https://127.0.0.1:6443"))
+
+	tests := []struct {
+		name, orig, distro, want string
+	}{
+		{"saved KUBECONFIG", orig, "rancher-desktop", "rancher-desktop"},
+		{"no saved KUBECONFIG", "", "docker-desktop", "docker-desktop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := map[string]string{"KUBECONFIG": sessionFile, "TUG_ORIG_KUBECONFIG": tt.orig}
+			p := New(WithRunner(fakeRunner(nil, nil)), WithLookPath(noTools), WithHome(home), WithGetenv(envOf(env)), WithSkipDirs(sessions))
+			if got := listIDs(t, p, tt.distro); got != tt.want {
+				t.Fatalf("listed %q, want %q", got, tt.want)
+			}
+			cred, err := p.Credential(context.Background(), provider.CredentialRequest{Account: provider.Account{ID: tt.distro}, ClusterID: tt.want})
+			if err != nil || cred.Type != provider.CredentialClientCert {
+				t.Fatalf("credential: %+v %v", cred, err)
+			}
+		})
+	}
+}
+
+// A file without the context, read first, must not stop the search.
+func TestCredentialFromLaterFile(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".kube", "config"), kubeconfigFor(t, "prod-eu", "https://prod.example.com"))
+	writeFile(t, filepath.Join(home, ".orbstack", "k8s", "config.yml"), kubeconfigFor(t, "orbstack", "https://127.0.0.1:26443"))
+	p := New(WithRunner(fakeRunner(nil, nil)), WithLookPath(noTools), WithHome(home), WithGetenv(envOf(nil)))
+
+	cred, err := p.Credential(context.Background(), provider.CredentialRequest{Account: provider.Account{ID: "orbstack"}, ClusterID: "orbstack"})
+	if err != nil || cred.Type != provider.CredentialClientCert {
+		t.Fatalf("orbstack credential: %+v %v", cred, err)
 	}
 }
 
