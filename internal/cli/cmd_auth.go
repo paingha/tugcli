@@ -8,9 +8,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/paingha/tugcli/internal/catalog"
+	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/importer"
+	"github.com/paingha/tugcli/internal/oidc"
 	"github.com/paingha/tugcli/internal/plugin"
+	"github.com/paingha/tugcli/pkg/provider"
 )
 
 // Plugins rotate through the plugin host.
@@ -98,4 +101,109 @@ func (a *app) rotateCredential(ctx context.Context, args []string, yes bool) err
 		"Sessions that go through tugd switch to it within a minute. Other machines keep the old credential until they ask again: tug auth token --cluster %s --refresh", cl.Name)))
 	_, err = fmt.Fprintf(a.stdout, "Rotated the credential for %s\n", cl.Name)
 	return err
+}
+
+func newAuthLoginCmd(a *app) *cobra.Command {
+	var device bool
+	cmd := &cobra.Command{
+		Use:   "login [cluster] [label=value...]",
+		Short: "Sign in to the OpenID Connect issuer a cluster trusts",
+		Long: `Sign in for a cluster whose provider gives it an OpenID Connect credential,
+so its API server accepts your ID token. tug opens the issuer's sign-in page
+in your browser and waits for it to come back to http://localhost:8000 (or
+18000, or oidc.listenAddresses in config.yaml). With --device, or over SSH,
+it shows a code to enter on any device instead, when the issuer offers that.
+
+The refresh token and the ID token are kept in the credential store, and tug
+refreshes the ID token from then on. Clusters that share the issuer, client
+and scopes share the sign-in. Without a cluster, sign in for this terminal's
+cluster. When kubectl needs a token and nobody is signed in, tug also signs
+in on its own if stderr is a terminal.`,
+		Example: `  tug auth login cks-train
+  tug auth login --device   # this terminal's cluster, with a code to enter elsewhere`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cl, cfg, store, err := a.oidcCluster(cmd.Context(), args)
+			if err != nil {
+				return err
+			}
+			t, err := a.oidcClient(store, nil).Login(cmd.Context(), cfg, a.signInUI(device))
+			if err != nil {
+				return fmt.Errorf("signing in for %s: %w", cl.Name, err)
+			}
+			_, err = fmt.Fprintf(a.stdout, "Signed in to %s as %s; the ID token is valid until %s\n",
+				cfg.Issuer, dash(t.Identity), t.Expiry.Local().Format("2006-01-02 15:04 MST"))
+			return err
+		},
+		ValidArgsFunction: a.completeClusters,
+	}
+	cmd.Flags().BoolVar(&device, "device", false, "show a code to enter on another device instead of opening a browser here")
+	return cmd
+}
+
+func newAuthLogoutCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "logout [cluster] [label=value...]",
+		Short: "Forget the OpenID Connect sign-in a cluster uses",
+		Long: `Remove the refresh token and ID token tug keeps for a cluster's OpenID Connect
+issuer. Every cluster that shares the sign-in needs tug auth login again. The
+issuer is not told, so revoke the session there too if the token may have
+leaked.`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, cfg, store, err := a.oidcCluster(cmd.Context(), args)
+			if err != nil {
+				return err
+			}
+			had, err := a.oidcClient(store, nil).Logout(cfg)
+			if err != nil {
+				return err
+			}
+			msg := "Signed out of %s\n"
+			if !had {
+				msg = "Not signed in to %s; nothing to forget\n"
+			}
+			_, err = fmt.Fprintf(a.stdout, msg, cfg.Issuer)
+			return err
+		},
+		ValidArgsFunction: a.completeClusters,
+	}
+}
+
+// oidcCluster finds the cluster named in args, or this terminal's, and the
+// OpenID Connect issuer its provider says to sign in to.
+func (a *app) oidcCluster(ctx context.Context, args []string) (*catalog.Cluster, oidc.Config, credentials.Store, error) {
+	cat, err := a.loadCatalog()
+	if err != nil {
+		return nil, oidc.Config{}, nil, err
+	}
+	var cl *catalog.Cluster
+	switch {
+	case len(args) > 0:
+		// A cluster ID, as hints print it, or a name to match.
+		if cl, err = cat.Get(args[0]); err != nil || len(args) > 1 {
+			cl, err = a.chooseCluster(cat, args)
+		}
+	default:
+		s, sessErr := a.sessions().Current()
+		if sessErr != nil || !s.State.Connected() {
+			return nil, oidc.Config{}, nil, errors.New("name a cluster, or run `tug connect` first")
+		}
+		cl, err = cat.Get(s.State.ClusterID)
+	}
+	if err != nil {
+		return nil, oidc.Config{}, nil, err
+	}
+	_, broker, err := a.services(cat)
+	if err != nil {
+		return nil, oidc.Config{}, nil, err
+	}
+	c, err := broker.Credential(ctx, cl.ID, false)
+	if err != nil {
+		return nil, oidc.Config{}, nil, fmt.Errorf("asking the %s provider how %s signs in: %w", cl.Provider, cl.Name, err)
+	}
+	if c.Type != provider.CredentialOIDC {
+		return nil, oidc.Config{}, nil, fmt.Errorf("%s does not use OpenID Connect: its credential is of type %s, which needs no sign-in", cl.Name, c.Type)
+	}
+	return cl, oidc.ConfigFor(c), broker.Store, nil
 }

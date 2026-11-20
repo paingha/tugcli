@@ -96,6 +96,15 @@ type Config struct {
 	Guard    GuardConfig    `json:"guard,omitempty"`
 	Plugins  PluginsConfig  `json:"plugins,omitempty"`
 	Sessions SessionsConfig `json:"sessions,omitempty"`
+	OIDC     OIDCConfig     `json:"oidc,omitempty"`
+}
+
+// OIDCConfig controls signing in to OpenID Connect issuers.
+type OIDCConfig struct {
+	// ListenAddresses are the loopback addresses tried, in order, for the
+	// browser's redirect after sign-in, which comes back to
+	// http://localhost:<port>. Default: 127.0.0.1:8000, then 127.0.0.1:18000.
+	ListenAddresses []string `json:"listenAddresses,omitempty"`
 }
 
 // KeyringConfig selects where secrets live.
