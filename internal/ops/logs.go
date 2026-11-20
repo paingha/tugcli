@@ -1,6 +1,6 @@
 // Package ops does the work behind tug's daily commands: logs, exec,
-// port-forward and rollouts. It has no presentation, so the CLI and a later
-// TUI share it.
+// port-forward, rollouts and explaining why a workload is not ready. It has
+// no presentation, so the CLI and a later TUI share it.
 package ops
 
 import (
