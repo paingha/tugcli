@@ -107,6 +107,52 @@ func TestUnlockAndLock(t *testing.T) {
 	}
 }
 
+func TestEndExpiredUnlock(t *testing.T) {
+	m := NewManager(t.TempDir())
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
+	s, _ := m.Create(1, "")
+	if err := s.Connect(prodEU, "", true, AuthCommand{Command: "tug"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Unlock(15 * time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	until := now.Add(15 * time.Minute)
+	var recorded []time.Time
+	record := func(u time.Time) error {
+		recorded = append(recorded, u)
+		return nil
+	}
+
+	// Still running, even a moment before it ends.
+	if ended, err := s.EndExpiredUnlock(until.Add(-time.Nanosecond), record); err != nil || ended || len(recorded) != 0 {
+		t.Fatalf("EndExpiredUnlock before the end = %v, %v (recorded %v); want nothing done", ended, err, recorded)
+	}
+	// A failure to record keeps the unlock for the next caller.
+	full := errors.New("no space left on device")
+	if ended, err := s.EndExpiredUnlock(until, func(time.Time) error { return full }); !errors.Is(err, full) || ended {
+		t.Fatalf("EndExpiredUnlock with a failing record = %v, %v", ended, err)
+	}
+	if again, _ := m.Open(s.State.ID); !again.State.UnlockedUntil.Equal(until) {
+		t.Fatalf("unlock after a failed record = %v, want it kept", again.State.UnlockedUntil)
+	}
+	// Ended once, by whichever session value sees it first.
+	other, _ := m.Open(s.State.ID)
+	if ended, err := s.EndExpiredUnlock(until, record); err != nil || !ended {
+		t.Fatalf("EndExpiredUnlock at the end = %v, %v", ended, err)
+	}
+	if ended, err := other.EndExpiredUnlock(until.Add(time.Hour), record); err != nil || ended {
+		t.Fatalf("EndExpiredUnlock a second time = %v, %v; want nothing done", ended, err)
+	}
+	if len(recorded) != 1 || !recorded[0].Equal(until) {
+		t.Fatalf("recorded %v, want the end once", recorded)
+	}
+	if again, _ := m.Open(s.State.ID); !again.State.UnlockedUntil.IsZero() || again.State.Writable(until) || !again.State.ReadOnly {
+		t.Fatalf("state after the unlock ended = %+v", again.State)
+	}
+}
+
 func TestChildSessionCopiesParent(t *testing.T) {
 	m := NewManager(t.TempDir())
 	parent, _ := m.Create(1, "")

@@ -147,6 +147,28 @@ func (s *Session) Lock() error {
 	})
 }
 
+// EndExpiredUnlock forgets an unlock that has run out by now, so that it is
+// noticed once however many tug processes and tugd see it. It calls record
+// with when the unlock ran out first, and keeps the unlock when record
+// fails, so that the next caller tries again. It reports whether it ended
+// one; an unlock still running, or none, is left as it is.
+func (s *Session) EndExpiredUnlock(now time.Time, record func(until time.Time) error) (bool, error) {
+	ended := false
+	err := s.update(func() (bool, error) {
+		until := s.State.UnlockedUntil
+		if until.IsZero() || now.Before(until) {
+			return false, nil
+		}
+		if err := record(until); err != nil {
+			return false, err
+		}
+		s.State.UnlockedUntil = time.Time{}
+		ended = true
+		return true, nil
+	})
+	return ended, err
+}
+
 // SetPin records the pin that chose the connection, or clears it when p is
 // nil, for example when the user connects by hand.
 func (s *Session) SetPin(p *Pin) error {

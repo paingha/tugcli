@@ -15,10 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,15 +65,16 @@ type Config struct {
 	IdleTimeout time.Duration
 	// Forward runs named port-forwards; without it tugd refuses them.
 	Forward ForwardFunc
-	// Audit, when set, records every write the proxy forwards. A write
-	// that cannot be recorded is not forwarded.
+	// Audit, when set, records every write the proxy forwards and how it
+	// was answered, every write it refuses, and unlocks that run out. A
+	// write that cannot be recorded is not forwarded.
 	Audit   Recorder
 	Version string
 	Now     func() time.Time
 	Log     *slog.Logger
 }
 
-// Recorder notes a write the proxy is about to forward.
+// Recorder notes what the proxy forwards and refuses in the audit log.
 type Recorder interface {
 	Record(ctx context.Context, e audit.Entry) error
 }
@@ -251,6 +254,20 @@ func slept(prev, now time.Time) bool {
 // monotonic clock.
 func sleptFor(wall, monotonic time.Duration) bool { return wall-monotonic > wakeGap }
 
+// endExpiredUnlocks records the unlocks of proxied sessions that have run
+// out, so the audit log has them even when no request comes after.
+func (s *Server) endExpiredUnlocks(ctx context.Context) {
+	s.mu.Lock()
+	ids := slices.Collect(maps.Keys(s.tokens))
+	s.mu.Unlock()
+	now := s.cfg.Now()
+	for _, id := range ids {
+		if sess, ok := s.usesProxy(id); ok {
+			s.endExpiredUnlock(ctx, sess, now)
+		}
+	}
+}
+
 // Run listens on the control socket and the proxy address and serves until
 // ctx ends, Shutdown is called, or tugd has been idle for IdleTimeout.
 func (s *Server) Run(ctx context.Context) error {
@@ -343,6 +360,7 @@ loop:
 				s.dropUpstreams()
 			}
 			lastTick = now
+			s.endExpiredUnlocks(ctx)
 			if s.idle() {
 				s.cfg.Log.Info("tugd idle; stopping")
 				break loop

@@ -23,11 +23,53 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/kube"
 	sdk "github.com/paingha/tugcli/pkg/provider"
 )
+
+// upgrade opens an upgraded connection through the proxy, as exec, attach
+// and port-forward do, and returns the status it was answered with. When
+// it is upgraded, it checks that what is sent comes back, and returns the
+// connection for more.
+func (f *fixture) upgrade(t *testing.T, method, path, proto string) (int, *bufio.ReadWriter, func()) {
+	t.Helper()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(f.proxy.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(conn, "%s /s/%s%s HTTP/1.1\r\nHost: tugd\r\nAuthorization: Bearer %s\r\nConnection: Upgrade\r\nUpgrade: %s\r\nContent-Length: 0\r\n\r\n",
+		method, f.sess.State.ID, path, f.token, proto)
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+	resp, err := http.ReadResponse(rw.Reader, nil)
+	if err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close() // a 101 has none; the connection carries on
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		conn.Close()
+		return resp.StatusCode, nil, func() {}
+	}
+	echo(t, rw, "ping")
+	return resp.StatusCode, rw, func() { conn.Close() }
+}
+
+// echo sends a line over an upgraded connection and checks it comes back.
+func echo(t *testing.T, rw *bufio.ReadWriter, line string) {
+	t.Helper()
+	fmt.Fprint(rw, line+"\n")
+	if err := rw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := rw.ReadString('\n')
+	if err != nil || got != "echo: "+line+"\n" {
+		t.Fatalf("over the upgraded connection: %q, %v; want the line echoed", got, err)
+	}
+}
 
 // stream starts a streaming GET through the proxy and returns its status
 // and first line, which must arrive while the stream is still open.
@@ -52,6 +94,87 @@ func (f *fixture) stream(t *testing.T, path string) (int, string) {
 	return resp.StatusCode, line
 }
 
+// Watches, logs -f and port-forwards work on every session; exec and attach,
+// directly or through a node's kubelet, only on unlocked or read-write ones.
+func TestProxyStreamsOnReadOnlyAndUnlockedSessions(t *testing.T) {
+	const pod = "/api/v1/namespaces/default/pods/api-0"
+	streams := []struct {
+		name, method, path, upgrade string
+		write                       bool
+	}{
+		{"watch", http.MethodGet, "/api/v1/namespaces?watch=true&resourceVersion=1", "", false},
+		{"logs -f", http.MethodGet, pod + "/log?follow=true&container=app", "", false},
+		{"port-forward over SPDY", http.MethodPost, pod + "/portforward", "SPDY/3.1", false},
+		{"port-forward over WebSocket", http.MethodGet, pod + "/portforward?ports=8080", "websocket", false},
+		{"exec over SPDY", http.MethodPost, pod + "/exec?command=sh&stdin=true&tty=true", "SPDY/3.1", true},
+		{"exec over WebSocket", http.MethodGet, pod + "/exec?command=sh&stdin=true", "websocket", true},
+		{"attach", http.MethodPost, pod + "/attach?stdin=true", "SPDY/3.1", true},
+		{"exec through the kubelet", http.MethodGet, "/api/v1/nodes/n1/proxy/exec/default/api-0/app?command=sh", "websocket", true},
+	}
+	for _, unlocked := range []bool{false, true} {
+		mode := "read-only"
+		if unlocked {
+			mode = "unlocked"
+		}
+		t.Run(mode, func(t *testing.T) {
+			rec := &recorder{}
+			f := setup(t, func(c *Config) { c.Audit = rec })
+			if unlocked {
+				if err := f.sess.Unlock(time.Hour); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, st := range streams {
+				t.Run(st.name, func(t *testing.T) {
+					var code, want int
+					switch {
+					case st.upgrade == "":
+						var line string
+						code, line = f.stream(t, st.path)
+						if code == http.StatusOK && line != "first\n" {
+							t.Fatalf("first line = %q", line)
+						}
+						want = http.StatusOK
+					case st.write && !unlocked:
+						code, _, _ = f.upgrade(t, st.method, st.path, st.upgrade)
+						want = http.StatusForbidden
+					default:
+						var closeConn func()
+						code, _, closeConn = f.upgrade(t, st.method, st.path, st.upgrade)
+						closeConn()
+						want = http.StatusSwitchingProtocols
+					}
+					if code != want {
+						t.Fatalf("%s %s on a %s session = %d, want %d", st.method, st.path, mode, code, want)
+					}
+				})
+			}
+			// Each exec and attach is in the audit log: as a write, with
+			// its outcome, or as refused. Streams that only read are not.
+			var writes, results, refused int
+			for _, e := range rec.recorded() {
+				switch e.Kind {
+				case audit.KindWrite:
+					writes++
+					if strings.Contains(e.Path, "?") || e.Allowed != audit.AllowedUnlocked {
+						t.Errorf("write entry %+v", e)
+					}
+				case audit.KindResult:
+					results++
+					if e.Status != http.StatusSwitchingProtocols {
+						t.Errorf("result %+v, want 101", e)
+					}
+				case audit.KindRefused:
+					refused++
+				}
+			}
+			if unlocked && (writes != 4 || results != 4 || refused != 0) || !unlocked && (writes != 0 || refused != 4) {
+				t.Fatalf("recorded %d writes, %d results and %d refusals: %+v", writes, results, refused, rec.recorded())
+			}
+		})
+	}
+}
+
 // clock is a time that tests move.
 type clock struct {
 	mu sync.Mutex
@@ -68,6 +191,84 @@ func (c *clock) set(t time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.t = t
+}
+
+// An unlock allows writes up to the moment it ends and not after, whatever
+// the client. Its end is recorded once. A stream opened while unlocked, such
+// as an exec, is not cut off when the unlock ends.
+func TestUnlockEndsOnTime(t *testing.T) {
+	start := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	until := start.Add(15 * time.Minute)
+	c := &clock{t: start}
+	rec := &recorder{}
+	f := setup(t, func(cfg *Config) {
+		cfg.Now = c.now
+		cfg.Audit = rec
+	})
+	f.sess.State.UnlockedUntil = until
+	if err := f.sess.Save(); err != nil {
+		t.Fatal(err)
+	}
+	const exec = "/api/v1/namespaces/default/pods/api-0/exec?command=sh"
+
+	c.set(until.Add(-time.Second))
+	if code, body := f.do(t, http.MethodDelete, "/api/v1/namespaces/scratch", f.token); code != http.StatusOK {
+		t.Fatalf("DELETE a second before the unlock ends = %d %s", code, body)
+	}
+	code, open, closeOpen := f.upgrade(t, http.MethodPost, exec, "SPDY/3.1")
+	defer closeOpen()
+	if code != http.StatusSwitchingProtocols {
+		t.Fatalf("exec a second before the unlock ends = %d", code)
+	}
+
+	for _, at := range []time.Time{until, until.Add(time.Millisecond), until.Add(time.Hour)} {
+		c.set(at)
+		if code, body := f.do(t, http.MethodDelete, "/api/v1/namespaces/scratch", f.token); code != http.StatusForbidden ||
+			!strings.Contains(body, "tug unlock") {
+			t.Fatalf("DELETE %s after the unlock ends = %d %s", at.Sub(until), code, body)
+		}
+		if code, _, closeConn := f.upgrade(t, http.MethodPost, exec, "SPDY/3.1"); code != http.StatusForbidden {
+			closeConn()
+			t.Fatalf("exec %s after the unlock ends = %d", at.Sub(until), code)
+		}
+	}
+	echo(t, open, "still here") // the exec opened before the end
+	if f.cluster.deletes.Load() != 1 {
+		t.Fatalf("the cluster saw %d deletes, want 1", f.cluster.deletes.Load())
+	}
+
+	var expired []audit.Entry
+	for _, e := range rec.recorded() {
+		if e.Kind == audit.KindUnlockExpired {
+			expired = append(expired, e)
+		}
+	}
+	if len(expired) != 1 || !expired[0].Time.Equal(until) || !expired[0].Until.Equal(until) ||
+		expired[0].Session != f.sess.State.ID || expired[0].Cluster != "prod" {
+		t.Fatalf("unlock-expired entries = %+v, want one at %s", expired, until)
+	}
+	if s, err := f.srv.cfg.Sessions.Open(f.sess.State.ID); err != nil || !s.State.UnlockedUntil.IsZero() {
+		t.Fatalf("session after its unlock ended = %+v, %v", s, err)
+	}
+
+	// With no request after it, tugd's tick notices the end.
+	f.sess.State.UnlockedUntil = until.Add(2 * time.Hour)
+	if err := f.sess.Save(); err != nil {
+		t.Fatal(err)
+	}
+	f.srv.endExpiredUnlocks(context.Background())
+	c.set(until.Add(3 * time.Hour))
+	f.srv.endExpiredUnlocks(context.Background())
+	f.srv.endExpiredUnlocks(context.Background())
+	n := 0
+	for _, e := range rec.recorded() {
+		if e.Kind == audit.KindUnlockExpired {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("recorded %d unlock-expired entries, want 2", n)
+	}
 }
 
 // rotatingProvider hands out a new token on every fetch, each expiring at
@@ -323,7 +524,8 @@ func TestRestartedTugdFailsClosed(t *testing.T) {
 // one ends, so the client starts it again; and a cluster that cannot be
 // reached is named in the error.
 func TestProxyRecoversFromDroppedConnections(t *testing.T) {
-	f := setup(t)
+	rec := &recorder{}
+	f := setup(t, func(c *Config) { c.Audit = rec })
 	if code, body := f.do(t, http.MethodGet, "/api/v1/namespaces", f.token); code != http.StatusOK {
 		t.Fatalf("GET = %d %s", code, body)
 	}
@@ -370,6 +572,10 @@ func TestProxyRecoversFromDroppedConnections(t *testing.T) {
 	code, body := f.do(t, http.MethodDelete, "/api/v1/namespaces/scratch", f.token)
 	if code != http.StatusBadGateway || !strings.Contains(body, "cannot reach prod") {
 		t.Fatalf("DELETE with the cluster gone = %d %s", code, body)
+	}
+	got := rec.recorded()
+	if len(got) != 2 || got[0].Kind != audit.KindWrite || got[1].Kind != audit.KindResult || got[1].Status != http.StatusBadGateway {
+		t.Fatalf("recorded %+v, want the write and tugd's 502", got)
 	}
 }
 
@@ -510,6 +716,15 @@ func TestSleptFor(t *testing.T) {
 	prev := time.Now()
 	if slept(prev, time.Now()) {
 		t.Error("slept between two readings in a row")
+	}
+}
+
+func TestPrintable(t *testing.T) {
+	if got := printable("kubectl delete\x1b[2J\n", 100); got != "kubectl delete[2J" {
+		t.Errorf("printable = %q", got)
+	}
+	if got := printable(strings.Repeat("a", 300), 200); len(got) != 200 {
+		t.Errorf("printable kept %d bytes, want 200", len(got))
 	}
 }
 

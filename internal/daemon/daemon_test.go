@@ -254,29 +254,51 @@ func TestProxyRecordsTheWritesItForwards(t *testing.T) {
 		c.Audit = rec
 		c.Now = func() time.Time { return now }
 	})
-	f.do(t, http.MethodGet, "/api/v1/namespaces", f.token)
-	f.do(t, http.MethodDelete, "/api/v1/namespaces/payments", f.token) // refused: read-only
-	if got := rec.recorded(); len(got) != 0 {
-		t.Fatalf("recorded a read or a refused write: %+v", got)
+	base := audit.Entry{
+		Time: now, Source: audit.SourceProxy, Cluster: "prod", ClusterID: "kubeconfig/x/prod", Session: f.sess.State.ID,
+		Method: http.MethodDelete, Path: "/api/v1/namespaces/payments", Client: "Helm/3.16.2", Intent: "kubectl delete",
+	}
+	del := func() int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodDelete, f.proxy.URL+"/s/"+f.sess.State.ID+"/api/v1/namespaces/payments?propagationPolicy=Foreground", nil)
+		req.Header.Set("Authorization", "Bearer "+f.token)
+		req.Header.Set("User-Agent", "Helm/3.16.2")
+		req.Header.Set("Kubectl-Command", "kubectl delete")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
 	}
 
+	// A read is not recorded; a refused write is, as refused.
+	f.do(t, http.MethodGet, "/api/v1/namespaces", f.token)
+	if code := del(); code != http.StatusForbidden {
+		t.Fatalf("DELETE on a read-only session = %d", code)
+	}
+	refused := base
+	refused.Kind, refused.Status, refused.Reason = audit.KindRefused, http.StatusForbidden, audit.ReasonReadOnly
+	if got := rec.recorded(); len(got) != 1 || !reflect.DeepEqual(got[0], refused) {
+		t.Fatalf("recorded %+v, want only %+v", got, refused)
+	}
+
+	// An allowed write is recorded before it is sent, then its outcome.
 	if err := f.sess.Unlock(time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	req, _ := http.NewRequest(http.MethodDelete, f.proxy.URL+"/s/"+f.sess.State.ID+"/api/v1/namespaces/payments?propagationPolicy=Foreground", nil)
-	req.Header.Set("Authorization", "Bearer "+f.token)
-	req.Header.Set("User-Agent", "Helm/3.16.2")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	if code := del(); code != http.StatusOK {
+		t.Fatalf("DELETE after unlock = %d", code)
 	}
-	resp.Body.Close()
-	want := audit.Entry{
-		Time: now, Source: audit.SourceProxy, Cluster: "prod", ClusterID: "kubeconfig/x/prod", Session: f.sess.State.ID,
-		Allowed: audit.AllowedUnlocked, Method: http.MethodDelete, Path: "/api/v1/namespaces/payments", Client: "Helm/3.16.2",
+	got := rec.recorded()
+	if len(got) != 3 {
+		t.Fatalf("recorded %+v, want the refusal, the write and its result", got)
 	}
-	if got := rec.recorded(); resp.StatusCode != http.StatusOK || len(got) != 1 || !reflect.DeepEqual(got[0], want) {
-		t.Fatalf("DELETE = %d, recorded %+v; want %+v", resp.StatusCode, got, want)
+	write, result := base, base
+	write.Kind, write.Allowed, write.ID = audit.KindWrite, audit.AllowedUnlocked, got[1].ID
+	result.Kind, result.Status, result.ID = audit.KindResult, http.StatusOK, got[1].ID
+	if write.ID == "" || !reflect.DeepEqual(got[1], write) || !reflect.DeepEqual(got[2], result) {
+		t.Fatalf("recorded %+v and %+v; want %+v and %+v", got[1], got[2], write, result)
 	}
 
 	// A write that cannot be recorded is not forwarded.

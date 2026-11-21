@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
@@ -41,7 +42,14 @@ type upstream struct {
 // proxyRequest is what tugd knows about a request it forwards, for the
 // handlers of its response.
 type proxyRequest struct {
-	sess *session.Session
+	sess   *session.Session
+	method string
+	// path is the API path, without the /s/<session> prefix or a query.
+	path   string
+	intent string
+	client string
+	// writeID is the audit ID of a write, or "" for a read.
+	writeID string
 }
 
 type proxyRequestKey struct{}
@@ -67,11 +75,18 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 			"tug proxy: this tug session has ended, is not connected, or is not using the proxy; run `tug connect --proxy`")
 		return
 	}
+	now := s.cfg.Now()
+	s.endExpiredUnlock(r.Context(), sess, now)
 
 	target := *r.URL
 	target.Path, target.RawPath = rest, ""
-	if !guard.IsRead(r.Method, &target) && !sess.State.Writable(s.cfg.Now()) {
+	read := guard.IsRead(r.Method, &target)
+	pr := &proxyRequest{sess: sess, method: r.Method, path: rest, intent: intentOf(r), client: clientOf(r)}
+	if !read && !sess.State.Writable(now) {
 		denied := &guard.DeniedError{Cluster: sess.State.ClusterName, Action: guard.Describe(r.Method, &target)}
+		s.note(r.Context(), s.entry(audit.KindRefused, pr, func(e *audit.Entry) {
+			e.Status, e.Reason = http.StatusForbidden, audit.ReasonReadOnly
+		}))
 		writeStatus(w, http.StatusForbidden, metav1.StatusReasonForbidden, "tug: "+denied.Error())
 		return
 	}
@@ -85,15 +100,15 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, code, reason, fmt.Sprintf("tug proxy: cannot forward to %s: %s", sess.State.ClusterName, withHint(err)))
 		return
 	}
-	if !guard.IsRead(r.Method, &target) {
-		if err := s.record(r, sess, target.Path); err != nil {
+	if !read {
+		if pr.writeID, err = s.record(r.Context(), pr, sess.State.ReadOnly); err != nil {
 			writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError,
 				fmt.Sprintf("tug proxy: not forwarding %s, since it could not be recorded in the audit log: %v",
 					guard.Describe(r.Method, &target), err))
 			return
 		}
 	}
-	out := r.Clone(context.WithValue(r.Context(), proxyRequestKey{}, &proxyRequest{sess: sess}))
+	out := r.Clone(context.WithValue(r.Context(), proxyRequestKey{}, pr))
 	out.URL.Path, out.URL.RawPath = rest, ""
 	// The session token is for tugd only; the upstream gets the cluster's
 	// own credential from the transport.
@@ -137,35 +152,125 @@ func withHint(err error) string {
 	return err.Error()
 }
 
-// maxClient bounds the User-Agent kept in an audit entry.
-const maxClient = 200
+// Bounds on what an audit entry keeps of a client's headers.
+const (
+	maxClient = 200
+	maxIntent = 100
+)
 
-// record notes a write the proxy is about to forward in the audit log: the
-// method, the API path and the client's User-Agent, never the query string,
-// the body or a credential.
-func (s *Server) record(r *http.Request, sess *session.Session, path string) error {
+// clientOf is the client's User-Agent, as an audit entry keeps it.
+func clientOf(r *http.Request) string { return printable(r.UserAgent(), maxClient) }
+
+// intentOf is the command a client says it runs. kubectl names it, without
+// its arguments, in its Kubectl-Command header, such as "kubectl delete";
+// other clients say nothing.
+func intentOf(r *http.Request) string { return printable(r.Header.Get("Kubectl-Command"), maxIntent) }
+
+// printable is s without control characters, cut to at most n bytes.
+func printable(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) > n {
+		s = s[:n]
+	}
+	return s
+}
+
+// entry is an audit entry of a kind about a request, which set finishes.
+// It names the method and the API path, never the query string, the body
+// or a credential.
+func (s *Server) entry(kind string, pr *proxyRequest, set func(*audit.Entry)) audit.Entry {
+	st := pr.sess.State
+	e := audit.Entry{
+		Time:      s.cfg.Now(),
+		Kind:      kind,
+		Source:    audit.SourceProxy,
+		Cluster:   st.ClusterName,
+		ClusterID: st.ClusterID,
+		Session:   st.ID,
+		Namespace: audit.NamespaceOf(pr.path),
+		Intent:    pr.intent,
+		Method:    pr.method,
+		Path:      pr.path,
+		Client:    pr.client,
+	}
+	set(&e)
+	return e
+}
+
+// record notes a write the proxy is about to forward in the audit log and
+// returns its ID. unlocked says whether the guard let it through because
+// the session, which is read-only, was unlocked.
+func (s *Server) record(ctx context.Context, pr *proxyRequest, unlocked bool) (string, error) {
 	if s.cfg.Audit == nil {
-		return nil
+		return "", nil
 	}
 	allowed := audit.AllowedReadWrite
-	if sess.State.ReadOnly {
+	if unlocked {
 		allowed = audit.AllowedUnlocked // the guard let it through
 	}
-	client := r.UserAgent()
-	if len(client) > maxClient {
-		client = client[:maxClient]
+	id := audit.NewID()
+	err := s.cfg.Audit.Record(ctx, s.entry(audit.KindWrite, pr, func(e *audit.Entry) { e.ID, e.Allowed = id, allowed }))
+	return id, err
+}
+
+// noteTimeout bounds how long recording an outcome, a refusal or an expiry
+// waits for the audit log.
+const noteTimeout = 5 * time.Second
+
+// note records an entry that cannot change what happens to the request,
+// such as an outcome or a refusal, logging the failure to record it. A
+// cancelled request still has it recorded.
+func (s *Server) note(ctx context.Context, e audit.Entry) {
+	if s.cfg.Audit == nil {
+		return
 	}
-	return s.cfg.Audit.Record(r.Context(), audit.Entry{
-		Time:      s.cfg.Now(),
-		Source:    audit.SourceProxy,
-		Cluster:   sess.State.ClusterName,
-		ClusterID: sess.State.ClusterID,
-		Session:   sess.State.ID,
-		Allowed:   allowed,
-		Method:    r.Method,
-		Path:      path,
-		Client:    client,
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), noteTimeout)
+	defer cancel()
+	if err := s.cfg.Audit.Record(ctx, e); err != nil {
+		s.cfg.Log.Warn("recording in the audit log", "kind", e.Kind, "session", e.Session, "err", err)
+	}
+}
+
+// noteResult records how a forwarded write was answered: with status, or
+// not at all when status is 0.
+func (s *Server) noteResult(ctx context.Context, pr *proxyRequest, status int) {
+	if pr == nil || pr.writeID == "" {
+		return
+	}
+	s.note(ctx, s.entry(audit.KindResult, pr, func(e *audit.Entry) {
+		e.ID, e.Status = pr.writeID, status
+		if status == 0 {
+			e.Reason = audit.ReasonNoResponse
+		}
+	}))
+}
+
+// endExpiredUnlock records, once, that a session's unlock has run out by
+// now, and forgets it in the session.
+func (s *Server) endExpiredUnlock(ctx context.Context, sess *session.Session, now time.Time) {
+	st := sess.State
+	if !st.ReadOnly || st.UnlockedUntil.IsZero() || now.Before(st.UnlockedUntil) {
+		return
+	}
+	_, err := sess.EndExpiredUnlock(now, func(until time.Time) error {
+		if s.cfg.Audit == nil {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), noteTimeout)
+		defer cancel()
+		return s.cfg.Audit.Record(ctx, audit.Entry{
+			Time: until, Kind: audit.KindUnlockExpired, Source: audit.SourceProxy, Cluster: st.ClusterName,
+			ClusterID: st.ClusterID, Session: st.ID, Namespace: st.Namespace, ReadOnly: true, Proxy: true, Until: until,
+		})
 	})
+	if err != nil {
+		s.cfg.Log.Warn("recording an unlock that ran out", "session", st.ID, "err", err)
+	}
 }
 
 // splitSession splits "/s/<id>/rest" into its session ID and the API path.
@@ -317,16 +422,23 @@ func (s *Server) newUpstream(clusterID string, cfg *rest.Config) (*upstream, err
 		FlushInterval: -1,
 		ModifyResponse: func(resp *http.Response) error {
 			pr, _ := resp.Request.Context().Value(proxyRequestKey{}).(*proxyRequest)
+			s.noteResult(resp.Request.Context(), pr, resp.StatusCode)
 			if resp.StatusCode == http.StatusUnauthorized && pr != nil {
 				explainRefusedCredential(resp, pr.sess.State.ClusterName, s.credentialRefused(clusterID, up))
 			}
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			pr, _ := r.Context().Value(proxyRequestKey{}).(*proxyRequest)
 			name := "the cluster"
-			if pr, ok := r.Context().Value(proxyRequestKey{}).(*proxyRequest); ok {
+			if pr != nil {
 				name = pr.sess.State.ClusterName
 			}
+			if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+				s.noteResult(r.Context(), pr, 0) // the client went away
+				return
+			}
+			s.noteResult(r.Context(), pr, http.StatusBadGateway)
 			writeStatus(w, http.StatusBadGateway, metav1.StatusReasonServiceUnavailable,
 				fmt.Sprintf("tug proxy: cannot reach %s: %v", name, err))
 		},
