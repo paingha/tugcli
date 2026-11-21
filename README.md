@@ -265,6 +265,14 @@ Plugins that declare the `serve` capability, as every SDK plugin can, run as
 one process that answers many requests over stdio, so tugd and commands that
 make several calls do not start a process each time.
 
+A plugin can also ship a WebAssembly build (`{os: wasip1, arch: wasm}`),
+which tug runs itself with wazero: one file for every platform, no files but
+a private temporary directory, and https only to the hosts in
+`spec.network`, through tug. The Go scaffold's `make wasm` builds one; tug
+prefers a native build unless `plugins.wasm.prefer` is set, and
+`plugins.wasm.memoryLimitMiB` caps memory (256 by default). `tug plugin
+describe` says how a plugin runs.
+
 With the Go SDK, a plugin is mostly two methods:
 
 ```go
