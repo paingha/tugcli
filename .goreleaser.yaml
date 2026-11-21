@@ -48,6 +48,12 @@ signs:
 sboms:
   - artifacts: archive
 
+# The Python SDK is released from sdk/python/v* tags by its own workflow;
+# they must never count as tug's previous or current version.
+git:
+  ignore_tags:
+    - "sdk/*"
+
 changelog:
   sort: asc
   filters:
