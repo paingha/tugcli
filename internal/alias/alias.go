@@ -193,20 +193,20 @@ func Split(s string) ([]string, error) {
 	runes := []rune(s)
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
-		switch {
-		case r == ' ' || r == '\t' || r == '\n':
+		switch r {
+		case ' ', '\t', '\n':
 			if inWord {
 				words = append(words, cur.String())
 				cur.Reset()
 				inWord = false
 			}
-		case r == '\\':
+		case '\\':
 			inWord = true
 			if i+1 < len(runes) {
 				i++
 				cur.WriteRune(runes[i])
 			}
-		case r == '\'':
+		case '\'':
 			inWord = true
 			end := slices.Index(runes[i+1:], '\'')
 			if end < 0 {
@@ -214,7 +214,7 @@ func Split(s string) ([]string, error) {
 			}
 			cur.WriteString(string(runes[i+1 : i+1+end]))
 			i += end + 1
-		case r == '"':
+		case '"':
 			inWord = true
 			closed := false
 			for i++; i < len(runes); i++ {
