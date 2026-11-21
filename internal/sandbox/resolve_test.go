@@ -117,12 +117,13 @@ func TestResolve(t *testing.T) {
 	env := []string{
 		"HOME=" + home, "PATH=relative:" + tools, "ACME_HOME=" + filepath.Join(root, "acme-home"),
 		"HTTPS_PROXY=http://proxy.example:3128", "SSL_CERT_FILE=" + filepath.Join(root, "ca.pem"),
+		"KUBECONFIG=" + filepath.Join(root, "kube-a") + ":" + filepath.Join(root, "kube-b"),
 	}
 	p := Policy{
 		Name:    "acme",
 		Dir:     pluginDir,
 		Tools:   []string{"acme-link", "missing-tool", filepath.Join(tools, "acme")},
-		Read:    []string{"~/.acme", "$ACME_HOME", "$UNSET/x"},
+		Read:    []string{"~/.acme", "$ACME_HOME", "$UNSET/x", "$KUBECONFIG"},
 		Write:   []string{"~/.acme/cache"},
 		Sockets: []string{"/run/acme.sock"},
 		Ports:   []uint16{3080, 443},
@@ -141,7 +142,10 @@ func TestResolve(t *testing.T) {
 	if !slices.Contains(r.Libraries, pluginDir) {
 		t.Errorf("Libraries = %v, want the plugin directory %s", r.Libraries, pluginDir)
 	}
-	for _, want := range []string{filepath.Join(home, ".acme"), filepath.Join(root, "acme-home"), tools, filepath.Join(root, "ca.pem")} {
+	for _, want := range []string{
+		filepath.Join(home, ".acme"), filepath.Join(root, "acme-home"), tools, filepath.Join(root, "ca.pem"),
+		filepath.Join(root, "kube-a"), filepath.Join(root, "kube-b"), // a list in one variable
+	} {
 		if !slices.Contains(r.Read, want) {
 			t.Errorf("Read = %v, want %s among them", r.Read, want)
 		}

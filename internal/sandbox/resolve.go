@@ -65,8 +65,15 @@ func resolve(p Policy, bin string, env []string, tmp string) rules {
 		to   *[]string
 	}{{p.Read, &r.Read}, {p.Write, &r.Write}, {p.Sockets, &r.Sockets}} {
 		for _, entry := range list.from {
-			if path, ok := expand(entry, lookup); ok {
-				*list.to = appendReal(*list.to, path)
+			expanded, ok := expand(entry, lookup)
+			if !ok {
+				continue
+			}
+			// A variable such as KUBECONFIG may hold a list of paths.
+			for _, path := range filepath.SplitList(expanded) {
+				if filepath.IsAbs(path) {
+					*list.to = appendReal(*list.to, path)
+				}
 			}
 		}
 	}
