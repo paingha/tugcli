@@ -258,7 +258,13 @@ Install verifies this platform's binary against the manifest, refuses
 archives with links or paths outside the plugin directory, and shows the
 plugin's publisher, secrets and network hosts before asking to confirm.
 Plugins run with a scrubbed environment and receive only the secrets they
-declare. A plugin whose `minTugVersion` is newer than tug is refused. Fields
+declare, inside an OS sandbox: Landlock and seccomp on Linux,
+`sandbox-exec` on macOS. A plugin reads only its own directory, system
+files and the paths its manifest's `spec.sandbox` declares, writes only a
+private temporary directory, runs only its declared tools, and connects
+only to port 443 and the ports it declares. Windows has no sandbox. A
+plugin that needs more goes in `plugins.sandbox.exclude`, and
+`plugins.sandbox.enabled: false` turns it off. A plugin whose `minTugVersion` is newer than tug is refused. Fields
 in `plugin.yaml` that tug does not know are ignored with a warning, and
 `tug import` warns about `--set` keys the plugin's `accountConfig` does not
 describe. `plugins.timeouts` in `config.yaml` sets the time allowed for each
