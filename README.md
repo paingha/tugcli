@@ -46,6 +46,7 @@ tug sh api                      # shell into a pod (bash, else sh; a debug conta
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug gitops status               # Flux and Argo CD: ready, synced, suspended, revision offered vs applied
 tug gitops explain apps         # where delivery fails: dependsOn, source, admission, apply, or what it manages
 tug pf api 8080                 # port-forward by short name
@@ -273,6 +274,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
 | Working-environment profiles | [internal/profile](internal/profile) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Flux and Argo CD status, explain, drift and dependencies | [internal/gitops](internal/gitops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |

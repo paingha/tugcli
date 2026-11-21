@@ -141,7 +141,7 @@ func gitopsAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 		switch {
 		case r.Header.Get("Authorization") == "Bearer "+secretToken && serveGitOps(t, w, r, objects, writes):
 		case strings.Contains(r.Header.Get("Accept"), "as=PartialObjectMetadata;"):
-			servePartial(t, w, r, inner)
+			gitopsServePartial(t, w, r, inner)
 		default:
 			inner.ServeHTTP(w, r)
 		}
@@ -150,9 +150,9 @@ func gitopsAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	return srv, writes
 }
 
-// servePartial answers a request for one object's metadata as the API
+// gitopsServePartial answers a request for one object's metadata as the API
 // server does, with nothing but its metadata, which fakeAPIServer does not.
-func servePartial(t *testing.T, w http.ResponseWriter, r *http.Request, inner http.Handler) {
+func gitopsServePartial(t *testing.T, w http.ResponseWriter, r *http.Request, inner http.Handler) {
 	rec := httptest.NewRecorder()
 	inner.ServeHTTP(rec, r)
 	if rec.Code != http.StatusOK {
