@@ -1,6 +1,6 @@
 ---
 title: Safety commands
-description: unlock and lock.
+description: unlock, lock and audit.
 ---
 
 See [Read-only sessions](/docs/concepts/read-only) for how these fit together.
@@ -29,3 +29,39 @@ Make a read-only session read-only again now, ending an unlock early.
 ```bash
 tug lock
 ```
+
+## tug audit
+
+List what tug recorded on this machine, newest first: the writes it let
+through and how each was answered, the writes it refused, terminals
+connecting to and leaving clusters, and unlocks starting, being locked
+again and running out.
+
+```bash
+tug audit [--cluster <name>] [--session <id>] [-n <namespace>] [--event <kind>]... [--since <duration>] [-o table|json|yaml]
+```
+
+| Event | Recorded when |
+| --- | --- |
+| `write` | tug, kubectl run through tug, or any client through tugd sent a change. `RESULT` is the HTTP status, or kubectl's exit code. |
+| `refused` | The read-only guard refused a change. |
+| `session-start` | A terminal connected to a cluster, or a new terminal started out connected to its parent's. Says the namespace, read-only or read-write, and whether it goes through tugd. |
+| `session-end` | A terminal disconnected, connected to another cluster, or closed. |
+| `unlock` | `tug unlock` ran, and until when. |
+| `lock` | `tug lock` ended an unlock early. |
+| `unlock-expired` | An unlock ran out. The first tug command or tugd to notice records it, timed when it ran out. |
+
+A write keeps apart what you asked for (the tug or kubectl command, as far as
+tug can tell), the request tug or tugd saw (method and path), and the outcome.
+kubectl names its command, without arguments, in a header tugd reads; other
+clients through tugd are known by their user agent.
+
+```console
+$ tug audit --cluster prod-eu --event write --event refused
+$ tug audit --session "$TUG_SESSION" -o json
+```
+
+`-o json` and `-o yaml` give every field; a write's outcome is in `status`,
+`exit` or `reason`. The log never holds request bodies, query strings, tokens
+or command-line values that could be secrets. It is a local record, not
+evidence: see [The audit log](/docs/concepts/proxy-limits#the-audit-log).

@@ -104,7 +104,10 @@ Unlocked: writes allowed on prod-eu until 3:45PM
   the same cluster stay read-only.
 - When the time runs out, the session is read-only again. The guard checks
   the time on every request, and the prompt turns red again by itself at the
-  next prompt, using the shell's own clock.
+  next prompt, using the shell's own clock. A shell you opened with `exec`
+  while unlocked keeps running until you leave it; new ones are refused.
+- `tug audit` shows when each unlock started, and when it was locked again or
+  ran out.
 
 Finished early? Lock it again straight away:
 
@@ -119,3 +122,8 @@ run `tug unlock` or `--read-write`, and on a normal session a direct `kubectl`
 isn't covered at all. What you're truly *allowed* to do is decided by the
 cluster's own RBAC. `tug doctor` shows what your identity may do in a
 namespace.
+
+[What tugd protects, and what it doesn't](/docs/concepts/proxy-limits) lists
+exactly which clients and credentials the guard can see, even with `--proxy`,
+and what does the enforcing instead: RBAC, cloud IAM, admission control and
+the API server's audit log.

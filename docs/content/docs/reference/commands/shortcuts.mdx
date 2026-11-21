@@ -1,0 +1,173 @@
+---
+title: Shortcut commands
+description: pick, bookmark, open and alias.
+---
+
+These commands get you to an object, or to its source, with fewer keystrokes.
+They only read from the cluster; anything they run that could write goes
+through the same [read-only guard](/docs/concepts/read-only) as if you had
+typed it.
+
+## tug pick
+
+Fuzzy-pick an object from a full-screen list, then run something on it. Each
+row shows the object's kind and name, namespace, status, age and owner, and
+the cluster and namespace stay at the top. Without a kind, tug lists
+deployments, statefulsets, daemonsets, cronjobs, jobs and pods; any kind
+works, named as kubectl names it.
+
+```bash
+tug pick [kind] [flags]
+```
+
+Type to filter. Each word must match the name, as
+[targets](/docs/concepts/targets) match, or appear in the kind, namespace,
+status or owner, so `api crash` finds the `api` pods in `CrashLoopBackOff`.
+<kbd>Enter</kbd> chooses an object; then <kbd>w</kbd>, <kbd>t</kbd>,
+<kbd>l</kbd>, <kbd>d</kbd> or <kbd>p</kbd> runs `tug why`, `tug tree`,
+`tug logs`, `kubectl describe` or `tug pf` on it. <kbd>Esc</kbd> clears the
+filter, then quits.
+
+| Flag | Meaning |
+| --- | --- |
+| `-n`, `--namespace <ns>` | Namespace. Default: the session's. |
+| `-A`, `--all-namespaces` | List objects in every namespace. |
+| `--action <action>` | Run this on the object chosen: `why`, `tree`, `logs`, `describe` or `pf`. Default: ask, or `why` without a terminal. |
+| `--query <words>` | Start with this filter. |
+
+Without a terminal, `--query` must match exactly one object. Several matches
+fail with the same "be more specific" message as an ambiguous target, so
+scripts can use it too.
+
+```bash
+tug pick
+tug pick pods -A
+tug pick certificates --action why
+tug pick deploy --query api --action logs
+```
+
+## tug bookmark
+
+Save an object, or a cluster and namespace, under a short name, and open it
+from any terminal. Bookmarks are kept per user in `bookmarks.yaml` in tug's
+[config folder](/docs/reference/files).
+
+### tug bookmark add
+
+```bash
+tug bookmark add <name> [target] [flags]
+```
+
+The target is resolved now, as `tug why` resolves it, and saved exactly, so
+the bookmark always opens that object. Without a target, the bookmark is of
+the cluster and namespace.
+
+| Flag | Meaning |
+| --- | --- |
+| `-n`, `--namespace <ns>` | Namespace. Default: the session's. |
+| `--cluster <cluster>` | Cluster, by name, prefix or fuzzy match. Default: this terminal's. |
+| `--replace` | Replace a bookmark of the same name. |
+
+### tug bookmark open
+
+```bash
+tug bookmark open <name> [action] [args...]
+```
+
+Runs `why` (the default), `tree`, `logs`, `describe` or `pf` on the
+bookmarked object, in its namespace. Words after the action go to it; put
+flags after `--`. When the bookmark is on another cluster, the action runs in
+a temporary read-only session there, and your terminal stays where it is.
+`connect` points this terminal at the bookmark's cluster and namespace, and
+is what opening a bookmark without an object does.
+
+```bash
+tug bookmark add api deploy/api-server -n shop
+tug bookmark add certs certificate/web-tls --cluster payments-prod
+tug bookmark add edge -n ingress --cluster edge-eu
+tug bookmark open api
+tug bookmark open api logs -- -f --since 10m
+tug bookmark open db pf 5432
+tug bookmark open edge
+```
+
+### tug bookmark ls and rm
+
+`tug bookmark ls [-o table|json|yaml|name]` lists them;
+`tug bookmark rm <name>...` removes them and says what it removed.
+
+## tug open
+
+Find the file in this repository that defines an object, print where as
+`path:line`, and open it in `$VISUAL` or `$EDITOR`.
+
+```bash
+tug open <target> [flags]
+```
+
+tug looks first where the tools that applied the object say it came from:
+
+1. kustomize's `config.kubernetes.io/origin` annotation (set
+   `buildMetadata: [originAnnotations]` in your `kustomization.yaml`);
+2. the `spec.path` of the Flux Kustomization, or the source paths of the Argo
+   CD Application, that applied it, read from the cluster;
+3. the templates of its Helm chart, found by its `helm.sh/chart` label.
+
+Only when those find nothing does it search the repository's YAML for a
+document of the object's kind and name, preferring ones in its namespace.
+Hidden folders, `node_modules` and `vendor` are left out.
+
+When no file defines the object, tug writes its live YAML, without managed
+fields, to a read-only file in its private runtime folder and opens that
+instead; such files are removed a day later. A Secret is read as metadata
+only, so its data is never written.
+
+The editor opens only on a terminal, at the line for editors whose way of
+taking one tug knows (vi, Vim, Neovim, nano, Emacs, micro, Helix, VS Code,
+Cursor, Sublime Text, Zed and others) and at the top in any other. The
+`path:line` links on stdout work in any editor or terminal.
+
+| Flag | Meaning |
+| --- | --- |
+| `-n`, `--namespace <ns>` | Namespace. Default: the session's. |
+| `--repo <dir>` | Repository to look in. Default: the one the current folder is in. |
+| `--print` | Print the links without opening an editor. |
+
+```bash
+tug open deploy/api
+tug open kustomization.kustomize.toolkit.fluxcd.io/apps -n flux-system
+tug open certificate/web-tls --print
+```
+
+## tug alias
+
+Name your own shortcuts for tug and kubectl commands. Aliases are kept per
+user in `aliases.yaml` in tug's [config folder](/docs/reference/files), and
+work in every terminal. A [profile](/docs/guides/profiles)'s aliases are
+separate: they belong to the profile, and run with `tug profile run`.
+
+```bash
+tug alias set <name> <expansion>
+tug alias ls [-o table|json|yaml|name]
+tug alias rm <name>...
+```
+
+An alias stands for the words it was set to, followed by whatever comes after
+it: with `tug alias set wide 'get -o wide'`, `tug wide pods` runs
+`tug get -o wide pods`. Give the expansion as one quoted string, which tug
+splits as a shell would, or as several words after `--`.
+
+- Only the first word of a command line is an alias, and an expansion is
+  never expanded again, so aliases cannot loop.
+- An alias can't be named after one of tug's own commands, and one that a
+  later tug gains a command for is ignored; `tug alias ls` marks it.
+- An alias that may write prints what it runs on stderr first, such as
+  `alias rs: tug restart api`, and goes through the read-only guard as the
+  command would. Across clusters, writes are refused as usual.
+
+```bash
+tug alias set wide 'get -o wide'
+tug alias set errs -- logs --since 10m --json
+tug alias set rs restart
+tug rs api            # alias rs: tug restart api, then the guard asks on a read-only session
+```
