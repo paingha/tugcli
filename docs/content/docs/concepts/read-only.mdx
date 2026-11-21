@@ -1,0 +1,115 @@
+---
+title: Read-only sessions
+description: How tug keeps you from changing production by accident, and how to make changes on purpose.
+icon: ShieldCheck
+---
+
+Everyone who has worked with Kubernetes for long enough has a story about
+running a command against the wrong cluster. tug's answer is a **read-only
+session**: you can look at everything, but changes need a deliberate extra step.
+
+## Which clusters open read-only
+
+By default, any cluster labelled **`env=prod`** opens read-only. tug sets that
+label from your provider's tags, or guesses it from names such as `prod-eu`
+and `api-production` (see [The env label](/docs/concepts/catalog#the-env-label)).
+
+```console
+$ tug connect prod
+Connected to prod-eu, namespace default, read-only (tug unlock 15m to allow writes)
+```
+
+Your prompt turns bold red so you always know:
+
+<PromptModes />
+
+You can choose for a single connection, whatever the labels say:
+
+```bash
+tug connect staging --read-only    # be careful on this one today
+tug connect prod --read-write      # no guard at all (think twice)
+```
+
+To change which labels mean "read-only", set
+[`guard.readOnlyLabels`](/docs/reference/configuration#guard) in `config.yaml`.
+
+## What "read-only" covers
+
+<Callout type="warn" title="Read this table once">
+  Without `--proxy`, the guard covers **tug's commands**, not plain `kubectl`.
+  Connect with `--proxy` when you want every tool covered.
+</Callout>
+
+| What you run | Normal session | `tug connect --proxy` |
+| --- | --- | --- |
+| tug's own commands (`tug restart`, `tug scale`, `tug sh`…) | Guarded | Guarded |
+| kubectl through tug (`tug delete pod x`, `tug apply -f …`) | Guarded | Guarded |
+| `kubectl`, `helm`, `k9s` and other tools run directly | **Not guarded** | Guarded |
+
+With `--proxy`, every client talks to the cluster through
+[tugd](/docs/guides/proxy), a small proxy on your machine, which refuses
+changes for read-only sessions:
+
+```console
+$ kubectl delete pod api-0
+Error from server (Forbidden): tug: refused DELETE pods/api-0: prod-eu is read-only
+```
+
+## What happens when you try to change something
+
+In a terminal, tug **asks once** before the first change a command would make.
+Answer `y` to go ahead for that one command; anything else stops it.
+
+```console
+$ tug restart api
+prod-eu is read-only. Allow PATCH deployments/api-server? [y/N] n
+tug: refused PATCH deployments/api-server: prod-eu is read-only; run `tug unlock 15m` to allow writes
+```
+
+kubectl commands through tug work the same way. tug knows which kubectl
+commands only read (`get`, `describe`, `logs`, `top`, `explain`, `diff`,
+`events`, `port-forward`, `auth can-i`, `rollout status` and so on) and lets
+those straight through. Anything else, including kubectl plugins and commands
+tug doesn't recognise, counts as a change.
+
+```console
+$ tug delete pod debug
+prod-eu is read-only. Run `kubectl delete pod debug` anyway? [y/N]
+```
+
+Commands with `--dry-run` only read, so they run without asking.
+
+**Without a terminal** (in a script or CI job) there is nobody to ask, so tug
+refuses. Scripts that need to change a read-only cluster should
+`tug unlock` first, on purpose.
+
+## Unlocking for a while
+
+When you really mean to make changes, unlock the session:
+
+```console
+$ tug unlock 15m
+Unlocked: writes allowed on prod-eu until 3:45PM
+```
+
+- The default is 15 minutes. Use any duration such as `5m`, `1h` or `90s`.
+- Your prompt turns **yellow** and says `(unlocked)`.
+- The unlock belongs to **this terminal only**. Other terminals connected to
+  the same cluster stay read-only.
+- When the time runs out, the session is read-only again. The guard checks
+  the time on every request; the prompt catches up the next time you run a
+  tug command.
+
+Finished early? Lock it again straight away:
+
+```bash
+tug lock
+```
+
+## Read-only is not a permission system
+
+The guard is a seatbelt for honest mistakes, not access control. Anyone can
+run `tug unlock` or `--read-write`, and on a normal session a direct `kubectl`
+isn't covered at all. What you're truly *allowed* to do is decided by the
+cluster's own RBAC. `tug doctor` shows what your identity may do in a
+namespace.

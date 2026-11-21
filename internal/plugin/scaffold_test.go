@@ -101,8 +101,12 @@ func TestScaffoldGoBuildsTestsAndConforms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Manifest.Spec.Platforms) != 2 || len(res.Missing) != 4 {
-		t.Fatalf("packaged %d platforms, %d missing", len(res.Manifest.Spec.Platforms), len(res.Missing))
+	// This machine's binary and the WebAssembly build were built; every
+	// other platform the scaffold declares is left out.
+	wantMissing := len(p.Manifest.Spec.Platforms) - 2
+	if len(res.Manifest.Spec.Platforms) != 2 || len(res.Missing) != wantMissing {
+		t.Fatalf("Package(scaffold) = %d platforms, %d missing; want 2, %d missing",
+			len(res.Manifest.Spec.Platforms), len(res.Missing), wantMissing)
 	}
 	staged, err := NewDirs(t.TempDir()).Stage(res.Path, res.SHA256)
 	if err != nil {

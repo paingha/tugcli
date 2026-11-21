@@ -14,6 +14,7 @@ spec:
   - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-digitalocean}
   - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-digitalocean}
   - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-digitalocean.exe}
+  - {os: windows, arch: arm64, bin: bin/windows_arm64/tug-provider-digitalocean.exe}
   secrets:
   - {name: api_token, prompt: "DigitalOcean personal access token (kubernetes:read and kubernetes:access_cluster)"}
   env: []

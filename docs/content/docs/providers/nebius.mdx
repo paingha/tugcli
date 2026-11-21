@@ -1,0 +1,115 @@
+---
+title: Nebius Managed Kubernetes
+description: List Nebius AI Cloud Managed Kubernetes clusters through the nebius CLI, which signs you in for both listing and kubectl.
+icon: Orbit
+---
+
+The `nebius` plugin lists clusters on Nebius AI Cloud's Managed Service for
+Kubernetes (mk8s). It works through the **nebius CLI**, so you need that
+installed and set up. It's a first-party [plugin](/docs/plugins), so you add
+it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-nebius_<version>.tar.gz`, with builds for macOS and Linux, and
+lists its SHA-256 in the release's signed `checksums.txt`. There's no Windows
+build, because the nebius CLI has none.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-nebius_*' --pattern checksums.txt
+    tug plugin install tug-provider-nebius_*.tar.gz \
+      --sha256 "$(grep tug-provider-nebius_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`: `tug plugin install <archive URL> --sha256 <sha256>`.
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                  # builds the plugins for this machine
+    tug plugin package plugins/nebius -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-nebius_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/nebius` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (no secrets, the `NEBIUS_PROFILE`
+variable, and the Nebius hosts the CLI calls for it) and asks before
+installing.
+
+## Set up the nebius CLI
+
+Install the [Nebius AI Cloud CLI](https://docs.nebius.com/cli/install) and
+create a profile with `nebius profile create`. The plugin finds `nebius` on
+your `PATH`, or in `~/.nebius/bin` where its installer puts it. The profile
+holds your user or service account credentials, so tug stores no secret for
+Nebius: listing and kubectl both use the profile's identity.
+
+## Import
+
+```console
+$ tug import nebius --account ml
+✓ nebius/ml: 2 clusters, 2 new, 2 credentials moved to keychain
+```
+
+The plugin uses `NEBIUS_PROFILE` or the CLI's active profile, and lists the
+clusters in the profile's `parent-id` project. To choose others:
+
+```bash
+tug import nebius --account ml-eu --set profile=eu --set project=<project ID>
+```
+
+## Credentials
+
+When kubectl needs a token, tug runs `nebius mk8s v1 cluster get-token`, as
+the kubeconfig from `nebius mk8s cluster get-credentials` does, with your
+`profile` if you set one. That command is the "credential" import counts; it
+holds no secret. If the profile must sign in again, the CLI can do it then,
+in your terminal. Listing never opens a browser, so `tug sync` fails with a
+hint instead. Clusters still being created are skipped until they have an
+API endpoint.
+
+## Labels
+
+| Label | When |
+| --- | --- |
+| `gpu` | `true` when a node group runs on a GPU platform |
+| your Nebius labels | the cluster's labels, as set |
+
+Give a cluster the label `env=prod` and tug opens it
+[read-only](/docs/concepts/read-only). Without one, tug guesses `env` from the
+cluster's name.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `profile` | The nebius CLI profile. Defaults to `NEBIUS_PROFILE`, or the active profile. |
+| `project` | The ID of the project to list clusters in. Defaults to the profile's `parent-id`. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `install the Nebius AI Cloud CLI` | tug can't find `nebius` on your `PATH` or in `~/.nebius/bin`. |
+| `nebius iam whoami` | The profile needs to sign in. Run the command in the hint, then `tug sync`. |
+| `the CLI profile needs a parent-id` | Import with `--set project=<project ID>`, or run `nebius profile update --parent-id <project ID>`. |
+| `nebius profile list` | Check the profile, or create one with `nebius profile create`. |
+| `check the project setting` | The project wasn't found. The [web console](https://console.nebius.com) shows project IDs. |
+| `can view Managed Kubernetes clusters` | The profile's account needs a role in the project, such as `viewer`. |
+| `nebius update` | The CLI printed something the plugin couldn't read. Update it. |

@@ -2,7 +2,7 @@ PLUGIN  := [[.Name]]
 BIN     := tug-provider-$(PLUGIN)
 HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
 EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
-TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64
+TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64 windows_arm64
 
 .PHONY: build build-all wasm test link conformance package clean
 

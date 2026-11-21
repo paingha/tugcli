@@ -1,0 +1,64 @@
+---
+title: Rotating a credential
+description: Replace a cluster's credential with a new one and revoke the old, in one command.
+icon: RefreshCw
+---
+
+If a token may have leaked, or your security policy says it's time, ask the
+cluster's provider for a new credential. tug stores the new one and the
+provider revokes the old.
+
+```console
+$ tug auth rotate lke-prod
+Rotate the credential for lke-prod? Anything still using the old one loses access. [y/N] y
+Rotating the credential for lke-prod through akamai...
+Sessions that go through tugd switch to it within a minute. Other machines keep the old credential until they ask again: tug auth token --cluster lke-prod --refresh
+Rotated the credential for lke-prod
+```
+
+Without a cluster name, tug rotates this terminal's cluster.
+
+## Which clusters can be rotated
+
+Only providers with the **rotate** capability can do this. Today that's the
+[Akamai LKE](/docs/providers/akamai) plugin. `tug plugin ls` shows each
+provider's capabilities:
+
+```console
+$ tug plugin ls
+NAME             VERSION   KIND       CAPABILITIES                               LOCATION
+akamai           0.1.0     plugin     list,credential,rotate,checkAccess,serve   …
+```
+
+For other clusters, tug says the provider can't rotate credentials.
+
+## Asking first
+
+Rotating cuts off anything still using the old credential: CI jobs, a teammate's
+copy of the kubeconfig, other machines. So tug asks first.
+
+| Situation | What happens |
+| --- | --- |
+| In a terminal | tug asks; answer `y` to go ahead. |
+| In a script | Add `--yes`. Without it, tug refuses. |
+| A [read-only](/docs/concepts/read-only) cluster (`env=prod`) | tug always asks in a terminal, even with `--yes`, and refuses in a script. The exception: this terminal is connected to it and [unlocked](/docs/concepts/read-only#unlocking-for-a-while). |
+
+```bash
+tug auth rotate staging-lke --yes      # in a script
+```
+
+## After rotating
+
+- **This machine** uses the new credential straight away.
+- **Proxied sessions** (connected with [`--proxy`](/docs/guides/proxy)) switch
+  within a minute.
+- **Other machines** that imported the same cluster keep their cached
+  credential, which no longer works, until they fetch a new one:
+
+  ```bash
+  tug auth token --cluster lke-prod --refresh
+  ```
+
+If rotating fails part-way, tug drops its cached credential anyway, because the
+old one may already be revoked. The next request asks the provider for a fresh
+credential.

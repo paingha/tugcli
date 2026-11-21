@@ -1,0 +1,107 @@
+---
+title: ClusterProfile inventory
+description: List the clusters in a SIG Multicluster ClusterProfile inventory, signing in with exec plugins you choose in a local file.
+icon: IdCard
+---
+
+The `clusterprofile` provider reads a SIG Multicluster cluster inventory: the
+`ClusterProfile` objects (`multicluster.x-k8s.io`) on a hub cluster. Each
+profile says where its cluster is and which **access providers** can sign you
+in. A file on your machine says which command each access provider runs, so
+the hub never chooses a command for you.
+
+<Callout type="info" title="An alpha API">
+  The ClusterProfile API and its plugin protocol are alpha. tug reads
+  `v1alpha2`, or `v1alpha1` where that's all the hub serves.
+</Callout>
+
+## Write a providers file
+
+The providers file maps access provider names to exec plugins, in order of
+preference. It's the same JSON that tools built on the cluster-inventory-api
+library read through `--clusterprofile-provider-file`:
+
+```json title="/Users/sam/fleet/providers.json"
+{
+  "providers": [
+    {
+      "name": "example-plugin",
+      "execConfig": {
+        "apiVersion": "client.authentication.k8s.io/v1",
+        "command": "/usr/local/bin/example-plugin",
+        "args": ["token"],
+        "interactiveMode": "Never"
+      },
+      "profileSourcedCLIArgsPolicy": "Append"
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `name` | An access provider your ClusterProfiles offer in `status.accessProviders`. |
+| `execConfig` | A kubeconfig `exec` section: `command` (required), `args`, `env` (a list of `name` and `value`), `apiVersion`, `interactiveMode` and `installHint`. |
+| `profileSourcedCLIArgsPolicy` | Whether a profile may add arguments: `Ignore` (the default) or `Append`. |
+| `profileSourcedEnvVarsPolicy` | Whether a profile may add environment variables: `Ignore` (the default), `AppendIfNotExists` (only ones the file doesn't set) or `Replace`. |
+
+A profile adds arguments (a list) and variables (a map) through the
+`clusterprofiles.multicluster.x-k8s.io/exec/additional-args` and
+`…/exec/additional-envs` extensions on its access provider. For each profile,
+tug uses the first entry in the file that the profile offers.
+
+## Import the hub
+
+The hub must already be in your catalog. Name it with `cluster`, and give the
+providers file's full path, since tug reads it wherever kubectl runs:
+
+```bash
+tug ls                                       # find the hub's name
+tug import clusterprofile --account fleet \
+  --set cluster=hub \
+  --set providerFile=/Users/sam/fleet/providers.json
+```
+
+Add `--set namespace=<namespace>` to read one ClusterSet's namespace only.
+Without `--account`, the account is called `default`. Importing an account
+again replaces its settings, so pass them all each time.
+
+tug reads the hub with your credential for it, and only reads. Profiles that
+offer none of the file's access providers, or have no status yet, are left
+out. If that leaves none at all, the import fails and lists the names the
+hub's profiles offer.
+
+## Credentials
+
+When kubectl needs a credential, `tug auth token` runs the plugin from your
+file. If the plugin says when its credential expires, tug keeps it in your
+keychain until then. tug notes each cluster's plugin when it imports, so run
+`tug sync` after you edit the providers file.
+
+## Labels
+
+Each cluster gets every label on its `ClusterProfile`, and its version from
+`status.version.kubernetes`. Label a profile `env=prod` and tug opens it
+[read-only](/docs/concepts/read-only). Without that label, tug guesses `env`
+from the profile's name, so `member-prod` opens read-only too.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `cluster` | The hub's name or ID in the catalog. Required. |
+| `providerFile` | The providers file's absolute path. Required. |
+| `namespace` | Read ClusterProfiles in this namespace only. Defaults to every namespace. |
+
+## Troubleshooting
+
+| Message | What to do |
+| --- | --- |
+| `has no providerFile setting` | Add `--set providerFile=/absolute/path/providers.json`. |
+| `is not an absolute path` | Give the file's full path. |
+| `none of the … ClusterProfiles on hub offers an access provider that … configures; they offer …` | Add an entry for one of the names listed to the providers file. |
+| `has no execConfig.command` | Every entry in the providers file needs a command. |
+| `sets provideClusterInfo` | tug can't pass cluster information to exec plugins. Set it to `false` if the plugin works without it, or pass what it needs through `additional-args`. |
+| `does not serve the multicluster.x-k8s.io API` | The `cluster` setting names a cluster that isn't a hub. |
+| `is not in the catalog` | Import the hub first, for example with `tug import kubeconfig <file>`. |
+| `Unauthenticated` … check it with `tug doctor hub` | Your credential for the hub was refused. `tug doctor` shows why. |

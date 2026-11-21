@@ -1,0 +1,31 @@
+---
+title: Safety commands
+description: unlock and lock.
+---
+
+See [Read-only sessions](/docs/concepts/read-only) for how these fit together.
+
+## tug unlock
+
+Allow writes on a read-only session for a while. Only this terminal is
+affected. On a read-write session, tug says so and does nothing.
+
+```bash
+tug unlock [duration]
+```
+
+The duration defaults to `15m`. Use any Go duration such as `90s`, `30m` or
+`1h`.
+
+```console
+$ tug unlock 30m
+Unlocked: writes allowed on prod-eu until 4:15PM
+```
+
+## tug lock
+
+Make a read-only session read-only again now, ending an unlock early.
+
+```bash
+tug lock
+```

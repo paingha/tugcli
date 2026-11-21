@@ -1,0 +1,77 @@
+---
+title: Amazon EKS
+description: List EKS clusters for each AWS profile and region, with short-lived tokens and no AWS CLI.
+icon: Cloud
+---
+
+The `aws` provider lists Amazon EKS clusters using your AWS profiles. It mints
+EKS tokens itself, so the AWS CLI and `aws-iam-authenticator` aren't needed.
+
+## Accounts are AWS profiles
+
+Every profile in `~/.aws/config` and `~/.aws/credentials` is an account:
+
+```bash
+tug import aws                     # pick from your profiles
+tug import aws --account work      # the "work" profile
+```
+
+tug signs in the same way the AWS SDKs do, so SSO profiles, assumed roles,
+`credential_process` and environment credentials all work.
+
+## Regions
+
+By default tug looks in the profile's configured `region`. To look in several
+regions, or if the profile has none, set `regions`:
+
+```bash
+tug import aws --account work --set regions=eu-west-1,us-east-1,ap-southeast-2
+```
+
+## Credentials
+
+When kubectl needs a credential, tug signs a short request with your AWS
+identity and hands it to EKS as a token. Tokens last 15 minutes; tug makes a
+new one a minute before the old one runs out. You never see or store a
+long-lived secret.
+
+Your access inside the cluster depends on how its owner mapped your IAM
+identity (EKS access entries or the `aws-auth` ConfigMap).
+
+## Labels
+
+| Label | From |
+| --- | --- |
+| `aws-account-id` | the cluster's ARN |
+| `region` | the cluster's region |
+| every cluster tag | keys in lower case; a tag called `Environment` becomes `env` |
+
+Tag a cluster `Environment=production` in AWS and tug opens it read-only.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `profile` | The AWS profile. Defaults to the account name. |
+| `regions` | Comma-separated regions to list. Defaults to the profile's region. |
+
+## Private clusters
+
+If a cluster's API server is only reachable inside its VPC, give it an AWS
+Systems Manager [tunnel](/docs/guides/tunnels) through an instance there. It
+needs only your AWS credentials:
+
+```bash
+tug tunnel set eks-private 'ssm://i-0123456789abcdef0?region=eu-west-1&profile=work'
+```
+
+## Troubleshooting
+
+| Message | What to do |
+| --- | --- |
+| `Unauthenticated` … sign in with `aws sso login --profile work` | Your SSO session or keys expired. Sign in, then `tug sync`. |
+| `no region for AWS account "work"` | Add `--set regions=…` when importing. |
+| `NotFound` … check the profile name | The profile isn't in `~/.aws/config`. |
+
+Clusters that are still being created (with no API endpoint yet) are skipped
+until the next `tug sync`.

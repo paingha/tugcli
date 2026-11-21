@@ -1,0 +1,71 @@
+---
+title: Reaching private clusters
+description: Give a cluster a tunnel through an SSH jump host, a proxy, AWS Systems Manager or Google Cloud IAP.
+icon: Cable
+---
+
+Many production clusters keep their API server off the public internet. You
+reach them through something in between: a bastion host, a corporate proxy, an
+AWS instance in the right VPC, or Google Cloud's Identity-Aware Proxy.
+
+Tell tug once how to get there, and it remembers. The tunnel is stored with the
+cluster in the [catalog](/docs/concepts/catalog) and survives `tug sync`.
+
+```console
+$ tug tunnel set eks-private 'ssm://i-0123456789abcdef0?region=eu-west-1'
+eks-private goes through ssm://i-0123456789abcdef0?region=eu-west-1
+$ tug tunnel test eks-private
+Opening ssm://i-0123456789abcdef0?region=eu-west-1...
+Reached 10.0.1.24:443 through ssm://i-0123456789abcdef0?region=eu-west-1 in 1.84s
+```
+
+From then on, tug's own commands go through the tunnel, and
+`tug connect eks-private` routes kubectl, helm and k9s through
+[tugd](/docs/guides/proxy), which keeps the tunnel open for them.
+
+## Kinds of tunnel
+
+| Tunnel | Use it when | What tug needs |
+| --- | --- | --- |
+| `ssh://[user@]host[:port]` | You have a jump host (bastion) that can reach the cluster. | Your SSH key from ssh-agent or `~/.ssh`, or `?identity=<full path to a key file>`. The host key must already be in `~/.ssh/known_hosts`. |
+| `socks5://host:port`, `http://host:port`, `https://…` | Your network has a proxy that needs no password. | Nothing else. tug keeps no secrets in its catalog, so proxies with passwords aren't supported. |
+| `ssm://<instance id>[?region=&profile=]` | A managed EC2 instance in the cluster's VPC can reach the private endpoint. | AWS credentials only. tug speaks Session Manager itself, so you don't need the `session-manager-plugin`. |
+| `iap://<instance>?project=&zone=` | A Google Cloud VM can reach the cluster, and IAP TCP forwarding is allowed to it. | Google credentials only (Application Default Credentials), not gcloud. |
+| `iap://?project=&region=&network=&group=` | You reach a host through an IAP destination group, such as a private GKE endpoint. | Google credentials only. |
+
+Some examples:
+
+```bash
+tug tunnel set lab ssh://admin@bastion.example.com
+tug tunnel set lab "ssh://admin@bastion.example.com:2222?identity=$HOME/.ssh/lab_ed25519"
+tug tunnel set corp-staging socks5://127.0.0.1:1080
+tug tunnel set eks-private 'ssm://i-0123456789abcdef0?region=eu-west-1&profile=work'
+tug tunnel set gke-private 'iap://?project=acme&region=europe-west1&network=default&group=k8s'
+```
+
+<Callout type="info" title="Quote addresses with ? and &">
+  Your shell treats `?` and `&` specially. Put the tunnel address in quotes when
+  it has a query string, as in these examples. Use double quotes when it holds
+  `$HOME`: tug doesn't expand `~` in an `identity` path, so give the full path.
+</Callout>
+
+## Managing tunnels
+
+| Command | What it does |
+| --- | --- |
+| `tug tunnel set <cluster> <tunnel>` | Reach the cluster through this tunnel from now on. |
+| `tug tunnel test [cluster]` | Open the tunnel and a connection to the API server through it, and say how long it took. Without a cluster, tests this terminal's. |
+| `tug tunnel ls` | List clusters reached through tunnels. `-o json`, `yaml` or `name` for scripts. |
+| `tug tunnel rm <cluster>` | Reach the cluster directly again. |
+
+[`tug doctor`](/docs/guides/doctor) checks a tunnelled cluster through its
+tunnel, so a failing check tells you whether the problem is the tunnel or the
+cluster.
+
+## How it works
+
+Kubernetes clients can use a proxy for exec, attach and port-forward, but they
+can't use a custom connection method. So tug serves SSH, SSM and IAP tunnels as
+a SOCKS5 proxy on a loopback port, protected by a random username and password
+that only tug knows, and points the session's kubeconfig at it. You don't need
+to set anything up for this.

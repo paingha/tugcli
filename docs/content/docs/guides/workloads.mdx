@@ -1,0 +1,210 @@
+---
+title: Working with workloads
+description: Logs, shells, port-forwards, restarts and more, by typing a few letters of a name.
+icon: Boxes
+---
+
+These commands act on a **workload** (a deployment, statefulset or daemonset)
+or a single pod, in your session's namespace. Every one takes a
+[fuzzy name](/docs/concepts/targets), so `api` finds `deploy/api-server`, and
+every one accepts `-n <namespace>` to look somewhere else.
+
+## Logs
+
+```bash
+tug logs api                 # last 10 lines from each pod of deploy/api-server
+tug logs api -f              # keep following, including pods that start later
+tug logs api -f --since 10m  # only the last ten minutes, then follow
+tug logs sts/db -c postgres  # one container
+tug logs api --json          # pretty-print lines that are JSON objects
+```
+
+For a workload, tug reads **every pod** at once and puts a coloured
+`pod/container` prefix in front of each line, so you can tell them apart:
+
+```text
+api-server-7d9c-xk2p/api GET /healthz 200 1ms
+api-server-7d9c-m4qz/api POST /v1/orders 201 42ms
+```
+
+With `-f`, pods that start later (during a rollout, say) join the stream
+automatically. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop.
+
+| Flag | What it does |
+| --- | --- |
+| `-f`, `--follow` | Keep streaming, including new pods. |
+| `-c`, `--container` | Only this container. |
+| `--tail <n>` | Lines from the end of each log. Default: all for a pod, 10 for a workload. |
+| `--since <duration>` | Only lines newer than this, such as `10m` or `2h`. |
+| `-p`, `--previous` | The previous container's logs, after a crash or restart. |
+| `--timestamps` | Add timestamps. |
+| `--json` | Pretty-print lines that are JSON objects. |
+
+## A shell in a pod
+
+```bash
+tug sh api                   # bash if the image has it, otherwise sh
+tug sh api -c sidecar        # a particular container
+tug sh api -- env            # run one command instead of a shell
+tug sh pod/debug -- cat /etc/resolv.conf
+```
+
+For a workload, tug picks one of its running, ready pods and tells you which:
+
+```text
+pod/api-server-7d9c-xk2p, container api; exit to leave
+root@api-server-7d9c-xk2p:/app#
+```
+
+The exit code of a command you run is passed back, so `tug sh api -- test -f /ready`
+works in scripts.
+
+<Callout type="info">
+  Opening a shell can change things inside the pod, so on a
+  [read-only session](/docs/concepts/read-only) tug asks before it opens one.
+</Callout>
+
+### Images without a shell
+
+Distroless and scratch images have no shell at all. For those, `tug sh` offers
+to add an **ephemeral debug container** to the pod: a small container that
+shares the app container's processes, so you can look around while it runs.
+The app's own files are under `/proc/1/root`.
+
+```bash
+tug sh pod/scratch                          # offers a debug container
+tug sh pod/scratch --image nicolaka/netshoot # bring your own tools (default: busybox:1.36)
+```
+
+A debug container stays in the pod until the pod is replaced, and adding one is
+a change to the cluster, so tug asks first and a read-only session asks again.
+
+## Port-forwarding
+
+```bash
+tug pf api 8080              # localhost:8080 → container port 8080
+tug pf api 9000:8080         # localhost:9000 → container port 8080
+tug pf api 9000:http         # localhost:9000 → the port named "http"
+tug pf db                    # every port the pod declares, on the same local port
+tug pf api 8080 --address 0.0.0.0   # listen on all interfaces, not just localhost
+```
+
+```text
+deploy/api-server via pod/api-server-7d9c-xk2p; Ctrl-C to stop
+```
+
+Port-forwarding only reads, so it works on read-only sessions without asking.
+
+### Keep a forward running in the background
+
+A normal forward ends when you press <kbd>Ctrl</kbd>+<kbd>C</kbd>, or when its
+pod goes away. Give it a name and [tugd](/docs/guides/proxy) runs it for you
+instead: it keeps the same local port and reconnects to a new pod whenever the
+old one is replaced.
+
+```console
+$ tug pf db 5432 --name db
+Forwarding localhost:5432 -> 5432 to sts/db (pod/db-0) as db
+$ tug pf ls
+NAME   CLUSTER      NAMESPACE   TARGET   PORTS       STATE        RESTARTS   SINCE
+db     staging-us   data        sts/db   5432:5432   forwarding   0          2m
+$ tug pf stop db
+Stopped db
+```
+
+While a pod is being replaced, the state reads `reconnecting`. `tug pf stop
+--all` ends every named forward, and tugd keeps running while any is open.
+
+## Why isn't it working?
+
+`tug why` reads everything Kubernetes knows about a workload and tells you, in
+plain words, what's wrong and what to try next: crashing containers (with the
+last exit code), images that won't pull, containers running out of memory,
+missing ConfigMaps or Secrets, failing probes, pods no node can take, volume
+claims stuck in Pending, and recent warning events.
+
+```console
+$ tug why billing
+deploy/billing in shop is not ready: 0/1 ready
+
+POD                  STATUS             READY   RESTARTS   NODE     AGE
+billing-5d4f-x2x4z   CrashLoopBackOff   0/1     7          node-1   3h
+
+error    pod/billing-5d4f-x2x4z, container main: CrashLoopBackOff
+         keeps crashing and waits to restart; last exit code 1 (Error)
+         next: read the crashed container's logs:
+               tug logs pod/billing-5d4f-x2x4z --previous -n shop
+
+Recent warning events:
+LAST SEEN   OBJECT                   REASON    MESSAGE
+2m (x31)    pod/billing-5d4f-x2x4z   BackOff   Back-off restarting failed container main in pod billing-5d4f-x2x4z
+```
+
+The command to try next gets a line of its own, so you can copy it straight
+into your shell.
+
+It works for deployments, statefulsets, daemonsets, jobs and pods
+(`tug why job/migrate`), and only ever reads. A healthy workload gets
+"Nothing wrong found." Use `-o json` or `-o yaml` to feed the findings to
+another tool.
+
+## What is it made of?
+
+`tug tree` shows a workload and everything around it, with the health of each
+part: its ReplicaSets (or revisions), pods and containers, the Services that
+send traffic to it, and the ConfigMaps, Secrets and volume claims its pods use.
+
+```console
+$ tug tree checkout
+deploy/checkout                  ✓ 2/2 ready
+├── svc/checkout                 ✓ ClusterIP 80/TCP,9090/TCP, 2/2 pods ready
+└── rs/checkout-6b8c             ✓ 2/2 ready, revision 2
+    ├── pod/checkout-6b8c-aaaaa  ✓ Running
+    │   ├── container main       ✓ running
+    │   ├── cm/checkout-config   ✓ 2 keys
+    │   └── secret/checkout-tls  ✓ kubernetes.io/tls, 2 keys
+    └── pod/checkout-6b8c-bbbbb  ✓ Running
+        ├── container main       ✓ running
+        ├── cm/checkout-config   ✓ 2 keys
+        └── secret/checkout-tls  ✓ kubernetes.io/tls, 2 keys
+```
+
+`✓` is ready, `✗` is not, and `?` means tug can't tell. Secrets show only their
+key names, never their values.
+
+## Restart, scale and roll back
+
+```bash
+tug restart api              # rolling restart (deployments, statefulsets, daemonsets)
+tug scale api 3              # set replicas (deployments, statefulsets)
+tug scale worker 0           # scale to zero
+tug rollback api             # back to the previous revision (deployments)
+tug rollback api --to-revision 3
+```
+
+```text
+Restarted deploy/api-server
+Scaled deploy/api-server to 3
+Rolled deploy/api-server back to revision 7
+```
+
+All three change the cluster, so on a read-only session tug asks first, or
+refuses in a script.
+
+## CPU and memory
+
+```bash
+tug top api                  # every pod of deploy/api-server
+tug top                      # every pod in the namespace
+```
+
+`tug top` uses `kubectl top`, so it needs kubectl and the cluster's
+[metrics-server](https://github.com/kubernetes-sigs/metrics-server).
+
+## Open k9s
+
+```bash
+tug ui
+```
+
+Opens [k9s](https://k9scli.io) on this terminal's cluster and namespace.

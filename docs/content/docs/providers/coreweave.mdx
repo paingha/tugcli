@@ -1,0 +1,97 @@
+---
+title: CoreWeave CKS
+description: List CoreWeave Kubernetes Service clusters with an API token, using managed auth or your own OIDC.
+icon: Cpu
+---
+
+The `coreweave` plugin lists clusters on CoreWeave Kubernetes Service (CKS).
+It's a first-party [plugin](/docs/plugins), so you add it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-coreweave_<version>.tar.gz`, with a build for every platform,
+and lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/):
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-coreweave_*' --pattern checksums.txt
+    tug plugin install tug-provider-coreweave_*.tar.gz \
+      --sha256 "$(grep tug-provider-coreweave_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`:
+    `tug plugin install <archive URL> --sha256 <sha256>`.
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                     # builds the plugins for this machine
+    tug plugin package plugins/coreweave -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-coreweave_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone.
+  </Tab>
+</Tabs>
+
+## Create a token
+
+Create an **API access token** in the CoreWeave Cloud Console. CoreWeave shows
+a token only once, when you create it, so copy it straight away.
+
+## Import
+
+```console
+$ tug import coreweave --account acme
+CoreWeave API access token (coreweave/acme): ••••••••
+✓ coreweave/acme: 2 clusters, 2 new
+```
+
+The token goes into your keychain. The plugin only ever talks to
+`api.coreweave.com`.
+
+## Choosing how you sign in
+
+| `auth` setting | How kubectl signs in |
+| --- | --- |
+| `managed` (default) | With your API token. This is CKS's managed authentication. |
+| `oidc` | With an ID token from the cluster's own OpenID Connect issuer, for organisations that use their own identity provider. |
+
+```bash
+tug import coreweave --account acme-sso --set auth=oidc
+tug auth login cks-train          # sign in once, in your browser
+```
+
+With `auth=oidc`, tug signs you in to the issuer the first time kubectl needs a
+token, or ahead of time with `tug auth login`. It then keeps the token fresh.
+See [Signing in with OpenID Connect](/docs/guides/sign-in).
+
+## Only one zone
+
+To list clusters in a single availability zone:
+
+```bash
+tug import coreweave --account acme-east --set zone=US-EAST-04A
+```
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `auth` | `managed` (default) or `oidc`. |
+| `zone` | Only list clusters in this availability zone. |
+| `apiURL` | Another API endpoint (https). You won't normally need it. |
+
+## Troubleshooting
+
+If the API token is invalid, revoked, or has no access to CKS, tug reports
+`Unauthenticated` with a hint to create a new one in the Cloud Console. Import
+again with the new token after `tug forget coreweave/<account>`.

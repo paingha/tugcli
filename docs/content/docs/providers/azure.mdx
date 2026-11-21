@@ -1,0 +1,93 @@
+---
+title: Azure AKS
+description: List Azure Kubernetes Service clusters in every subscription your Azure sign-in can see, with short-lived Entra ID tokens.
+icon: Cloudy
+---
+
+The `azure` provider lists Azure Kubernetes Service (AKS) clusters through
+Azure Resource Manager, in Azure's public cloud. For clusters that use
+Microsoft Entra ID, tug gets Entra tokens itself, so kubelogin isn't needed.
+
+## Accounts are subscriptions
+
+Every subscription your sign-in can see in its default tenant is an account,
+apart from disabled and deleted ones. The picker shows each subscription's ID
+and display name:
+
+```bash
+tug import azure                                  # pick from your subscriptions
+tug import azure --account <subscription-id>      # one subscription
+tug import azure --account prod --set subscription=<subscription-id>   # with a shorter name
+```
+
+tug doesn't find subscriptions in other tenants on its own. Name one, with its
+tenant:
+
+```bash
+tug import azure --account <subscription-id> --set tenant=<tenant-id>
+```
+
+## Signing in
+
+tug signs in the way the Azure SDKs do (`DefaultAzureCredential`), so any of
+these work: the Azure CLI after `az login`, a service principal or workload
+identity through `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and related variables,
+or a managed identity.
+
+When tug finds neither an Azure CLI profile (in `~/.azure`, or
+`$AZURE_CONFIG_DIR`) nor any of those variables, it lists no Azure accounts
+and says nothing, so `tug import` doesn't wait for a sign-in that isn't there.
+On a machine that signs in only with a managed identity, name the subscription
+with `--account`.
+
+## Credentials
+
+| Cluster | What kubectl gets |
+| --- | --- |
+| With AKS-managed Microsoft Entra integration | A short-lived Entra token for AKS, from the cluster's tenant. tug gets a new one shortly before it runs out. |
+| With local accounts | The user credential AKS issues for the cluster, fetched again at least every hour. |
+
+What you may do inside a cluster depends on the access its owner gave your
+identity there.
+
+tug reads each cluster's CA certificate from its user credential, so your
+identity must be allowed to fetch it (`listClusterUserCredential`). tug leaves
+out clusters it may not fetch it for, clusters still being created, and
+clusters with local accounts disabled and no Entra integration, which nobody
+can sign in to. `tug sync` picks them up once that changes.
+
+**Private clusters** get their private address, which the cluster's private
+DNS zone resolves. Connect from a network that can reach it, or give the
+cluster a [tunnel](/docs/guides/tunnels).
+
+## Labels
+
+| Label | From |
+| --- | --- |
+| `azure-subscription` | the subscription ID |
+| `azure-resource-group` | the cluster's resource group |
+| `region` | the cluster's location, such as `westeurope` |
+| every cluster tag | keys in lower case; a tag called `Environment` becomes `env` |
+
+Tag a cluster `Environment=production` in Azure and tug opens it
+[read-only](/docs/concepts/read-only). Without that tag, tug guesses `env`
+from the cluster's name, so `payments-prod` opens read-only too.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `subscription` | The subscription ID. Defaults to the account name. |
+| `tenant` | The Microsoft Entra tenant to get Azure Resource Manager tokens from. Defaults to your sign-in's default tenant. |
+
+Both are set for you on subscriptions tug finds.
+
+## Troubleshooting
+
+| Message | What to do |
+| --- | --- |
+| `Unauthenticated` … sign in with `az login` | Sign in, with `--tenant` if the hint names one, or set the `AZURE_…` variables. Then `tug sync`. |
+| `Azure account "prod" names no subscription ID` | Use the subscription ID as `--account`, or add `--set subscription=<subscription-id>`. |
+| `SubscriptionNotFound` … `az account list` shows the subscriptions you can use | The ID is wrong, or your identity can't see that subscription. |
+| `uses legacy Azure AD integration, which tug does not support` | Migrate the cluster to AKS-managed Microsoft Entra integration. The hint has the `az aks update` command. |
+| `has local accounts disabled and no Microsoft Entra integration` | The cluster changed after you imported it. Turn on one of the two; the hint has the commands. |

@@ -1,0 +1,273 @@
+---
+title: Writing a plugin
+description: From an empty folder to a tested, packaged provider plugin, in Go or Python.
+icon: Hammer
+---
+
+This guide builds a plugin for an imaginary cloud called **Acme**. By the
+end, `tug import acme` will list Acme's clusters and kubectl will be able to
+log in to them.
+
+<Steps>
+<Step>
+
+### Scaffold the project
+
+<Tabs items={['Go', 'Python']}>
+  <Tab value="Go">
+    ```bash
+    tug plugin new acme --module github.com/acme/tug-provider-acme
+    ```
+
+    <Files>
+      <Folder name="tug-provider-acme" defaultOpen>
+        <File name="main.go" />
+        <File name="main_test.go" />
+        <File name="plugin.yaml" />
+        <File name="Makefile" />
+        <File name="go.mod" />
+        <File name="README.md" />
+        <File name=".gitignore" />
+        <Folder name=".github/workflows">
+          <File name="release.yml" />
+        </Folder>
+      </Folder>
+    </Files>
+  </Tab>
+  <Tab value="Python">
+    ```bash
+    tug plugin new acme --lang python
+    ```
+
+    <Files>
+      <Folder name="tug-provider-acme" defaultOpen>
+        <File name="tug-provider-acme" />
+        <File name="test_plugin.py" />
+        <File name="plugin.yaml" />
+        <File name="README.md" />
+      </Folder>
+    </Files>
+
+    The script uses only Python's standard library, so there's nothing to install.
+
+    For a bigger plugin, use the **Python SDK**, the `tug_provider` package. It
+    mirrors the Go SDK (subclass `Provider`, implement `info`, `list` and
+    `credential`, call `main`), handles serve mode, and still needs nothing
+    outside the standard library. Install it from a tugcli checkout with
+    `python3 -m pip install ./sdk/python`, and read its
+    [README](https://github.com/paingha/tugcli/tree/main/sdk/python) for the
+    details.
+  </Tab>
+</Tabs>
+
+The generated plugin **already works**: it lists clusters from an account
+setting and accepts any token starting with `demo_`, so it passes tug's
+conformance tests before you change a line. Use `--dir` to choose the folder.
+
+<Callout type="info" title="Trying unreleased SDK changes?">
+  A Go plugin fetches the SDK, `github.com/paingha/tugcli/pkg/provider`, like
+  any other module. To build against changes that aren't on `main` yet,
+  scaffold against a local checkout of tugcli instead:
+  `tug plugin new acme --sdk-replace ~/src/tugcli`.
+</Callout>
+
+</Step>
+<Step>
+
+### Try it straight away
+
+<Tabs items={['Go', 'Python']}>
+  <Tab value="Go">
+    ```bash
+    cd tug-provider-acme
+    go mod tidy && make test && make conformance
+    ```
+  </Tab>
+  <Tab value="Python">
+    ```bash
+    cd tug-provider-acme
+    python3 -m unittest
+    tug plugin link .
+    TUG_SECRET_API_TOKEN=demo_test tug plugin test acme --set clusters=dev=https://127.0.0.1:6443
+    ```
+  </Tab>
+</Tabs>
+
+</Step>
+<Step>
+
+### List your clusters
+
+Besides `Info` (name, version and secrets, already in the template), a Go
+plugin needs two methods. `List` returns the clusters in one account:
+
+```go title="main.go"
+func (acme) List(ctx context.Context, req provider.ListRequest) ([]provider.Cluster, error) {
+	resp, err := api(ctx, req.Secrets["api_token"]).ListClusters(ctx)
+	if err != nil {
+		return nil, err // see "Errors people can act on" below
+	}
+	var out []provider.Cluster
+	for _, c := range resp.Clusters {
+		out = append(out, provider.Cluster{
+			ID:        c.ID,   // must never change for this cluster
+			Name:      c.Name, // what people type
+			Region:    c.Region,
+			Version:   c.KubernetesVersion,
+			Endpoints: provider.Endpoints{Public: c.APIServerURL},
+			CAData:    c.CACertPEM,
+			Labels:    map[string]string{"env": c.Environment},
+		})
+	}
+	return out, nil
+}
+```
+
+Good labels make tug nicer to use. In particular, set `env` (`prod`,
+`staging`, `dev` or `test`) so production clusters open read-only.
+
+</Step>
+<Step>
+
+### Hand out credentials
+
+`Credential` returns what kubectl should log in with, for one cluster:
+
+```go title="main.go"
+func (acme) Credential(ctx context.Context, req provider.CredentialRequest) (provider.Credential, error) {
+	tok, err := api(ctx, req.Secrets["api_token"]).ClusterToken(ctx, req.ClusterID)
+	if err != nil {
+		return provider.Credential{}, err
+	}
+	return provider.Token(tok.Value, tok.ExpiresAt), nil
+}
+
+func main() { os.Exit(provider.Main(acme{})) }
+```
+
+Return whichever shape your clusters accept:
+
+| Helper | Use it for |
+| --- | --- |
+| `provider.Token(token, expiresAt)` | Bearer tokens. Pass `provider.NoExpiry` for long-lived ones. |
+| `provider.ClientCert(certPEM, keyPEM, expiresAt)` | Client certificates. |
+| `provider.OIDC(issuer, clientID, scopes...)` | Clusters that trust an OIDC issuer; tug runs the login. |
+| `provider.Delegate(command, args...)` | Running your vendor's own kubectl exec plugin unchanged. |
+
+tug caches credentials until a minute before they expire, so set an expiry
+whenever there is one.
+
+If your API already returns credentials when listing (as LKE's kubeconfigs do),
+set `Credential` on each `provider.Cluster`. tug moves it straight into the
+keychain and won't need to call `credential` until it expires.
+
+</Step>
+<Step>
+
+### Declare secrets and settings
+
+Secrets and settings are declared in `plugin.yaml`:
+
+```yaml title="plugin.yaml"
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: acme
+  version: 0.1.0
+  publisher: Acme Platform Team
+  homepage: https://github.com/acme/tug-provider-acme
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-acme}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-acme}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-acme.exe}
+  secrets:
+  - {name: api_token, prompt: "Acme API token"}
+  env: []
+  network: [api.acme.example]
+  accountConfig:
+    type: object
+    properties:
+      region: {type: string, description: "only list clusters in this region"}
+```
+
+- **secrets**: tug asks for each one once per account (or reads
+  `TUG_SECRET_API_TOKEN` in scripts), keeps it in the keychain, and sends it
+  in every request's `secrets`.
+- **env**: host environment variables your plugin needs, such as `AWS_PROFILE`.
+  Everything else is scrubbed.
+- **network**: the hosts you talk to. tug shows them before install.
+- **accountConfig**: a JSON Schema for settings people pass with
+  `--set key=value`. Read them with `req.Account.ConfigString("region")`.
+
+The full field list is in the [protocol reference](/docs/plugins/protocol#the-manifest).
+
+</Step>
+<Step>
+
+### Write errors people can act on
+
+Return a `*provider.Error` with a code, and a hint when there's an obvious fix.
+tug prints the hint on its own line.
+
+```go
+if resp.StatusCode == http.StatusUnauthorized {
+	return nil, provider.Errorf(provider.Unauthenticated, "the API token was rejected").
+		WithHint("create a new token at https://console.acme.example/tokens")
+}
+```
+
+```text
+✗ acme/work: Unauthenticated: the API token was rejected
+  hint: create a new token at https://console.acme.example/tokens
+```
+
+Use `Unauthenticated` for missing or bad secrets (tug's tests check this),
+`PermissionDenied`, `NotFound`, `RateLimited`, `Unavailable` or `InvalidConfig`
+as they fit. [All codes](/docs/plugins/protocol#errors).
+
+</Step>
+<Step>
+
+### Add optional operations (if you need them)
+
+Each optional operation is an interface in the Go SDK. Implement it **and**
+list it under `capabilities` in `plugin.yaml`: tug never calls an operation
+the manifest doesn't declare.
+
+| Operation | Interface | What tug does with it |
+| --- | --- | --- |
+| `accounts` | `provider.AccountLister` | `tug import` offers the accounts it finds on this machine, such as profiles in your vendor's CLI config. |
+| `rotate` | `provider.Rotator` | [`tug auth rotate`](/docs/guides/rotating) asks for a new credential and revokes the old one. Stay well inside 60 seconds. |
+| `checkAccess` | `provider.AccessChecker` | [`tug doctor`](/docs/guides/doctor) explains an access list that blocks the user's IP. |
+| `serve` | none: the SDK does it | tug runs one long-lived process instead of one per request. See [Serve mode](/docs/plugins/protocol#serve-mode). The template declares it already. |
+
+A plugin without `accounts` gets an account called `default` when someone runs
+`tug import <name>` without `--account`. With `serve`, state you keep in
+package variables lives across requests that run at the same time, so guard it.
+
+</Step>
+<Step>
+
+### Package it
+
+```bash
+make build                      # or build each platform's binary yourself
+tug plugin package . -o dist
+```
+
+```text
+dist/tug-provider-acme_0.1.0.tar.gz
+  platforms: darwin/arm64, linux/amd64, windows/amd64
+  sha256:    9f2c4e…
+```
+
+`package` records each binary's SHA-256 in the archive's manifest and leaves
+out platforms you haven't built. Share the archive and its SHA-256; people
+install it with `tug plugin install`. The Go template includes a GitHub
+Actions workflow that builds and publishes archives when you push a tag.
+
+</Step>
+</Steps>

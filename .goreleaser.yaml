@@ -6,6 +6,9 @@ project_name: tug
 before:
   hooks:
     - go mod tidy
+    # The first-party plugins: one archive each, holding every platform's
+    # binary with its sha256 in the manifest, ready for `tug plugin install`.
+    - make plugins-dist PLUGINS_OUT=build/plugins
 
 builds:
   - id: tug
@@ -31,6 +34,14 @@ archives:
 
 checksum:
   name_template: checksums.txt
+  # The plugin archives are listed too, so the signed checksums.txt covers
+  # them and gives users the --sha256 for `tug plugin install`.
+  extra_files:
+    - glob: ./build/plugins/*.tar.gz
+
+release:
+  extra_files:
+    - glob: ./build/plugins/*.tar.gz
 
 # Keyless signing with Sigstore; the release workflow grants id-token: write.
 signs:

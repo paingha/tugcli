@@ -1,0 +1,56 @@
+---
+title: Local clusters
+description: kind, k3d, minikube, Docker Desktop, OrbStack and Rancher Desktop, found automatically.
+icon: Laptop
+---
+
+The `local` provider finds Kubernetes clusters running on your own machine.
+Each tool is its own account, so a problem with one (Docker stopped, say)
+doesn't affect the others.
+
+| Account | Found through | Notes |
+| --- | --- | --- |
+| `kind` | the `kind` command | Found even if no kubeconfig mentions the cluster. |
+| `k3d` | the `k3d` command | Same. |
+| `minikube` | its context in your kubeconfig files | |
+| `docker-desktop` | its context | |
+| `orbstack` | its context | |
+| `rancher-desktop` | its context | |
+
+```bash
+tug import local                   # pick from the tools tug found
+tug import local --account kind    # just kind
+```
+
+## Labels
+
+Every local cluster gets:
+
+| Label | Value |
+| --- | --- |
+| `local` | `true` |
+| `distro` | the tool, such as `kind` |
+| `env` | `dev` |
+
+So local clusters never open read-only, and you can find them all with
+`tug ls -l local=true`.
+
+## Recreated clusters just work
+
+kind and k3d clusters get new certificates every time you recreate them. tug
+asks the tool for the current ones whenever it needs them, so there's nothing
+to re-import after `kind delete cluster && kind create cluster`. Run
+`tug sync` to pick up clusters you've added or removed.
+
+## When something's wrong
+
+```text
+✗ local/kind: Unavailable: listing kind clusters: …
+  hint: kind needs Docker (or Podman) running; start it, then run `tug sync`
+```
+
+kind and k3d need Docker or Podman running to list clusters. The clusters you
+already imported stay in the catalog until the tool is back.
+
+For minikube, Docker Desktop, OrbStack and Rancher Desktop, start the cluster
+so the tool writes its context again, then run `tug sync`.

@@ -1,0 +1,142 @@
+---
+title: Installing and managing plugins
+description: Install plugin archives safely, link plugins you're developing, and tidy up.
+icon: PackageOpen
+---
+
+## See what you have
+
+```bash
+tug plugin ls                 # every provider: built in, installed and linked
+tug plugin describe akamai    # run the plugin's describe and show its manifest
+```
+
+`tug plugin ls` shows each provider's version, kind (`built-in`, `plugin` or
+`dev plugin`), what it can do, and where it lives. Plugins that failed to load
+are listed on stderr as `skipped`, with the reason.
+
+## Install by name from an index
+
+A **plugin index** is a signed list of reviewed plugins, with the address and
+SHA-256 of each archive. Once you've [added an index](/docs/plugins/indexes),
+search it and install by name:
+
+```bash
+tug plugin search gpu            # what the indexes offer
+tug plugin install digitalocean  # the newest version
+tug plugin install acme@0.1.0    # a particular version
+```
+
+tug checks the index's signature, the archive's SHA-256 and every binary's
+SHA-256 before installing.
+
+<Callout type="info" title="No index is set up by default">
+  tug doesn't come with an index until one is published. Until then, install
+  the first-party plugins from tug's releases, as each
+  [provider's page](/docs/providers) shows.
+</Callout>
+
+## Install an archive
+
+Plugins are also shared as `.tar.gz` or `.zip` archives, usually made with
+[`tug plugin package`](/docs/plugins/writing#package-it). tug's own releases
+include every first-party plugin this way, such as
+[Akamai](/docs/providers/akamai) and [DigitalOcean](/docs/providers/digitalocean).
+
+```bash
+tug plugin install ./tug-provider-acme_0.1.0.tar.gz
+```
+
+Before installing, tug shows what the plugin will be able to do and asks:
+
+```text
+acme 0.1.0
+  publisher:     Acme Platform Team
+  homepage:      https://github.com/acme/tug-provider-acme
+  capabilities:  list,credential
+  secrets:       api_token
+  environment:   -
+  network hosts: api.acme.example
+  platforms:     darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64
+  settings:      region: only list clusters in this region
+Install acme 0.1.0? [y/N] y
+Installed acme 0.1.0 in /Users/sam/.local/share/tug/plugins/acme/0.1.0
+Next: tug import acme --account <id>
+```
+
+### From a URL
+
+To install straight from a URL, you must also give the archive's SHA-256, so a
+changed file can't slip through:
+
+```bash
+tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz \
+  --sha256 9f2c4e…
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--sha256 <hash>` | The archive's expected SHA-256. Required for URLs. |
+| `-y`, `--yes` | Install without asking. Required without a terminal. |
+| `--force` | Replace the same version if it's already installed. |
+
+### What install checks
+
+1. A URL must use HTTPS (plain HTTP only from your own machine, for testing),
+   and the archive must match `--sha256`.
+2. The archive may not contain links, special files or paths outside the
+   plugin's folder, and is limited to 512 MiB, 1,000 entries and 256 MiB per
+   file.
+3. It must include a build for your OS and processor, and that binary must
+   match the SHA-256 in the archived manifest.
+4. Its `minTugVersion` must not be newer than your tug.
+5. Fields in `plugin.yaml` that tug doesn't know are ignored, with a warning,
+   so a typo such as `platfroms` doesn't go unnoticed.
+
+Plugins are installed into `plugins/<name>/<version>/` in tug's
+[data folder](/docs/reference/files). tug checks the checksum again every time
+it loads a plugin, so a binary changed after installation is skipped, and
+`tug plugin ls` says why.
+
+## Link a plugin you're developing
+
+While you work on a plugin, link its folder instead of installing it. tug uses
+it directly, without checksums, and marks it `dev plugin`:
+
+```console
+$ tug plugin link ./tug-provider-acme
+Linked acme 0.1.0 from /Users/sam/src/tug-provider-acme (dev: not checksummed)
+$ tug plugin unlink acme
+```
+
+You can also list development folders in `TUG_PLUGIN_PATH`, separated like
+`PATH`. Each entry can be a plugin's folder or a folder of plugins. They're
+searched first:
+
+```bash
+export TUG_PLUGIN_PATH=~/src/tug-provider-acme:~/src/tug-provider-beta
+```
+
+## Which copy wins
+
+If the same plugin name is found in several places, tug uses the first of:
+
+1. folders in `TUG_PLUGIN_PATH`
+2. linked plugins
+3. installed plugins (the highest installed version)
+
+Built-in providers always win over a plugin with the same name, unless you
+list that name in [`plugins.allowOverride`](/docs/reference/configuration).
+
+## Remove a plugin
+
+```bash
+tug plugin remove acme       # also: tug plugin rm, tug plugin uninstall
+```
+
+```text
+Removed acme 0.1.0, 0.2.0
+```
+
+This removes every installed version. Sources you imported with the plugin
+stay in the catalog until you `tug forget` them.

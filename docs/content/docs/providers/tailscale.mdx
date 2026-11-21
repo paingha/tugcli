@@ -1,0 +1,106 @@
+---
+title: Tailscale
+description: Find the Kubernetes clusters on your tailnet behind the Tailscale operator's API server proxy, and reach them with your tailnet identity.
+icon: Network
+---
+
+The `tailscale` plugin finds Kubernetes clusters on your tailnet that the
+Tailscale Kubernetes operator exposes through its API server proxy. It
+connects the same way `tailscale configure kubeconfig` does. It's a
+first-party [plugin](/docs/plugins), so you add it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-tailscale_<version>.tar.gz`, with a build for every platform,
+and lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-tailscale_*' --pattern checksums.txt
+    tug plugin install tug-provider-tailscale_*.tar.gz \
+      --sha256 "$(grep tug-provider-tailscale_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`: `tug plugin install <archive URL> --sha256 <sha256>`.
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                     # builds the plugins for this machine
+    tug plugin package plugins/tailscale -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-tailscale_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/tailscale` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (no secrets and no network hosts:
+it only runs the `tailscale` command on your machine) and asks before
+installing.
+
+## Connect to your tailnet
+
+Install [Tailscale](https://tailscale.com/download), make sure the `tailscale`
+command is on your `PATH`, and connect with `tailscale up`. Each cluster needs
+the Tailscale operator's API server proxy, in its default auth mode, on a
+device tagged `tag:k8s-operator`.
+
+## Import
+
+```console
+$ tug import tailscale --account work
+✓ tailscale/work: 2 clusters, 2 new, 2 credentials moved to keychain
+```
+
+tug runs `tailscale status --json` and lists one cluster for each device with
+the operator's tag. There's no secret to give. Without `--account`, the account
+is called `default`. For proxies with another tag, add `--set tag=<tag>`.
+
+## Credentials
+
+tug connects over https to the proxy device's MagicDNS name, and the proxy
+knows who you are from your tailnet identity. The "credential" import counts
+is a placeholder token, the same one `tailscale configure kubeconfig` writes,
+which the proxy ignores. The proxy's certificate comes from Let's Encrypt, so
+there's no CA to keep either. The clusters are only reachable on your tailnet,
+so Tailscale must be connected when you use them.
+
+## Names and labels
+
+Each cluster is named after its device: the first part of the MagicDNS name,
+so `prod-operator.tail1234.ts.net` becomes `prod-operator`. The plugin adds no
+labels, so tug guesses `env` from that name, and `prod-operator` opens
+[read-only](/docs/concepts/read-only). To set `env` yourself, use
+[`tug label`](/docs/guides/labels).
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `tag` | The tag that marks the API server proxies. Defaults to `tag:k8s-operator`. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `install Tailscale from https://tailscale.com/download` | The `tailscale` command isn't on your `PATH`. |
+| `tailscale login` | This device isn't signed in to Tailscale. |
+| `ask an admin to approve the device` | An admin must approve this device on the Machines page of the admin console. |
+| `tailscale up` | Tailscale is stopped or not connected. |
+| `start Tailscale, then run tailscale up` | `tailscale status` couldn't reach Tailscale on this machine. |
+
+No clusters at all? Check the tag. Tagged devices without a MagicDNS name are
+skipped; `tug sync --debug` shows them.

@@ -6,13 +6,8 @@ take well under an hour. It is written for developers outside the tug team;
 everything here matches the code in this repository, which remains the source
 of truth.
 
-> **The repository is private for now.** `github.com/paingha/tugcli` is not
-> public yet, so `go get github.com/paingha/tugcli/pkg/provider` does not work
-> for most people, and neither does `go install .../cmd/tug@latest`. Until it
-> is public, you need a checkout of tugcli (ask the tug team for access or a
-> source archive). You build tug from it, and point your plugin's Go module at
-> it with `tug plugin new --sdk-replace <path to the checkout>`, as the quick
-> start shows. There is no public module URL yet; do not guess one.
+The user guide at [paingha.github.io/tugcli](https://paingha.github.io/tugcli/docs/plugins)
+covers installing and using plugins; this guide is for writing them.
 
 Contents:
 
@@ -89,15 +84,15 @@ You need:
 - Go 1.26 or later (the scaffold's `go.mod` says `go 1.26.0`).
 - `make` and a Unix shell, for the scaffold's Makefile. The commands below
   are for macOS and Linux; on Windows, use WSL or Git Bash.
-- A checkout of tugcli, for example in `~/src/tugcli`, and tug built from it
-  and on your `PATH`. The scaffold's Makefile runs `tug`.
+- tug on your `PATH`. The scaffold's Makefile runs `tug`.
 
 ```bash
-cd ~/src/tugcli
-make build                       # or: go build -o bin/tug ./cmd/tug
-export PATH="$PWD/bin:$PATH"
+go install github.com/paingha/tugcli/cmd/tug@latest
 tug version
 ```
+
+To work against tug changes that aren't on `main` yet, build tug from a
+checkout instead (`make build`, then put its `bin` on your `PATH`).
 
 While you experiment, keep tug away from your real catalog and keychain. These
 variables give it a throwaway home and an encrypted file instead of the OS
@@ -115,19 +110,19 @@ Unset them (or open a new terminal) when you want to use your plugin for real.
 
 ### Generate a project
 
-Run this where you keep your code, not inside the tugcli checkout:
+Run this where you keep your code:
 
 ```bash
-tug plugin new acme --sdk-replace ~/src/tugcli
+tug plugin new acme
 cd tug-provider-acme
-go mod tidy
+go mod tidy                      # fetches the SDK, github.com/paingha/tugcli
 ```
 
-`--sdk-replace` is a hidden flag: it adds a `require` and a `replace` directive
-to `go.mod` so the SDK comes from your checkout. Without it, `go mod tidy`
-tries to download `github.com/paingha/tugcli`, which fails while the
-repository is private. If you forgot the flag, add the two lines to `go.mod`
-yourself, with the absolute path to your checkout:
+To build against SDK changes that aren't on `main` yet, use a tugcli checkout
+instead: `tug plugin new acme --sdk-replace ~/src/tugcli`. `--sdk-replace` is
+a hidden flag: it adds a `require` and a `replace` directive to `go.mod` so the
+SDK comes from your checkout. To switch an existing project over, add the two
+lines to `go.mod` yourself, with the absolute path to your checkout:
 
 ```text
 require github.com/paingha/tugcli v0.0.0
@@ -280,7 +275,7 @@ make package       # builds every platform, then: tug plugin package . -o dist
 
 ```text
 dist/tug-provider-acme_0.1.0.tar.gz
-  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, wasip1/wasm
+  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, windows/arm64, wasip1/wasm
   sha256:    98b07c5943ae2674b04199c8f1f33cd24fb7ed56b8c03d6f0f9951dcc99b2ee9
 ```
 
@@ -1154,7 +1149,7 @@ prints the archive's path, its platforms and the archive's own sha256:
 
 ```text
 dist/tug-provider-acme_0.1.0.tar.gz
-  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, wasip1/wasm
+  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, windows/arm64, wasip1/wasm
   sha256:    98b07c5943ae2674b04199c8f1f33cd24fb7ed56b8c03d6f0f9951dcc99b2ee9
 ```
 
@@ -1178,12 +1173,10 @@ signature in the Rekor transparency log and writes all of it to
 workflow needs only `permissions: id-token: write`. It then checks the bundle
 with `cosign verify-blob` against the identity it prints, and the run's
 summary shows the `tug plugin index add` command for the release (see
-[Publish to an index](#publish-to-an-index)). While
-tugcli is private, the runner needs a repository secret `TUGCLI_TOKEN` with
-read access to `paingha/tugcli`, and `go.mod` must require the SDK by version.
-It cannot follow a `replace` directive to a checkout on your machine, which is
-what `--sdk-replace` writes. Without a token, or with a `replace`, release by
-hand:
+[Publish to an index](#publish-to-an-index)).
+`go.mod` must require the SDK by version: the runner cannot follow a
+`replace` directive to a checkout on your machine, which is what
+`--sdk-replace` writes. With a `replace`, release by hand:
 
 ```bash
 make test package

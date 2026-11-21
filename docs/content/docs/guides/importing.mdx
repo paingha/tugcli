@@ -1,0 +1,136 @@
+---
+title: Importing clusters
+description: Fill the catalog from kubeconfig files, local tools and cloud accounts, and keep it up to date.
+icon: Import
+---
+
+Before you can connect to a cluster, tug needs to know about it. Importing
+adds clusters to tug's [catalog](/docs/concepts/catalog). You do it once per
+account; after that, `tug sync` keeps things fresh.
+
+## Import everything tug can find
+
+```bash
+tug import
+```
+
+tug asks every provider that can look around your machine:
+
+- **kubeconfig**: `~/.kube/config`, files listed in `$KUBECONFIG`, and other
+  `*.yaml`, `*.yml` and `*.kubeconfig` files directly in `~/.kube`
+- **local**: kind and k3d (if installed), minikube, Docker Desktop, OrbStack
+  and Rancher Desktop
+- **aws**: each profile in `~/.aws/config` and `~/.aws/credentials`
+- **google**: each project named in your gcloud configurations
+- **azure**: each subscription your Azure sign-in sees (`az login`, environment
+  variables, or a workload or managed identity)
+
+It lists new accounts and asks which to import:
+
+```text
+Found these accounts:
+   1) kubeconfig/default  /Users/sam/.kube/config
+   2) kubeconfig/lke-prod  /Users/sam/.kube/lke-prod.yaml
+   3) local/kind
+   4) aws/work
+   5) google/acme-ml
+Import which? [all, or numbers like 1,3; none to cancel]: 1,3,4
+```
+
+Accounts you've already imported aren't offered again. To import everything
+without being asked (say, in a script), add `--yes`.
+
+## Import one provider or account
+
+Name a provider to look only there:
+
+```bash
+tug import aws                     # pick from your AWS profiles
+tug import local                   # pick from local tools
+```
+
+Name an account to skip the question:
+
+```bash
+tug import aws --account work --set regions=eu-west-1,us-east-1
+tug import local --account kind
+tug import google --account acme-ml
+```
+
+`--set key=value` passes provider settings, and you can repeat it. Each
+[provider's page](/docs/providers) lists its settings. If a plugin doesn't
+describe a setting you pass (usually a typo), tug warns you and lists the
+settings it knows:
+
+```text
+warning: coreweave does not describe the setting org; it knows apiURL, auth, zone
+```
+
+## Import a kubeconfig file you downloaded
+
+Cloud consoles often hand you a kubeconfig to download. Import it directly:
+
+```bash
+tug import kubeconfig ~/Downloads/lke-prod.yaml
+```
+
+```text
+✓ kubeconfig/lke-prod: 1 clusters, 1 new, 1 credentials moved to keychain
+```
+
+The token inside moves into your keychain. tug remembers where the file is,
+so `tug sync` re-reads it, but you can now delete it if you like: the
+credential lives on in the keychain.
+
+The account is named after the file (`lke-prod.yaml` becomes `lke-prod`). Choose
+your own name with `--account`, which works when importing one file at a time.
+
+## Providers that need a token
+
+Some providers, such as the [Akamai](/docs/providers/akamai) and
+[CoreWeave](/docs/providers/coreweave) plugins, need an API token. tug asks
+for it the first time, without showing what you type, and keeps it in your
+keychain:
+
+```console
+$ tug import akamai --account work
+Akamai Cloud personal access token (Kubernetes read/write) (akamai/work): ••••••••
+✓ akamai/work: 2 clusters, 2 new, 2 credentials moved to keychain
+```
+
+In scripts and CI, set `TUG_SECRET_<NAME>` instead, where `<NAME>` is the
+secret's name in capitals:
+
+```bash
+TUG_SECRET_API_TOKEN="$LINODE_TOKEN" tug import akamai --account ci
+```
+
+## Keep the catalog up to date
+
+```bash
+tug sync
+```
+
+`sync` asks every imported source again. New clusters are added; clusters a
+provider no longer lists are marked **stale** (not deleted, in case the
+provider was only briefly unavailable). Your labels are kept.
+
+```text
+✓ kubeconfig/default: 3 clusters
+✓ local/kind: 2 clusters, 1 new
+✗ aws/work: Unauthenticated: the SSO session has expired
+  hint: sign in with `aws sso login --profile work` or refresh the profile's credentials
+tug: 1 of 3 sources failed
+```
+
+A failed source leaves its clusters as they were, and tug says what to do
+next when it can.
+
+## Remove an account
+
+```bash
+tug forget aws/work
+```
+
+This removes the source, its clusters, and the credentials tug stored for
+them. Your AWS profile, kubeconfig files and cloud accounts are untouched.

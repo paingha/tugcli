@@ -6,6 +6,7 @@
 /plugins/*/bin/
 *.test
 .DS_Store
+/build/
 __pycache__/
 /sdk/python/build/
 /sdk/python/dist/

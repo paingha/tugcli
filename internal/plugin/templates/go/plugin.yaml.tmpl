@@ -15,6 +15,7 @@ spec:
   - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-[[.Name]]}
   - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-[[.Name]]}
   - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-[[.Name]].exe}
+  - {os: windows, arch: arm64, bin: bin/windows_arm64/tug-provider-[[.Name]].exe}
   # `make wasm`: one build for every other platform, which tug runs in its
   # sandbox. Remove it if the plugin needs files or programs on the machine.
   - {os: wasip1, arch: wasm, bin: bin/wasm/plugin.wasm}

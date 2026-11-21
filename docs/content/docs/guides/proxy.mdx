@@ -1,0 +1,103 @@
+---
+title: Guard every tool with tugd
+description: Route kubectl, helm and k9s through a small local proxy, so read-only sessions protect them too.
+icon: Shield
+---
+
+On a normal session, the [read-only guard](/docs/concepts/read-only) covers
+tug's own commands, and kubectl commands you run *through* tug. But plain
+`kubectl`, `helm` and `k9s` talk to the cluster directly, so the guard can't
+see them.
+
+**tugd** closes that gap. It's a small background process on your machine
+that sits between your tools and the cluster. Connect with `--proxy`, and
+every request from every tool passes through it.
+
+<Flow caption="With --proxy, the read-only check happens in one place for every client.">
+  <FlowStep title="kubectl, helm, k9s" tone="harbour">
+    Use the session's kubeconfig as usual.
+  </FlowStep>
+  <FlowStep title="tugd" tone="tug">
+    Checks the session: read-only? unlocked? Refuses changes when it should.
+  </FlowStep>
+  <FlowStep title="Cluster" tone="safe">
+    Receives only the requests tugd lets through, with the real credential.
+  </FlowStep>
+</Flow>
+
+## Turn it on
+
+```console
+$ tug connect prod --proxy
+Connected to prod-eu, namespace default, read-only (tug unlock 15m to allow writes)
+Every client goes through tugd at https://127.0.0.1:52817, so the guard applies to kubectl, helm and k9s too
+```
+
+tug starts tugd for you if it isn't running. Now try a change:
+
+```console
+$ kubectl delete pod api-0
+Error from server (Forbidden): tug: refused DELETE pods/api-0: prod-eu is read-only
+```
+
+Reads work exactly as before. When you need to make a change, unlock as usual.
+It takes effect on the next request, for every tool at once:
+
+```bash
+tug unlock 15m
+kubectl delete pod api-0     # allowed now
+tug lock                     # read-only again, for every tool
+```
+
+## What goes through
+
+Everything kubectl can do works through tugd: `exec`, `attach`,
+`port-forward`, `logs -f` and watches all stream through as normal. Only
+requests that would change something on a read-only session are refused.
+
+## How it stays safe
+
+- tugd listens on **your machine only** (a loopback address) and speaks TLS.
+- It holds each cluster's real credential in memory. The session's kubeconfig
+  trusts tugd's certificate and logs in with a **per-session token** that
+  exists only in tugd's memory. kubectl fetches it through
+  `tug auth proxy-token`, so nothing secret is written to disk.
+- tug talks to tugd over a private control socket that only your user can use.
+  tug refuses to use a runtime folder other users could change.
+- Only one tugd runs per user.
+
+## Managing tugd
+
+You rarely need to, but you can:
+
+```console
+$ tug daemon status
+running:   pid 48213, 0.1.0, since 9:12AM
+proxy:     https://127.0.0.1:52817
+sessions:  2
+log:       /var/folders/…/tug-501/tugd.log
+```
+
+| Command | What it does |
+| --- | --- |
+| `tug daemon status` | Is it running, where, and how many sessions use it. `-o json` for scripts. |
+| `tug daemon start` | Start it in the background if it isn't running. |
+| `tug daemon stop` | Stop it. Proxied sessions stop working until you reconnect. |
+
+tugd **stops by itself** after 30 minutes without a live session or a
+[named port-forward](/docs/guides/workloads#keep-a-forward-running-in-the-background),
+so it doesn't linger once you're done.
+
+tugd also carries [tunnels](/docs/guides/tunnels): connecting to a cluster that
+has one routes your tools through tugd, which keeps the tunnel open.
+
+## When to use it
+
+`--proxy` is worth it whenever you open a production cluster and plan to use
+anything besides tug's own commands. There's no downside to using it all the
+time, except a tiny extra hop on each request.
+
+<Callout type="info" title="New terminals keep the proxy">
+  A terminal started from a proxied session (a tmux split, say) is proxied too,
+  with its own session token. Unlocking one terminal doesn't unlock the other.
+</Callout>

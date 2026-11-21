@@ -1,0 +1,113 @@
+---
+title: Crusoe Managed Kubernetes
+description: List Crusoe Managed Kubernetes clusters with a Crusoe Cloud API key, and sign in through each cluster's OIDC issuer or with its admin certificate.
+icon: Zap
+---
+
+The `crusoe` plugin lists clusters on Crusoe Managed Kubernetes (CMK). It's a
+first-party [plugin](/docs/plugins), so you add it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-crusoe_<version>.tar.gz`, with a build for every platform, and
+lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-crusoe_*' --pattern checksums.txt
+    tug plugin install tug-provider-crusoe_*.tar.gz \
+      --sha256 "$(grep tug-provider-crusoe_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`: `tug plugin install <archive URL> --sha256 <sha256>`.
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                  # builds the plugins for this machine
+    tug plugin package plugins/crusoe -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-crusoe_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/crusoe` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (its two secrets, and that it only
+talks to `api.cloud.crusoe.ai`) and asks before installing.
+
+## Create an API key
+
+In the Crusoe Cloud console, open **Admin > Security >
+[Cloud API keys](https://console.crusoecloud.com/security/cloud-api-keys)** and
+create a key. It has two halves, an **access key ID** and a **secret key**. The
+console shows the secret key only once, so copy it straight away.
+
+## Import
+
+```console
+$ tug import crusoe --account acme
+Crusoe Cloud API access key ID (crusoe/acme): ••••••••
+Crusoe Cloud API secret key (crusoe/acme): ••••••••
+✓ crusoe/acme: 3 clusters, 3 new, 3 credentials moved to keychain
+```
+
+tug asks for both halves once and keeps them in your keychain. If the key sees
+more than one project, pick one with `--set project=<ID or name>`.
+
+## Credentials
+
+| `auth` setting | What kubectl uses |
+| --- | --- |
+| `auto` (default) | The cluster's OpenID Connect issuer when it's set up for one, else its admin certificate. |
+| `oidc` | OIDC only. Clusters without it are left out. For users who may not fetch admin certificates. |
+| `admin_cert` | The admin client certificate, for every cluster. |
+
+For an OIDC cluster, tug signs you in to its issuer when kubectl first needs a
+token, or ahead of time with `tug auth login <cluster>`; see
+[Signing in with OpenID Connect](/docs/guides/sign-in). It checks the issuer's
+certificate against your system's trusted roots, not the cluster's `ca_cert`.
+
+The admin certificate comes from the cluster's kubeconfig and needs the
+**admin** role in your Crusoe organisation. tug fetches a new one shortly
+before it expires. Clusters that are provisioning, deleting or failed are skipped.
+
+## Labels
+
+| Label | When |
+| --- | --- |
+| `region` | the cluster's location |
+| `gpu` | `true` when a node pool uses a GPU VM type |
+
+The plugin reads no tags, so tug guesses `env` from the name: a cluster called
+`prod-train` opens [read-only](/docs/concepts/read-only).
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `project` | The project to list clusters in, by ID or name. Defaults to the only one the key can see. |
+| `auth` | `auto` (default), `oidc` or `admin_cert`. |
+| `apiURL` | Another API endpoint (https). You won't normally need it. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `create a Cloud API key in the Crusoe Cloud console` | The key is wrong, expired or deleted. Create one, `tug forget crusoe/<account>`, then import again. |
+| `set project to one of …` | The key sees several projects. Import again with `--set project=…`. |
+| `set project to the project's ID` | Your user can't list projects, so name the project by ID. |
+| `needs the admin role in the Crusoe organisation` | Ask an admin for the role, or set up OIDC on the cluster and import with `--set auth=oidc`. |
+| `wait a minute, then run tug sync` | The API is limiting how fast you call it. |

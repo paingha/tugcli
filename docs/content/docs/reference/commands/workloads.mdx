@@ -1,0 +1,156 @@
+---
+title: Workload commands
+description: logs, sh, pf, restart, scale, rollback and top.
+---
+
+Every command here takes a [target](/docs/concepts/targets): a fuzzy name such
+as `api`, or a kind and name such as `sts/db` or `pod/debug`. All accept
+`-n`, `--namespace` to look outside the session's namespace. Commands that
+change the cluster ask first on a [read-only session](/docs/concepts/read-only).
+
+## tug logs
+
+Tail logs from every pod of a workload, with coloured `pod/container` prefixes.
+
+```bash
+tug logs <target> [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-f`, `--follow` | Keep streaming, including pods that start later. |
+| `-c`, `--container <name>` | Only this container. |
+| `--tail <n>` | Lines from the end of each log. Default: all for a pod, 10 for a workload. |
+| `--since <duration>` | Only lines newer than this, such as `10m`. |
+| `-p`, `--previous` | Logs of the previous container instance. |
+| `--timestamps` | Include timestamps. |
+| `--json` | Pretty-print lines that are JSON objects. |
+
+```bash
+tug logs api -f
+tug logs sts/db -c postgres --since 10m
+tug logs api --json
+```
+
+## tug sh
+
+Open a shell (bash, else sh) in a pod, or run a command. For a workload, tug
+picks a running, ready pod. The command's exit code is passed back.
+
+When the container has no shell, as in distroless images, tug offers to add an
+ephemeral debug container that shares its processes; the container's files are
+under `/proc/1/root`. Adding one is a write, and it stays until the pod is
+replaced.
+
+```bash
+tug sh <target> [-- command...] [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-c`, `--container <name>` | Container. Default: the pod's default container. |
+| `--image <image>` | Image of the debug container offered when the container has no shell. Default: `busybox:1.36`. |
+
+```bash
+tug sh api
+tug sh api -c sidecar
+tug sh api -- env
+```
+
+## tug pf
+
+Port-forward to a workload by short name. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop.
+
+```bash
+tug pf <target> [[local:]port...] [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--address <addr>` | Addresses to listen on. Default: `localhost`. Repeat or comma-separate for several. |
+| `--name <name>` | Run in the background through tugd under this name, reconnecting when the pod goes away. |
+
+```bash
+tug pf api 8080          # localhost:8080 → container port 8080
+tug pf api 9000:http     # localhost:9000 → the port named http
+tug pf db                # every declared port to the same local port
+tug pf db 5432 --name db # in the background, through tugd
+```
+
+| Subcommand | Meaning |
+| --- | --- |
+| `tug pf ls [-o table\|json\|yaml\|name]` | List the named forwards tugd keeps open. Alias: `list`. |
+| `tug pf stop <name>... \| --all` | End named forwards. |
+
+A workload called `ls` or `stop` is `deploy/ls` or `deploy/stop`.
+
+## tug restart
+
+Rolling-restart a deployment, statefulset or daemonset.
+
+```bash
+tug restart <target>
+```
+
+## tug scale
+
+Set the replicas of a deployment or statefulset.
+
+```bash
+tug scale <target> <replicas>
+```
+
+```bash
+tug scale api 3
+tug scale worker 0
+```
+
+## tug rollback
+
+Roll a deployment back to its previous revision, or a chosen one.
+
+```bash
+tug rollback <target> [--to-revision <n>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--to-revision <n>` | Revision to return to. Default: the previous one. |
+
+## tug top
+
+Show CPU and memory of a workload's pods, or every pod in the namespace. Uses
+`kubectl top`, so the cluster needs metrics-server.
+
+```bash
+tug top [target]
+```
+
+## tug why
+
+Explain why a deployment, statefulset, daemonset, job or pod isn't ready, and
+what to do next: crashes (with the last exit code), image pulls, out-of-memory
+kills, missing ConfigMaps or Secrets, failing probes, scheduling, volume claims
+and recent warning events. It only reads. See
+[Why isn't it working?](/docs/guides/workloads#why-isnt-it-working).
+
+```bash
+tug why <target> [-o table|json|yaml]
+```
+
+```bash
+tug why api
+tug why sts/db -n data
+tug why job/migrate -o json
+```
+
+## tug tree
+
+Show a workload's ownership tree with the health of each part: ReplicaSets or
+revisions, pods and containers, the Services that select the pods, and the
+ConfigMaps, Secrets and volume claims they use. It only reads, and shows only
+the key names of Secrets.
+
+```bash
+tug tree <target> [-o table|json|yaml]
+```

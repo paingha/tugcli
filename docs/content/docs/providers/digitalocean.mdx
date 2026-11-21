@@ -1,0 +1,103 @@
+---
+title: DigitalOcean Kubernetes
+description: List DigitalOcean Kubernetes (DOKS) clusters with a personal access token, and connect with short-lived cluster tokens.
+icon: Droplet
+---
+
+The `digitalocean` plugin lists clusters on DigitalOcean Kubernetes (DOKS).
+It's a first-party [plugin](/docs/plugins), so you add it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-digitalocean_<version>.tar.gz`, with a build for every platform,
+and lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-digitalocean_*' --pattern checksums.txt
+    tug plugin install tug-provider-digitalocean_*.tar.gz \
+      --sha256 "$(grep tug-provider-digitalocean_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`: `tug plugin install <archive URL> --sha256 <sha256>`.
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                        # builds the plugins for this machine
+    tug plugin package plugins/digitalocean -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-digitalocean_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/digitalocean` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (its secret, and that it only talks
+to `api.digitalocean.com`) and asks before installing.
+
+## Create a token
+
+In the DigitalOcean control panel, go to **API > Tokens** and create a
+personal access token with two custom scopes: **kubernetes:read**, to list
+clusters, and **kubernetes:access_cluster**, to fetch their credentials.
+
+## Import
+
+```console
+$ tug import digitalocean --account work
+DigitalOcean personal access token (kubernetes:read and kubernetes:access_cluster) (digitalocean/work): ••••••••
+✓ digitalocean/work: 3 clusters, 3 new, 3 credentials moved to keychain
+```
+
+tug asks for the token once and keeps it in your keychain.
+
+## Credentials
+
+DigitalOcean hands out a cluster's CA only with a credential, so listing
+fetches both. The plugin asks for cluster tokens that last an hour rather than
+DigitalOcean's default of seven days, which limits what a leaked token can do.
+tug keeps the token in your keychain and gets a new one a minute before it runs
+out. Older clusters without token authentication get a client certificate.
+
+A new cluster is skipped until it has an API server endpoint. If it has one but
+no credentials yet, tug lists it and picks up its CA and token at the next
+`tug sync`.
+
+## Labels
+
+| Label | When |
+| --- | --- |
+| `region` | the cluster's region |
+| `ha` | `true` for clusters with a high-availability control plane |
+| `gpu` | `true` when a node pool uses a GPU size |
+| your tags | tags written `key:value` become labels; DigitalOcean's own `k8s` tags are left out |
+
+Tag a cluster `env:prod` and tug opens it [read-only](/docs/concepts/read-only).
+Without an `env` tag, tug guesses one from the cluster's name.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `apiURL` | Another API endpoint (https). You won't normally need it. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `the token is invalid, expired or revoked` | Create a new token, `tug forget digitalocean/<account>`, then import again. |
+| `the token needs the kubernetes:read scope …` | The token is missing a scope. Create one with both, forget the account and import again. |
+| `the DigitalOcean API allows 250 requests a minute` | You've hit the rate limit. Wait a minute and try again. |
