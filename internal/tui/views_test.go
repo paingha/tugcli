@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -302,6 +303,16 @@ func TestNamespacePickerTrustsATypedName(t *testing.T) {
 	h.typeText("payments")
 	h.press("enter")
 	h.waitFor("the namespace", func(m *model) bool { return m.state.Namespace == "payments" })
+}
+
+func TestClustersShowWhyTheCatalogCannotLoad(t *testing.T) {
+	b := newFakeBackend()
+	b.catalogErr = errors.New("reading catalog.yaml: permission denied")
+	h := newHarness(t, b)
+	h.waitFor("the error", func(m *model) bool { return m.clusters.err != nil })
+	if v := h.m.View(); strings.Contains(v, "Loading the catalog") || !strings.Contains(v, "permission denied") {
+		t.Fatalf("the clusters view does not say why the catalog is missing:\n%s", v)
+	}
 }
 
 func TestWorkloadsShowWhyTheyCannotLoad(t *testing.T) {

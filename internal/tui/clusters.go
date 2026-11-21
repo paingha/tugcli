@@ -32,6 +32,7 @@ type connectedMsg struct {
 type clusterList struct {
 	all     []catalog.Cluster
 	loaded  bool
+	err     error  // why the catalog did not load
 	current string // the session's cluster ID
 	// filter is what the user typed: words match names as tug connect
 	// does, or label values, and label=value words select by label.
@@ -55,6 +56,7 @@ func (m *model) loadCatalog() tea.Cmd {
 }
 
 func (l *clusterList) load(msg catalogMsg, current string) {
+	l.err = msg.err
 	if msg.err != nil {
 		return
 	}
@@ -272,6 +274,9 @@ func (m *model) clustersView(height int) string {
 	}
 	b.WriteString(m.st.dim.Render(prompt) + "\n")
 	switch {
+	case l.err != nil:
+		b.WriteString(m.st.red.Render(truncate(errorText(l.err), m.width)))
+		return b.String()
 	case !l.loaded:
 		b.WriteString("Loading the catalog…")
 		return b.String()

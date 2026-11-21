@@ -189,6 +189,7 @@ type fakeBackend struct {
 	namespaces []string
 	nsErr      error
 	kubeErr    error
+	catalogErr error
 
 	connects   []string
 	setNS      []string
@@ -251,6 +252,9 @@ func (b *fakeBackend) connectedTo(name, ns string, readOnly bool) *fakeBackend {
 }
 
 func (b *fakeBackend) Catalog() (*catalog.Catalog, error) {
+	if b.catalogErr != nil {
+		return nil, b.catalogErr
+	}
 	return &catalog.Catalog{APIVersion: catalog.APIVersion, Clusters: b.clusters}, nil
 }
 
