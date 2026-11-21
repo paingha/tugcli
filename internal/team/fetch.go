@@ -162,8 +162,9 @@ func readSmall(r io.Reader, what string) ([]byte, error) {
 	return b, nil
 }
 
-// fetchGit makes a shallow clone of the repository, reads the catalog and
-// its signature, and removes the clone.
+// fetchGit makes a shallow clone of the repository without checking it
+// out, reads the catalog and its signature from the commit, and removes
+// the clone.
 func (f *Fetcher) fetchGit(ctx context.Context, src Source) ([]byte, []byte, error) {
 	g := src.Git
 	work := f.WorkDir
@@ -178,54 +179,76 @@ func (f *Fetcher) fetchGit(ctx context.Context, src Source) ([]byte, []byte, err
 		return nil, nil, err
 	}
 	defer os.RemoveAll(dir)
-	gitCmd := f.Git
-	if gitCmd == "" {
-		gitCmd = "git"
-	}
+	clone := filepath.Join(dir, "repo")
+	// Without a checkout, nothing from the repository is written as files,
+	// and neither core.autocrlf nor the repository's .gitattributes can
+	// change the catalog's bytes: the signature covers them as committed.
 	args := []string{"-c", "protocol.ext.allow=never", "-c", "protocol.fd.allow=never",
-		"clone", "--quiet", "--depth=1", "--no-tags", "--single-branch"}
+		"clone", "--quiet", "--no-checkout", "--depth=1", "--no-tags", "--single-branch"}
 	if g.Ref != "" {
 		args = append(args, "--branch="+g.Ref)
 	}
-	args = append(args, "--", g.Repo, filepath.Join(dir, "repo"))
-	cmd := exec.CommandContext(ctx, gitCmd, args...)
-	// Never stop to ask for a password: a person's git credentials come
-	// from their credential helper or ssh agent, as for any clone.
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
+	args = append(args, "--", g.Repo, clone)
 	var stderr bytes.Buffer
+	cmd := f.command(ctx, args...)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return nil, nil, fmt.Errorf("cloning %s: %s", g.Repo, msg)
-		}
-		return nil, nil, fmt.Errorf("cloning %s: %w", g.Repo, err)
+		return nil, nil, fmt.Errorf("cloning %s: %w", g.Repo, gitError(err, &stderr))
 	}
-	path := filepath.Join(dir, "repo", filepath.FromSlash(g.Path))
-	data, err := readFile(path)
+	path := filepath.ToSlash(g.Path)
+	data, err := f.blob(ctx, clone, path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading %s from %s: %w", g.Path, g.Repo, err)
+		return nil, nil, fmt.Errorf("reading %s from %s: %w", path, g.Repo, err)
 	}
-	sig, err := readFile(path + SignatureSuffix)
+	sig, err := f.blob(ctx, clone, path+SignatureSuffix)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading %s%s from %s: %w", g.Path, SignatureSuffix, g.Repo, err)
+		return nil, nil, fmt.Errorf("reading %s%s from %s: %w", path, SignatureSuffix, g.Repo, err)
 	}
 	return data, sig, nil
 }
 
-// readFile reads a regular file of at most maxCatalogBytes, refusing a
-// link that could point outside the clone.
-func readFile(path string) ([]byte, error) {
-	st, err := os.Lstat(path)
+// command runs git with the user's own configuration and credentials. It
+// never stops to ask for a password: credentials come from the user's
+// credential helper or ssh agent, as for any clone.
+func (f *Fetcher) command(ctx context.Context, args ...string) *exec.Cmd {
+	gitCmd := f.Git
+	if gitCmd == "" {
+		gitCmd = "git"
+	}
+	cmd := exec.CommandContext(ctx, gitCmd, args...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
+	return cmd
+}
+
+// blob returns the file at path in the clone's HEAD commit exactly as it
+// was committed, whatever line endings or filters a checkout would apply,
+// and at most maxCatalogBytes of it.
+func (f *Fetcher) blob(ctx context.Context, clone, path string) ([]byte, error) {
+	var stderr bytes.Buffer
+	cmd := f.command(ctx, "-C", clone, "cat-file", "blob", "HEAD:"+path)
+	cmd.Stderr = &stderr
+	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
-	if !st.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	f, err := os.Open(path)
-	if err != nil {
+	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	return readSmall(f, filepath.Base(path))
+	b, readErr := readSmall(out, path)
+	if readErr != nil {
+		_ = cmd.Process.Kill() // the rest is not wanted
+	}
+	if err := cmd.Wait(); err != nil && readErr == nil {
+		return nil, gitError(err, &stderr)
+	}
+	return b, readErr
+}
+
+// gitError is what git said on stderr when it failed, or err when it said
+// nothing.
+func gitError(err error, stderr *bytes.Buffer) error {
+	if msg := strings.TrimSpace(stderr.String()); msg != "" {
+		return errors.New(msg)
+	}
+	return err
 }

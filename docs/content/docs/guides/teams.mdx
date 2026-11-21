@@ -235,5 +235,11 @@ tug team verify team.yaml --public-key <key>
 Publish `team.yaml` and `team.yaml.sig` side by side, on an https server or in
 a git repository.
 
+From a git repository, tug reads both files as they were committed, not as a
+checkout writes them, so the signature must be over the committed bytes. If
+git changes line endings when you commit, as `core.autocrlf` does on Windows,
+add `team.yaml -text` to `.gitattributes` so that what you signed is what is
+committed.
+
 </Step>
 </Steps>

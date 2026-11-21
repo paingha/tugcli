@@ -235,6 +235,12 @@ func TestFetchFromGit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "catalogs", "platform.yaml.sig"), sign(t, testCatalog, priv), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Git writes these files with CRLF when it checks them out, on every
+	// platform, as it does everywhere on Windows with core.autocrlf. The
+	// signature covers the bytes as committed, so tug must read those.
+	if err := os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("* text eol=crlf\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	git := func(args ...string) {
 		t.Helper()
 		cmd := exec.Command(gitBin, append([]string{"-C", repo}, args...)...)
