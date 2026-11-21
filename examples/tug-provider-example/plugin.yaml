@@ -15,6 +15,9 @@ spec:
   - {os: linux, arch: amd64, bin: bin/tug-provider-example}
   - {os: linux, arch: arm64, bin: bin/tug-provider-example}
   - {os: windows, arch: amd64, bin: bin/tug-provider-example.exe}
+  # One WebAssembly build runs on every platform, in tug's sandbox; tug uses
+  # it where no native build matches. Build it with `make example-plugin-wasm`.
+  - {os: wasip1, arch: wasm, bin: bin/tug-provider-example.wasm}
   secrets:
   - {name: api_token, prompt: "Example API token"}
   env: []

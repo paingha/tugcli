@@ -60,6 +60,10 @@ type Target struct {
 	Env []string
 	// Timeout per call; defaults to 30 seconds.
 	Timeout time.Duration
+	// Module is the path of the plugin's WebAssembly module, when Command
+	// runs one, as `tug provider-exec` does. The suite then also checks that
+	// the module imports only what tug provides.
+	Module string
 }
 
 // Options configure the run.
@@ -86,6 +90,9 @@ func Run(ctx context.Context, t Target, o Options) Report {
 	r := &runner{target: t, opts: o, ctx: ctx}
 	if r.opts.Now == nil {
 		r.opts.Now = time.Now
+	}
+	if t.Module != "" {
+		r.checkModule()
 	}
 	desc := r.checkDescribe()
 	r.checkUnknownOp()

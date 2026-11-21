@@ -24,6 +24,10 @@ build: ## Build bin/tug
 example-plugin: ## Build the example provider plugin
 	go build -o examples/tug-provider-example/bin/tug-provider-example ./examples/tug-provider-example
 
+.PHONY: example-plugin-wasm
+example-plugin-wasm: ## Build the example provider plugin as WebAssembly, for every platform
+	GOOS=wasip1 GOARCH=wasm go build -trimpath -o examples/tug-provider-example/bin/tug-provider-example.wasm ./examples/tug-provider-example
+
 PLUGINS        := akamai coreweave crusoe digitalocean nebius rancher tailscale teleport vultr
 PLUGIN_HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
 PLUGIN_EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)

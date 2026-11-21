@@ -9,6 +9,11 @@
 //	  | ./bin/tug-provider-example list
 //
 // Check it against the protocol with `tug plugin test`.
+//
+// The same code builds as WebAssembly, one module for every platform, which
+// tug runs in its sandbox (`make example-plugin-wasm` from the repository):
+//
+//	GOOS=wasip1 GOARCH=wasm go build -o bin/tug-provider-example.wasm .
 package main
 
 import (
