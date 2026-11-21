@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/client-go/kubernetes"
 
@@ -218,7 +218,7 @@ func (l *workloadList) scroll(rows int) {
 
 // moveKey moves a list's cursor for the movement keys, and reports
 // whether the key was one of them.
-func (m *model) moveKey(msg tea.KeyMsg, move func(int), rows, total int) bool {
+func (m *model) moveKey(msg tea.KeyPressMsg, move func(int), rows, total int) bool {
 	k := m.keys
 	switch {
 	case key.Matches(msg, k.Up):
@@ -240,18 +240,18 @@ func (m *model) moveKey(msg tea.KeyMsg, move func(int), rows, total int) bool {
 }
 
 // workloadsKey handles a key in the workloads view.
-func (m *model) workloadsKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) workloadsKey(msg tea.KeyPressMsg) tea.Cmd {
 	l := &m.workloads
 	if l.filtering {
-		switch msg.Type {
-		case tea.KeyEnter:
+		switch msg.String() {
+		case "enter":
 			l.filtering = false
-		case tea.KeyEsc:
+		case "esc":
 			l.filter, l.filtering = "", false
 			l.apply(l.selectedName())
-		case tea.KeyUp:
+		case "up":
 			l.move(-1)
-		case tea.KeyDown:
+		case "down":
 			l.move(1)
 		default:
 			if edit(&l.filter, msg) {

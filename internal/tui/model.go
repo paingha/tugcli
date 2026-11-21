@@ -1,16 +1,17 @@
 package tui
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/paingha/tugcli/internal/session"
@@ -117,9 +118,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-	case tea.KeyMsg:
+		// A terminal that does not say its size gets the classic one.
+		m.width, m.height = cmp.Or(msg.Width, 80), cmp.Or(msg.Height, 24)
+	case tea.KeyPressMsg:
 		cmd = m.key(msg)
+	case tea.PasteMsg:
+		cmd = m.paste(msg)
 	default:
 		cmd = m.handle(msg)
 	}
@@ -167,7 +171,7 @@ func (m *model) handle(msg tea.Msg) tea.Cmd {
 
 // key handles a key press: the open prompt, picker or help takes it first,
 // then the pane, then the view.
-func (m *model) key(msg tea.KeyMsg) tea.Cmd {
+func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if key.Matches(msg, m.keys.ForceQuit) {
 		return m.quit()
 	}
@@ -216,20 +220,49 @@ func errorText(err error) string {
 	return text
 }
 
-// edit applies a key to a line of typed text: runes add to it and backspace
-// takes the last one away. It reports whether the key was for the line.
-func edit(line *string, msg tea.KeyMsg) bool {
-	switch msg.Type {
-	case tea.KeyRunes, tea.KeySpace:
-		*line += string(msg.Runes)
-	case tea.KeyBackspace:
+// edit applies a key to a line of typed text: printable keys add to it and
+// backspace takes the last character away. It reports whether the key was
+// for the line.
+func edit(line *string, msg tea.KeyPressMsg) bool {
+	switch {
+	case msg.Code == tea.KeyBackspace:
 		if r := []rune(*line); len(r) > 0 {
 			*line = string(r[:len(r)-1])
 		}
+	case msg.Text != "" && !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt):
+		*line += msg.Text
 	default:
 		return false
 	}
 	return true
+}
+
+// paste types pasted text into whatever takes typing: a prompt's field or a
+// filter, as one line. A paste is not a key press, so it never runs an
+// action.
+func (m *model) paste(msg tea.PasteMsg) tea.Cmd {
+	text := strings.Join(strings.Fields(msg.Content), " ")
+	switch {
+	case m.prompt != nil:
+		if len(m.prompt.fields) == 0 {
+			return nil
+		}
+		f := &m.prompt.fields[m.prompt.focus]
+		var cmd tea.Cmd
+		f.input, cmd = f.input.Update(tea.PasteMsg{Content: text})
+		return cmd
+	case m.picker != nil:
+		m.picker.filter += text
+		m.picker.apply()
+	case m.showHelp || m.pane != nil:
+	case m.view == viewClusters:
+		m.clusters.filter += text
+		m.clusters.apply("")
+	case m.workloads.filtering:
+		m.workloads.filter += text
+		m.workloads.apply(m.workloads.selectedName())
+	}
+	return nil
 }
 
 // resize fits what scrolls to the window. The lists have a line of
@@ -261,9 +294,16 @@ func lineCount(s string) int {
 	return strings.Count(s, "\n") + 1
 }
 
-// View draws the screen: a title line, the body, then the prompt or flash
-// message and the status bar.
-func (m *model) View() string {
+// View draws the screen on the terminal's alternate screen.
+func (m *model) View() tea.View {
+	v := tea.NewView(m.screen())
+	v.AltScreen = true
+	return v
+}
+
+// screen draws a title line, the body, then the prompt or flash message
+// and the status bar.
+func (m *model) screen() string {
 	if m.width == 0 || m.height == 0 {
 		return ""
 	}
@@ -316,7 +356,7 @@ func (m *model) titleLine() string {
 		keys = append(k.actions(), k.Namespace, k.Clusters, k.Filter, k.Help, k.Quit)
 	}
 	title = m.st.title.Render(" " + title + " ")
-	m.help.Width = max(m.width-lipgloss.Width(title)-1, 0)
+	m.help.SetWidth(max(m.width-lipgloss.Width(title)-1, 0))
 	short := m.help.ShortHelpView(hints(keys...))
 	gap := max(m.width-lipgloss.Width(title)-lipgloss.Width(short), 1)
 	return title + strings.Repeat(" ", gap) + short

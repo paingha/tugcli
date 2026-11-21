@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -26,7 +27,7 @@ func TestStartsWithClustersWhenNotConnected(t *testing.T) {
 	if h.m.view != viewClusters {
 		t.Fatalf("view = %v, want the clusters view", h.m.view)
 	}
-	v := h.m.View()
+	v := h.screen()
 	for _, want := range []string{"Clusters", "prod-eu", "staging", "gpu-us", "stale", "not connected", "team=payments"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() lacks %q:\n%s", want, v)
@@ -64,8 +65,8 @@ func TestClustersQuitHelpAndSlash(t *testing.T) {
 	h.waitFor("the catalog", func(m *model) bool { return m.clusters.loaded })
 
 	h.press("?")
-	if !h.m.showHelp || !strings.Contains(h.m.View(), "filter: names, label values, label=value") {
-		t.Fatalf("? did not show help:\n%s", h.m.View())
+	if !h.m.showHelp || !strings.Contains(h.screen(), "filter: names, label values, label=value") {
+		t.Fatalf("? did not show help:\n%s", h.screen())
 	}
 	h.press("x") // any key closes help
 	if h.m.showHelp || h.m.clusters.filter != "" {
@@ -98,7 +99,7 @@ func TestConnectFromClusters(t *testing.T) {
 	if connects, _, _ := b.calls(); !slices.Equal(connects, []string{"kubeconfig/work/staging"}) {
 		t.Errorf("Connect calls = %v, want the staging cluster", connects)
 	}
-	v := h.m.View()
+	v := h.screen()
 	for _, want := range []string{"Workloads in shop", "staging", "namespace shop", "read-write", "direct", "Connected to staging, namespace shop, read-write"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() lacks %q:\n%s", want, v)
@@ -113,7 +114,7 @@ func TestConnectToTunnelledStaleCluster(t *testing.T) {
 	h.typeText("gpu")
 	h.press("enter")
 	h.waitFor("the connection", func(m *model) bool { return m.state.Connected() })
-	v := h.m.View()
+	v := h.screen()
 	for _, want := range []string{"tunnel ssh://alice:xxxxx@bastion.example.com via tugd", "not listed by its provider at the last sync"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() lacks %q:\n%s", want, v)
@@ -151,7 +152,7 @@ func TestStatusBarModes(t *testing.T) {
 			b := newFakeBackend().connectedTo("prod-eu", "web", tt.readOnly)
 			b.state.UnlockedUntil = tt.unlocked
 			h := newHarness(t, b, WithNow(func() time.Time { return now }))
-			if bar := h.m.statusBar(); !strings.Contains(bar, tt.want) || !strings.Contains(bar, "prod-eu") || !strings.Contains(bar, "namespace web") {
+			if bar := plain(h.m.statusBar()); !strings.Contains(bar, tt.want) || !strings.Contains(bar, "prod-eu") || !strings.Contains(bar, "namespace web") {
 				t.Errorf("statusBar() = %q, want %q", bar, tt.want)
 			}
 		})
@@ -162,7 +163,7 @@ func TestWorkloadsView(t *testing.T) {
 	b := newFakeBackend(shop()...).connectedTo("staging", "shop", false)
 	h := newHarness(t, b)
 	h.waitFor("the workloads", func(m *model) bool { return m.workloads.loaded })
-	v := h.m.View()
+	v := h.screen()
 	for _, want := range []string{"deploy/billing", "0/1", "CrashLoopBackOff", "deploy/checkout", "2/2", "Ready", "pod/debug", "3 workloads on staging"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() lacks %q:\n%s", want, v)
@@ -271,14 +272,14 @@ func TestNamespacePicker(t *testing.T) {
 	b := newFakeBackend(shop()...).connectedTo("staging", "default", false)
 	h := newHarness(t, b)
 	h.waitFor("the workloads", func(m *model) bool { return m.workloads.loaded })
-	if !strings.Contains(h.m.View(), "Nothing runs in namespace default") {
-		t.Fatalf("empty namespace:\n%s", h.m.View())
+	if !strings.Contains(h.screen(), "Nothing runs in namespace default") {
+		t.Fatalf("empty namespace:\n%s", h.screen())
 	}
 
 	h.press("n")
 	h.waitFor("the namespaces", func(m *model) bool { return m.picker != nil && m.picker.loaded })
-	if !strings.Contains(h.m.View(), "default  (current)") {
-		t.Errorf("the picker does not mark the current namespace:\n%s", h.m.View())
+	if !strings.Contains(h.screen(), "default  (current)") {
+		t.Errorf("the picker does not mark the current namespace:\n%s", h.screen())
 	}
 	h.typeText("sh")
 	if !slices.Equal(h.m.picker.shown, []string{"shop"}) {
@@ -289,7 +290,7 @@ func TestNamespacePicker(t *testing.T) {
 	if _, setNS, _ := b.calls(); !slices.Equal(setNS, []string{"shop"}) {
 		t.Errorf("SetNamespace calls = %v", setNS)
 	}
-	if v := h.m.View(); !strings.Contains(v, "deploy/checkout") || !strings.Contains(v, "namespace shop") {
+	if v := h.screen(); !strings.Contains(v, "deploy/checkout") || !strings.Contains(v, "namespace shop") {
 		t.Errorf("after switching namespace:\n%s", v)
 	}
 }
@@ -305,12 +306,34 @@ func TestNamespacePickerTrustsATypedName(t *testing.T) {
 	h.waitFor("the namespace", func(m *model) bool { return m.state.Namespace == "payments" })
 }
 
+func TestTableLayout(t *testing.T) {
+	tb := table{
+		columns: []column{{"NAME", 8}, {"STATUS", 5}, {"LABELS", 0}},
+		rows:    [][]string{{"a-very-long-name", "stale", "team=payments,gpu=true"}},
+	}
+	ws := tb.widths(30)
+	if got, want := tb.headingLine(ws), "NAME      STATUS  LABELS      "; got != want {
+		t.Errorf("headingLine() = %q, want %q", got, want)
+	}
+	if got, want := tb.line(ws, 0, tb.rows[0]), "a-very-…  stale   team=paymen…"; got != want {
+		t.Errorf("line(0) = %q, want %q", got, want)
+	}
+}
+
+func TestWindowWithoutASize(t *testing.T) {
+	h := newHarness(t, newFakeBackend())
+	h.update(tea.WindowSizeMsg{})
+	if h.m.width != 80 || h.m.height != 24 || h.screen() == "" {
+		t.Fatalf("a window without a size is %dx%d", h.m.width, h.m.height)
+	}
+}
+
 func TestClustersShowWhyTheCatalogCannotLoad(t *testing.T) {
 	b := newFakeBackend()
 	b.catalogErr = errors.New("reading catalog.yaml: permission denied")
 	h := newHarness(t, b)
 	h.waitFor("the error", func(m *model) bool { return m.clusters.err != nil })
-	if v := h.m.View(); strings.Contains(v, "Loading the catalog") || !strings.Contains(v, "permission denied") {
+	if v := h.screen(); strings.Contains(v, "Loading the catalog") || !strings.Contains(v, "permission denied") {
 		t.Fatalf("the clusters view does not say why the catalog is missing:\n%s", v)
 	}
 }

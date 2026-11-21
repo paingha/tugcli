@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/paingha/tugcli/internal/resolve"
 	"github.com/paingha/tugcli/internal/session"
@@ -97,12 +97,12 @@ func (m *model) pickerRows() int { return m.bodyHeight() - 1 }
 
 // pickerKey handles a key while the picker is open; every printable key
 // types into its filter.
-func (m *model) pickerKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.picker
 	switch {
-	case msg.Type == tea.KeyEsc:
+	case msg.String() == "esc":
 		m.picker = nil
-	case msg.Type == tea.KeyEnter:
+	case msg.String() == "enter":
 		ns := p.choice()
 		if ns == "" {
 			return nil
@@ -111,13 +111,13 @@ func (m *model) pickerKey(msg tea.KeyMsg) tea.Cmd {
 		return m.setNamespace(ns)
 	case edit(&p.filter, msg):
 		p.apply()
-	case msg.Type == tea.KeyUp || msg.Type == tea.KeyCtrlP:
+	case msg.String() == "up" || msg.String() == "ctrl+p":
 		p.move(-1)
-	case msg.Type == tea.KeyDown || msg.Type == tea.KeyCtrlN:
+	case msg.String() == "down" || msg.String() == "ctrl+n":
 		p.move(1)
-	case msg.Type == tea.KeyPgUp:
+	case msg.String() == "pgup":
 		p.move(-p.rows)
-	case msg.Type == tea.KeyPgDown:
+	case msg.String() == "pgdown":
 		p.move(p.rows)
 	}
 	return nil

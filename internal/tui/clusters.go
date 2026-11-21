@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/resolve"
@@ -191,7 +191,7 @@ func scrolled(cursor, offset, rows, total int) int {
 // clustersKey handles a key in the clusters view. Typing filters; with
 // nothing typed, q quits and ? shows help, and / starts a filter that may
 // hold those too.
-func (m *model) clustersKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) clustersKey(msg tea.KeyPressMsg) tea.Cmd {
 	l := &m.clusters
 	switch {
 	case key.Matches(msg, m.keys.Connect):
@@ -205,17 +205,17 @@ func (m *model) clustersKey(msg tea.KeyMsg) tea.Cmd {
 			return m.enterWorkloads()
 		}
 		return nil
-	case msg.Type == tea.KeyUp || msg.Type == tea.KeyCtrlP:
+	case msg.String() == "up" || msg.String() == "ctrl+p":
 		l.move(-1)
-	case msg.Type == tea.KeyDown || msg.Type == tea.KeyCtrlN:
+	case msg.String() == "down" || msg.String() == "ctrl+n":
 		l.move(1)
-	case msg.Type == tea.KeyPgUp:
+	case msg.String() == "pgup":
 		l.move(-l.rows)
-	case msg.Type == tea.KeyPgDown:
+	case msg.String() == "pgdown":
 		l.move(l.rows)
-	case msg.Type == tea.KeyHome:
+	case msg.String() == "home":
 		l.move(-len(l.shown))
-	case msg.Type == tea.KeyEnd:
+	case msg.String() == "end":
 		l.move(len(l.shown))
 	case l.filter == "" && !l.filtering && key.Matches(msg, m.keys.Quit):
 		return m.quit()

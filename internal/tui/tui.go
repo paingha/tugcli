@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/paingha/tugcli/internal/catalog"
@@ -95,12 +95,11 @@ func Run(ctx context.Context, b Backend, in io.Reader, out io.Writer, opts ...Op
 	}
 	t := newTasks(ctx)
 	defer t.stop()
-	m := newModel(b, t, st, newStyles(out), opts...)
+	m := newModel(b, t, st, newStyles(), opts...)
 	p := tea.NewProgram(m,
 		tea.WithContext(ctx),
 		tea.WithInput(in),
 		tea.WithOutput(out),
-		tea.WithAltScreen(),
 		// tug's own signal handling cancels ctx.
 		tea.WithoutSignalHandler(),
 	)

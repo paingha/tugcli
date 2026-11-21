@@ -4,31 +4,32 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // openHelp shows every key over the view.
 func (m *model) openHelp() {
 	m.showHelp = true
-	m.helpVP = viewport.New(0, 0)
+	m.helpVP = viewport.New()
 	m.helpVP.KeyMap = viewportKeys(m.keys)
 	m.resizeHelp()
 }
 
 // resizeHelp lays the help out again for the window.
 func (m *model) resizeHelp() {
-	if h := m.bodyHeight(); m.helpVP.Width != m.width || m.helpVP.Height != h {
-		m.helpVP.Width, m.helpVP.Height = m.width, h
+	if h := m.bodyHeight(); m.helpVP.Width() != m.width || m.helpVP.Height() != h {
+		m.helpVP.SetWidth(m.width)
+		m.helpVP.SetHeight(h)
 		m.helpVP.SetContent(m.helpText())
 	}
 }
 
 // helpKey scrolls the help when it is longer than the screen; any other
 // key closes it.
-func (m *model) helpKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) helpKey(msg tea.KeyPressMsg) tea.Cmd {
 	if scrolls(msg, m.helpVP.KeyMap) {
 		m.helpVP, _ = m.helpVP.Update(msg)
 		return nil

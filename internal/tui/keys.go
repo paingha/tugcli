@@ -1,6 +1,6 @@
 package tui
 
-import "github.com/charmbracelet/bubbles/key"
+import "charm.land/bubbles/v2/key"
 
 // keyMap holds every key binding, so the help screen and the handlers
 // cannot disagree.
@@ -47,7 +47,7 @@ func newKeyMap() keyMap {
 		Up:       b([]string{"up", "k", "ctrl+p"}, "↑/k", "up"),
 		Down:     b([]string{"down", "j", "ctrl+n"}, "↓/j", "down"),
 		PageUp:   b([]string{"pgup", "b", "ctrl+b"}, "pgup/b", "page up"),
-		PageDown: b([]string{"pgdown", "f", "ctrl+f", " "}, "pgdn/f", "page down"),
+		PageDown: b([]string{"pgdown", "f", "ctrl+f", "space"}, "pgdn/f", "page down"),
 		Top:      b([]string{"home", "g"}, "g/home", "top"),
 		Bottom:   b([]string{"end", "G"}, "G/end", "bottom; in logs, follow new lines again"),
 		Filter:   b([]string{"/"}, "/", "filter by name"),

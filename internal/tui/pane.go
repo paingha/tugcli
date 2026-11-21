@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"k8s.io/apimachinery/pkg/util/duration"
 
 	"github.com/paingha/tugcli/internal/ops"
@@ -92,10 +92,11 @@ func (p *pane) title() string {
 // resize gives the viewport the body less the pane's status line.
 func (p *pane) resize(width, height int) {
 	height = max(height-1, 1)
-	if p.vp.Width == width && p.vp.Height == height {
+	if p.vp.Width() == width && p.vp.Height() == height {
 		return
 	}
-	p.vp.Width, p.vp.Height = width, height
+	p.vp.SetWidth(width)
+	p.vp.SetHeight(height)
 	p.show()
 }
 
@@ -127,7 +128,7 @@ func (m *model) openPane(kind paneKind, w ops.WorkloadState) *pane {
 	m.closePane()
 	m.panes++
 	p := &pane{id: m.panes, kind: kind, w: w, loading: true}
-	p.vp = viewport.New(0, 0)
+	p.vp = viewport.New()
 	p.vp.KeyMap = viewportKeys(m.keys)
 	p.vp.SetHorizontalStep(8)
 	p.resize(m.width, m.bodyHeight())
@@ -281,7 +282,7 @@ func (m *model) paneLoaded(msg paneMsg) {
 
 // paneKey handles a key while a pane is open. The workload's actions work
 // on the pane's workload, so l, w and t switch between its panes.
-func (m *model) paneKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) paneKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.pane
 	k := m.keys
 	switch {
@@ -313,7 +314,7 @@ func (m *model) paneKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // scrolls reports whether a key scrolls a viewport.
-func scrolls(msg tea.KeyMsg, k viewport.KeyMap) bool {
+func scrolls(msg tea.KeyPressMsg, k viewport.KeyMap) bool {
 	return key.Matches(msg, k.Up, k.Down, k.PageUp, k.PageDown, k.HalfPageUp, k.HalfPageDown, k.Left, k.Right)
 }
 

@@ -21,7 +21,7 @@ func selectWorkload(t *testing.T, h *harness, target string) {
 			return
 		}
 	}
-	t.Fatalf("%s is not listed:\n%s", target, h.m.View())
+	t.Fatalf("%s is not listed:\n%s", target, h.screen())
 }
 
 func TestLogsPane(t *testing.T) {
@@ -36,7 +36,7 @@ func TestLogsPane(t *testing.T) {
 	// Every pod of the workload, each with its pod and container.
 	h.waitForView("checkout-7d9f-aaaaa/main fake logs")
 	h.waitForView("checkout-7d9f-bbbbb/main fake logs")
-	v := h.m.View()
+	v := h.screen()
 	for _, want := range []string{"Logs of deploy/checkout", "following new lines and new pods"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("View() lacks %q:\n%s", want, v)
@@ -75,31 +75,31 @@ func TestLogsPaneFollowsUntilScrolledUp(t *testing.T) {
 		events = append(events, logEvent{line: ops.LogLine{Pod: "debug", Container: "main", Text: fmt.Sprintf("line %d", i)}})
 	}
 	h.update(logsMsg{id: h.m.pane.id, events: events})
-	if v := h.m.View(); !strings.Contains(v, "line 99") || strings.Contains(v, "line 50") {
+	if v := h.screen(); !strings.Contains(v, "line 99") || strings.Contains(v, "line 50") {
 		t.Fatalf("a following pane does not show the newest lines:\n%s", v)
 	}
 	h.press("up")
-	if h.m.pane.follow || !strings.Contains(h.m.View(), "paused") {
-		t.Fatalf("scrolling up did not pause following:\n%s", h.m.View())
+	if h.m.pane.follow || !strings.Contains(h.screen(), "paused") {
+		t.Fatalf("scrolling up did not pause following:\n%s", h.screen())
 	}
 	h.update(logsMsg{id: h.m.pane.id, events: []logEvent{{line: ops.LogLine{Pod: "debug", Container: "main", Text: "line 100"}}}})
-	if strings.Contains(h.m.View(), "line 100") {
-		t.Fatalf("a paused pane jumped to a new line:\n%s", h.m.View())
+	if strings.Contains(h.screen(), "line 100") {
+		t.Fatalf("a paused pane jumped to a new line:\n%s", h.screen())
 	}
 	h.press("G")
-	if !h.m.pane.follow || !strings.Contains(h.m.View(), "line 100") {
-		t.Fatalf("G did not follow again:\n%s", h.m.View())
+	if !h.m.pane.follow || !strings.Contains(h.screen(), "line 100") {
+		t.Fatalf("G did not follow again:\n%s", h.screen())
 	}
 	// A prompt over the pane leaves the newest line in view.
 	h.press("S")
-	if v := h.m.View(); h.m.prompt == nil || !strings.Contains(v, "line 100") {
+	if v := h.screen(); h.m.prompt == nil || !strings.Contains(v, "line 100") {
 		t.Fatalf("a prompt hid the newest line:\n%s", v)
 	}
 	h.press("esc")
 
 	// A warning from one container shows in the stream; an error ends it.
 	h.update(logsMsg{id: h.m.pane.id, events: []logEvent{{warn: "debug/main: unexpected EOF"}, {err: errNoCredentials}}, done: true})
-	v := h.m.View()
+	v := h.screen()
 	if !strings.Contains(v, "warning: debug/main: unexpected EOF") || !strings.Contains(v, "token expired") {
 		t.Fatalf("warning and error:\n%s", v)
 	}
@@ -117,7 +117,7 @@ func TestWhyAndTreePanes(t *testing.T) {
 
 	h.press("w")
 	h.waitForView("deploy/billing in shop is not ready")
-	v := h.m.View()
+	v := h.screen()
 	for _, want := range []string{"Why deploy/billing", "billing-7d9f-ccccc", "CrashLoopBackOff", "next:"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("why pane lacks %q:\n%s", want, v)
@@ -128,7 +128,7 @@ func TestWhyAndTreePanes(t *testing.T) {
 	h.press("t")
 	h.waitForView("Tree of deploy/billing")
 	h.waitForView("pod/billing-7d9f-ccccc")
-	v = h.m.View()
+	v = h.screen()
 	for _, want := range []string{"deploy/billing", "└── pod/billing-7d9f-ccccc", "container main", "✗"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("tree pane lacks %q:\n%s", want, v)

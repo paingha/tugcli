@@ -3,9 +3,8 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
 )
 
 // prompt asks a question above the status bar: yes or no, or for a few
@@ -37,8 +36,10 @@ func newField(label, value, hint string) field {
 	in.Prompt = ""
 	in.Placeholder = hint
 	in.CharLimit = 256
-	in.Width = 60
-	in.Cursor.SetMode(cursor.CursorStatic)
+	in.SetWidth(60)
+	s := in.Styles()
+	s.Cursor.Blink = false
+	in.SetStyles(s)
 	in.SetValue(value)
 	return field{label: label, input: in}
 }
@@ -75,25 +76,25 @@ func (p *prompt) values() []string {
 
 // promptKey hands a key to the open prompt. The prompt closes before yes
 // or no runs, so they may open the next one.
-func (m *model) promptKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) promptKey(msg tea.KeyPressMsg) tea.Cmd {
 	p := m.prompt
 	if len(p.fields) == 0 {
 		m.prompt = nil
-		if msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "y") {
+		if strings.EqualFold(msg.String(), "y") {
 			cmd, _ := p.yes(nil)
 			return cmd
 		}
 		return p.no()
 	}
-	switch msg.Type {
-	case tea.KeyEsc:
+	switch msg.String() {
+	case "esc":
 		m.prompt = nil
 		return p.no()
-	case tea.KeyTab, tea.KeyDown:
+	case "tab", "down":
 		p.focusOn(p.focus + 1)
-	case tea.KeyShiftTab, tea.KeyUp:
+	case "shift+tab", "up":
 		p.focusOn(p.focus - 1)
-	case tea.KeyEnter:
+	case "enter":
 		if p.focus < len(p.fields)-1 {
 			p.focusOn(p.focus + 1)
 			return nil

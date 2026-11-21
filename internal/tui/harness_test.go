@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,7 +47,7 @@ func newHarness(t *testing.T, b *fakeBackend, opts ...Option) *harness {
 	tk := newTasks(context.Background())
 	h := &harness{t: t, tasks: tk, msgs: make(chan tea.Msg, 64), done: make(chan struct{})}
 	// The ticker stays off unless a test turns it on.
-	h.m = newModel(b, tk, st, newStyles(io.Discard), append([]Option{WithRefresh(0)}, opts...)...)
+	h.m = newModel(b, tk, st, newStyles(), append([]Option{WithRefresh(0)}, opts...)...)
 	// Bubble Tea would hand the command the terminal; here it gets none.
 	h.m.exec = func(c tea.ExecCommand, fn tea.ExecCallback) tea.Cmd {
 		return func() tea.Msg {
@@ -117,7 +117,7 @@ func (h *harness) waitFor(what string, cond func(m *model) bool) {
 		case msg := <-h.msgs:
 			h.update(msg)
 		case <-deadline:
-			h.t.Fatalf("waiting for %s; the screen is:\n%s", what, h.m.View())
+			h.t.Fatalf("waiting for %s; the screen is:\n%s", what, h.screen())
 		}
 	}
 }
@@ -144,7 +144,7 @@ func (h *harness) waitForQuit() {
 // waitForView hands messages to the model until its view shows text.
 func (h *harness) waitForView(text string) {
 	h.t.Helper()
-	h.waitFor("the view to show "+text, func(m *model) bool { return strings.Contains(m.View(), text) })
+	h.waitFor("the view to show "+text, func(m *model) bool { return strings.Contains(plain(m.screen()), text) })
 }
 
 // press sends keys: names such as enter, esc and ctrl+c, or a rune each.
@@ -161,21 +161,27 @@ func (h *harness) typeText(s string) {
 	}
 }
 
-func keyMsg(k string) tea.KeyMsg {
-	names := map[string]tea.KeyType{
-		"enter": tea.KeyEnter, "esc": tea.KeyEsc, "up": tea.KeyUp, "down": tea.KeyDown,
-		"backspace": tea.KeyBackspace, "tab": tea.KeyTab, "shift+tab": tea.KeyShiftTab,
-		"ctrl+c": tea.KeyCtrlC, "ctrl+r": tea.KeyCtrlR, "pgdown": tea.KeyPgDown, "end": tea.KeyEnd,
-		" ": tea.KeySpace,
+// keyMsg is the key press a terminal sends for k.
+func keyMsg(k string) tea.KeyPressMsg {
+	names := map[string]tea.KeyPressMsg{
+		"enter": {Code: tea.KeyEnter}, "esc": {Code: tea.KeyEscape}, "up": {Code: tea.KeyUp}, "down": {Code: tea.KeyDown},
+		"backspace": {Code: tea.KeyBackspace}, "tab": {Code: tea.KeyTab}, "shift+tab": {Code: tea.KeyTab, Mod: tea.ModShift},
+		"ctrl+c": {Code: 'c', Mod: tea.ModCtrl}, "ctrl+r": {Code: 'r', Mod: tea.ModCtrl},
+		"pgdown": {Code: tea.KeyPgDown}, "end": {Code: tea.KeyEnd},
+		" ": {Code: tea.KeySpace, Text: " "},
 	}
-	if t, ok := names[k]; ok {
-		if t == tea.KeySpace {
-			return tea.KeyMsg{Type: t, Runes: []rune{' '}}
-		}
-		return tea.KeyMsg{Type: t}
+	if msg, ok := names[k]; ok {
+		return msg
 	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+	r := []rune(k)
+	return tea.KeyPressMsg{Code: r[0], Text: k}
 }
+
+// screen is the model's screen without its colours.
+func (h *harness) screen() string { return plain(h.m.screen()) }
+
+// plain takes the escape sequences out of what the model draws.
+func plain(s string) string { return clean(s) }
 
 // fakeBackend stands in for internal/cli. Its clusters' kube client is a
 // fake clientset whose guard refuses writes on a read-only session, unless

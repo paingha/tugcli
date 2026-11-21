@@ -2,17 +2,16 @@ package tui
 
 import (
 	"hash/fnv"
-	"io"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
-// styles are the TUI's colours. They come from a renderer for the output,
-// which leaves colour out when it is not a terminal, NO_COLOR is set or
-// TERM=dumb, as render.Colors does for the CLI. Only the basic ANSI colours
-// are used, so the terminal's theme decides the shades and nothing has to
-// ask the terminal for its background.
+// styles are the TUI's colours. The program fits them to its output when
+// it draws, leaving colour out when NO_COLOR is set or TERM=dumb, as
+// render.Colors does for the CLI. Only the basic ANSI colours are used, so
+// the terminal's theme decides the shades and nothing has to ask the
+// terminal for its background.
 type styles struct {
 	title    lipgloss.Style
 	header   lipgloss.Style
@@ -28,24 +27,23 @@ type styles struct {
 	pick []lipgloss.Style
 }
 
-func newStyles(out io.Writer) styles {
-	r := lipgloss.NewRenderer(out)
+func newStyles() styles {
 	var pick []lipgloss.Style
 	for _, c := range []string{"6", "3", "2", "5", "4", "14", "11", "10", "13", "12"} {
-		pick = append(pick, r.NewStyle().Foreground(lipgloss.Color(c)))
+		pick = append(pick, lipgloss.NewStyle().Foreground(lipgloss.Color(c)))
 	}
 	return styles{
 		pick:     pick,
-		title:    r.NewStyle().Bold(true),
-		header:   r.NewStyle().Bold(true).Foreground(lipgloss.Color("8")),
-		selected: r.NewStyle().Reverse(true),
-		dim:      r.NewStyle().Foreground(lipgloss.Color("8")),
-		bold:     r.NewStyle().Bold(true),
-		red:      r.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
-		yellow:   r.NewStyle().Foreground(lipgloss.Color("3")),
-		green:    r.NewStyle().Foreground(lipgloss.Color("2")),
-		status:   r.NewStyle().Reverse(true),
-		key:      r.NewStyle().Bold(true),
+		title:    lipgloss.NewStyle().Bold(true),
+		header:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("8")),
+		selected: lipgloss.NewStyle().Reverse(true),
+		dim:      lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
+		bold:     lipgloss.NewStyle().Bold(true),
+		red:      lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("1")),
+		yellow:   lipgloss.NewStyle().Foreground(lipgloss.Color("3")),
+		green:    lipgloss.NewStyle().Foreground(lipgloss.Color("2")),
+		status:   lipgloss.NewStyle().Reverse(true),
+		key:      lipgloss.NewStyle().Bold(true),
 	}
 }
 
@@ -113,7 +111,7 @@ func (t table) widths(width int) []int {
 			}
 		}
 		if c.max > 0 {
-			ws[i] = min(ws[i], c.max)
+			ws[i] = min(ws[i], max(c.max, lipgloss.Width(c.heading))) // never cut the heading
 		}
 	}
 	used := 0

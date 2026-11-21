@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/paingha/tugcli/internal/daemon"
@@ -45,7 +45,7 @@ type writeMsg struct {
 
 // act runs the action a key asks for on a workload, from its row in the
 // list or from one of its panes. Other keys do nothing.
-func (m *model) act(msg tea.KeyMsg, w ops.WorkloadState) tea.Cmd {
+func (m *model) act(msg tea.KeyPressMsg, w ops.WorkloadState) tea.Cmd {
 	k := m.keys
 	if m.kube == nil && key.Matches(msg, k.actions()...) {
 		m.setWarning("Not connected to %s yet", m.state.ClusterName)

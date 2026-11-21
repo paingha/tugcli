@@ -127,8 +127,8 @@ func TestScale(t *testing.T) {
 	h.press("backspace")
 	h.typeText("lots")
 	h.press("enter")
-	if h.m.prompt == nil || !strings.Contains(h.m.View(), `replicas must be a number from 0, got "lots"`) {
-		t.Fatalf("a bad count closed the prompt or said nothing:\n%s", h.m.View())
+	if h.m.prompt == nil || !strings.Contains(h.screen(), `replicas must be a number from 0, got "lots"`) {
+		t.Fatalf("a bad count closed the prompt or said nothing:\n%s", h.screen())
 	}
 	for range 4 {
 		h.press("backspace")
@@ -260,8 +260,8 @@ func TestForward(t *testing.T) {
 		h.press("backspace")
 	}
 	h.press("enter")
-	if h.m.prompt == nil || !strings.Contains(h.m.View(), "name the forward") {
-		t.Fatalf("an empty name closed the prompt:\n%s", h.m.View())
+	if h.m.prompt == nil || !strings.Contains(h.screen(), "name the forward") {
+		t.Fatalf("an empty name closed the prompt:\n%s", h.screen())
 	}
 	h.press("esc")
 	b.forwardErr = errors.New(`starting the forward checkout: a forward with that name is running`)
@@ -290,9 +290,9 @@ func TestHelpListsEveryAction(t *testing.T) {
 	b := newFakeBackend(shop()...).connectedTo("staging", "shop", false)
 	h := newHarness(t, b)
 	h.waitFor("the workloads", func(m *model) bool { return m.workloads.loaded })
-	title := h.m.View()
+	title := h.screen()
 	h.press("?")
-	help := h.m.View()
+	help := h.screen()
 	for _, kb := range h.m.keys.actions() {
 		k := kb.Help().Key
 		if !strings.Contains(help, "  "+k+" ") {
