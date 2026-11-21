@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"io"
 	"slices"
 
 	"github.com/paingha/tugcli/internal/registry"
@@ -17,6 +18,9 @@ type Plugin struct {
 	// Dev is true for linked and $TUG_PLUGIN_PATH plugins, which are not
 	// checksummed.
 	Dev bool
+	// WASM is true when Bin is the plugin's WebAssembly build, which tug
+	// runs itself rather than as a process.
+	WASM bool
 }
 
 // Name is the provider name.
@@ -40,6 +44,12 @@ func (p *Provider) Close() error { return p.runner.Close() }
 
 // Plugin returns the plugin behind the provider.
 func (p *Provider) Plugin() *Plugin { return p.plugin }
+
+// Exec runs the plugin with these arguments and streams, as its own process
+// would; see Runner.Exec.
+func (p *Provider) Exec(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return p.runner.Exec(ctx, args, stdin, stdout, stderr)
+}
 
 // Info comes from the manifest, so listing providers starts no processes.
 func (p *Provider) Info() provider.Info {

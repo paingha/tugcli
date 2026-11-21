@@ -225,6 +225,15 @@ func TestManifestValidation(t *testing.T) {
 		{"escaping bin", func(m *Manifest) { m.Spec.Platforms[0].Bin = "../../bin/sh" }, "inside the plugin directory"},
 		{"bad env", func(m *Manifest) { m.Spec.Env = []string{"A=B"} }, "spec.env"},
 		{"bad minTugVersion", func(m *Manifest) { m.Spec.MinTugVersion = "soon" }, "spec.minTugVersion"},
+		{"wasip1 without wasm", func(m *Manifest) { m.Spec.Platforms[0] = Platform{OS: WASMOS, Arch: "amd64", Bin: "x.wasm"} }, "{os: wasip1, arch: wasm}"},
+		{"wasm without wasip1", func(m *Manifest) { m.Spec.Platforms[0] = Platform{OS: "js", Arch: WASMArch, Bin: "x.wasm"} }, "{os: wasip1, arch: wasm}"},
+		{"two WebAssembly builds", func(m *Manifest) {
+			m.Spec.Platforms = append(m.Spec.Platforms, Platform{OS: WASMOS, Arch: WASMArch, Bin: "a.wasm"}, Platform{OS: WASMOS, Arch: WASMArch, Bin: "b.wasm"})
+		}, "more than one WebAssembly build"},
+		{"WebAssembly with a described network", func(m *Manifest) {
+			m.Spec.Platforms = append(m.Spec.Platforms, Platform{OS: WASMOS, Arch: WASMArch, Bin: "a.wasm"})
+			m.Spec.Network = []string{"the server in the account's url setting"}
+		}, "spec.network entry"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -244,6 +253,90 @@ func TestManifestValidation(t *testing.T) {
 				t.Fatalf("Validate = %v, want mention of %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestPlatformSelection checks which build Load runs: the native one, else
+// the WebAssembly one, the WebAssembly one first when preferred, and in each
+// case the first that is built.
+func TestPlatformSelection(t *testing.T) {
+	native := Platform{OS: runtime.GOOS, Arch: runtime.GOARCH, Bin: "bin/native"}
+	other := Platform{OS: "plan9", Arch: "386", Bin: "bin/plan9"}
+	wasm := Platform{OS: WASMOS, Arch: WASMArch, Bin: "bin/plugin.wasm"}
+	tests := []struct {
+		name      string
+		platforms []Platform
+		built     []string
+		prefer    bool
+		want      string
+		wantErr   string
+	}{
+		{"native", []Platform{native, wasm}, []string{"bin/native", "bin/plugin.wasm"}, false, "bin/native", ""},
+		{"WebAssembly preferred", []Platform{native, wasm}, []string{"bin/native", "bin/plugin.wasm"}, true, "bin/plugin.wasm", ""},
+		{"no native build for here", []Platform{other, wasm}, []string{"bin/plan9", "bin/plugin.wasm"}, false, "bin/plugin.wasm", ""},
+		{"native not built", []Platform{native, wasm}, []string{"bin/plugin.wasm"}, false, "bin/plugin.wasm", ""},
+		{"preferred but not built", []Platform{native, wasm}, []string{"bin/native"}, true, "bin/native", ""},
+		{"nothing for here", []Platform{other}, []string{"bin/plan9"}, false, "", "no WebAssembly build"},
+		{"nothing built", []Platform{native, wasm}, nil, false, "", "bin/native"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			var lines []string
+			for _, p := range tt.platforms {
+				lines = append(lines, "  - {os: "+p.OS+", arch: "+p.Arch+", bin: "+p.Bin+"}")
+			}
+			manifest := "apiVersion: tug.plugin/v1alpha1\nkind: ProviderPlugin\nmetadata: {name: pick, version: 1.0.0}\n" +
+				"spec:\n  protocols: [provider/v1alpha1]\n  platforms:\n" + strings.Join(lines, "\n") + "\n"
+			if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, b := range tt.built {
+				content := []byte("#!/bin/sh\n")
+				if strings.HasSuffix(b, ".wasm") {
+					content = wasmHeader
+				}
+				path := filepath.Join(dir, filepath.FromSlash(b))
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, content, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p, err := Load(dir, true, PreferWASM(tt.prefer))
+			if tt.wantErr != "" {
+				// With nothing built, the error is the best build's.
+				if tt.built == nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("Load = %v, want a missing file", err)
+				}
+				if err == nil || !strings.Contains(filepath.ToSlash(err.Error()), tt.wantErr) {
+					t.Fatalf("Load = %v, %v; want an error containing %q", p, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := filepath.ToSlash(strings.TrimPrefix(p.Bin, dir+string(filepath.Separator))); got != tt.want || p.WASM != strings.HasSuffix(tt.want, ".wasm") {
+				t.Fatalf("Load picked %s (WASM %v), want %s", got, p.WASM, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadRefusesAWASMBuildThatIsNot(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "apiVersion: tug.plugin/v1alpha1\nkind: ProviderPlugin\nmetadata: {name: fake, version: 1.0.0}\n" +
+		"spec:\n  protocols: [provider/v1alpha1]\n  platforms:\n  - {os: wasip1, arch: wasm, bin: plugin.wasm}\n"
+	if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plugin.wasm"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, true); err == nil || !strings.Contains(err.Error(), "is not a WebAssembly module") {
+		t.Fatalf("Load of a script listed as WebAssembly = %v", err)
 	}
 }
 
@@ -476,17 +569,16 @@ func TestServeModeKeepsOneProcess(t *testing.T) {
 	if err := errors.Join(errs...); err != nil {
 		t.Fatal(err)
 	}
-	cmd, done := r.srv.process()
-	pid := cmd.Process.Pid
+	inst, done := r.srv.running()
 	if _, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: map[string]string{"api_token": "bad"}}); provider.CodeOf(err) != provider.Unauthenticated {
 		t.Fatalf("a provider error through serve mode = %v, want Unauthenticated", err)
 	}
-	if again, _ := r.srv.process(); again.Process.Pid != pid {
+	if again, _ := r.srv.running(); again != inst {
 		t.Fatal("serve mode started a second process for a later call")
 	}
 
 	// The process dies; the next call starts a new one.
-	_ = cmd.Process.Kill()
+	_ = inst.kill()
 	<-done
 	if _, err := prov.Describe(ctx); err != nil {
 		t.Fatalf("describe after the process died: %v", err)

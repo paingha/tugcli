@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +36,8 @@ var baseEnv = []string{"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPD
 
 var windowsEnv = []string{"SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "USERPROFILE", "TEMP", "TMP", "PROGRAMDATA"}
 
-// Runner runs one plugin executable per operation.
+// Runner runs a plugin: a process, or a WebAssembly module instance, for each
+// operation, or one for every call in serve mode.
 type Runner struct {
 	Bin  string
 	Name string
@@ -48,9 +50,15 @@ type Runner struct {
 	// Serve keeps one plugin process for every call, when the manifest
 	// declares the serve capability. Close stops it.
 	Serve bool
+	// WASM, when set, runs Bin as a WebAssembly module inside tug rather
+	// than as a process. The module is compiled on the first call.
+	WASM *WASMOptions
 
 	srvMu sync.Mutex
 	srv   *server
+
+	wasmMu sync.Mutex
+	wasm   *wasmHost
 }
 
 func (r *Runner) timeout(op string) time.Duration {
@@ -71,10 +79,14 @@ func (r *Runner) timeout(op string) time.Duration {
 
 // Call runs the plugin for op with the request bytes and returns the
 // response bytes. The process gets a scrubbed environment, a timeout, and is
-// sent SIGTERM then SIGKILL when the context ends.
+// sent SIGTERM then SIGKILL when the context ends. A WebAssembly plugin gets
+// the same, and is stopped where it is when the context ends.
 func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, error) {
 	if r.Serve {
 		return r.callServe(ctx, op, request)
+	}
+	if r.WASM != nil {
+		return r.callWASM(ctx, op, request)
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout(op))
 	defer cancel()
@@ -85,11 +97,7 @@ func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, e
 	cmd.Cancel = func() error { return terminate(cmd.Process) }
 	cmd.WaitDelay = killGrace
 
-	limit := r.MaxBytes
-	if limit <= 0 {
-		limit = provider.MaxMessageBytes
-	}
-	stdout := &limitedBuffer{limit: limit}
+	stdout := &limitedBuffer{limit: r.maxBytes()}
 	cmd.Stdout = stdout
 	stderr := r.stderrLogger(op)
 	cmd.Stderr = stderr
@@ -98,9 +106,32 @@ func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, e
 	err := cmd.Run()
 	stderr.flush()
 	r.logger().Debug("plugin call", "plugin", r.Name, "op", op, "duration", time.Since(start), "err", err)
+	return r.response(ctx, op, stdout, err)
+}
 
+// callWASM runs op in a new instance of the plugin's module.
+func (r *Runner) callWASM(ctx context.Context, op string, request []byte) ([]byte, error) {
+	// Compiling, on the first call, does not count against op's timeout.
+	h, err := r.wasmHost()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.timeout(op))
+	defer cancel()
+	stdout := &limitedBuffer{limit: r.maxBytes()}
+	stderr := r.stderrLogger(op)
+	start := time.Now()
+	err = h.run(ctx, []string{op}, r.wasmEnviron(), bytes.NewReader(request), stdout, stderr)
+	stderr.flush()
+	r.logger().Debug("plugin call", "plugin", r.Name, "op", op, "runtime", "wasm", "duration", time.Since(start), "err", err)
+	return r.response(ctx, op, stdout, err)
+}
+
+// response turns what a call wrote to stdout, and how it ended, into the
+// response or an error.
+func (r *Runner) response(ctx context.Context, op string, stdout *limitedBuffer, err error) ([]byte, error) {
 	if stdout.exceeded {
-		return nil, provider.Errorf(provider.Internal, "plugin %s: response exceeds %d bytes", r.Name, limit)
+		return nil, provider.Errorf(provider.Internal, "plugin %s: response exceeds %d bytes", r.Name, stdout.limit)
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
@@ -111,9 +142,85 @@ func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, e
 	// A non-zero exit with a JSON error on stdout is a normal provider error;
 	// the caller decodes it.
 	if err != nil && stdout.Len() == 0 {
+		var mle *memoryLimitError
+		if errors.As(err, &mle) {
+			return nil, provider.Errorf(provider.Internal, "plugin %s %s %v", r.Name, op, err).WithHint(memoryHint)
+		}
 		return nil, provider.Errorf(provider.Internal, "plugin %s %s: %v", r.Name, op, err)
 	}
 	return stdout.Bytes(), nil
+}
+
+func (r *Runner) maxBytes() int64 {
+	if r.MaxBytes > 0 {
+		return r.MaxBytes
+	}
+	return provider.MaxMessageBytes
+}
+
+// wasmHost returns the plugin's compiled module, compiling it on first use.
+func (r *Runner) wasmHost() (*wasmHost, error) {
+	r.wasmMu.Lock()
+	defer r.wasmMu.Unlock()
+	if r.wasm == nil {
+		start := time.Now()
+		h, err := newWASMHost(context.Background(), r.Name, r.Bin, *r.WASM, r.logger())
+		if err != nil {
+			return nil, provider.Errorf(provider.Internal, "plugin %s: %v", r.Name, err)
+		}
+		r.logger().Debug("compiled WebAssembly plugin", "plugin", r.Name, "duration", time.Since(start))
+		r.wasm = h
+	}
+	return r.wasm, nil
+}
+
+// Prepare compiles a WebAssembly plugin, so that its first call need not,
+// and reports a module that tug cannot run. With CacheDir set, the compiled
+// module also serves later runs of tug. It does nothing for a native plugin.
+func (r *Runner) Prepare() error {
+	if r.WASM == nil {
+		return nil
+	}
+	_, err := r.wasmHost()
+	return err
+}
+
+// Exec runs the plugin with these arguments and streams, as its own process
+// would, and returns its exit status; cancelling ctx stops it. For a
+// WebAssembly plugin it is the process the conformance suite tests, through
+// `tug provider-exec`. The error is for a plugin that could not start.
+func (r *Runner) Exec(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if r.WASM == nil {
+		cmd := exec.CommandContext(ctx, r.Bin, args...)
+		cmd.Env = r.Environ()
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
+		cmd.Cancel = func() error { return terminate(cmd.Process) }
+		cmd.WaitDelay = killGrace
+		err := cmd.Run()
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return max(ee.ExitCode(), provider.ExitError), nil // -1 when a signal ended it
+		}
+		return 0, err
+	}
+	h, err := r.wasmHost()
+	if err != nil {
+		return 0, err
+	}
+	in, stop := readUntilDone(ctx, stdin)
+	defer stop()
+	err = h.run(ctx, args, r.wasmEnviron(), in, stdout, stderr)
+	var ee *wasmExitError
+	switch {
+	case err == nil:
+		return 0, nil
+	case errors.As(err, &ee):
+		return int(ee.code), nil
+	case ctx.Err() != nil:
+		return provider.ExitError, nil // as a process ended by a signal
+	default:
+		return provider.ExitError, fmt.Errorf("plugin %s %w", r.Name, err)
+	}
 }
 
 func (r *Runner) logger() *slog.Logger {
@@ -124,13 +231,38 @@ func (r *Runner) logger() *slog.Logger {
 }
 
 // Environ returns the scrubbed environment the plugin runs with: a few basics
-// such as PATH and HOME, plus the variables its manifest declares.
+// such as PATH and HOME, plus the variables its manifest declares. A
+// WebAssembly plugin gets less (see wasmEnviron).
 func (r *Runner) Environ() []string {
+	if r.WASM != nil {
+		return r.wasmEnviron()
+	}
 	names := append([]string{}, baseEnv...)
 	if runtime.GOOS == "windows" {
 		names = append(names, windowsEnv...)
 	}
-	names = append(names, r.Env...)
+	return append(lookupEnv(append(names, r.Env...)), "TUG_PLUGIN=1")
+}
+
+// wasmBaseEnv is what every WebAssembly plugin gets of tug's environment.
+// A module has no programs to find, sees none of the user's files and opens
+// no connections itself, so the paths and proxy settings a process gets
+// would mean nothing to it.
+var wasmBaseEnv = []string{"LANG", "LC_ALL", "LC_CTYPE", "TZ"}
+
+// wasmEnviron is the environment of a WebAssembly plugin: the locale, the
+// variables its manifest declares, HOME and TMPDIR set to its private
+// temporary directory, and TUG_PLUGIN=1.
+func (r *Runner) wasmEnviron() []string {
+	fixed := []string{"HOME", "TMPDIR", "TUG_PLUGIN"}
+	names := slices.DeleteFunc(append(slices.Clone(wasmBaseEnv), r.Env...), func(n string) bool {
+		return slices.Contains(fixed, n)
+	})
+	return append(lookupEnv(names), "HOME="+wasmTempDir, "TMPDIR="+wasmTempDir, "TUG_PLUGIN=1")
+}
+
+// lookupEnv returns NAME=value for each of names that is set, once each.
+func lookupEnv(names []string) []string {
 	env := make([]string, 0, len(names)+1)
 	seen := map[string]bool{}
 	for _, n := range names {
@@ -142,7 +274,7 @@ func (r *Runner) Environ() []string {
 			env = append(env, n+"="+v)
 		}
 	}
-	return append(env, "TUG_PLUGIN=1")
+	return env
 }
 
 // limitedBuffer stops accepting data past limit. The buffer is a named field,

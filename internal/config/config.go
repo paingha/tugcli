@@ -140,6 +140,28 @@ type PluginsConfig struct {
 	// private deployment or a machine that cannot reach Sigstore's TUF
 	// repository. A relative path is taken from the config directory.
 	SigstoreTrustedRoot string `json:"sigstoreTrustedRoot,omitempty"`
+	// WASM controls plugins' WebAssembly builds.
+	WASM WASMConfig `json:"wasm,omitempty"`
+}
+
+// WASMConfig controls the WebAssembly builds of plugins, which tug runs in
+// its own sandbox.
+type WASMConfig struct {
+	// Prefer runs a plugin's WebAssembly build even when it also has a
+	// build for this machine. Without it, the WebAssembly build is used
+	// only when there is no such build.
+	Prefer bool `json:"prefer,omitempty"`
+	// MemoryLimitMiB caps each module's memory. Default 256.
+	MemoryLimitMiB int `json:"memoryLimitMiB,omitempty"`
+}
+
+// MemoryLimit returns the configured memory limit in bytes, or zero for the
+// plugin host's default.
+func (c WASMConfig) MemoryLimit() uint64 {
+	if c.MemoryLimitMiB <= 0 {
+		return 0
+	}
+	return uint64(c.MemoryLimitMiB) << 20
 }
 
 // PluginIndex is one signed plugin index.

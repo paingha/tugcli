@@ -78,12 +78,30 @@ func TestScaffoldGoBuildsTestsAndConforms(t *testing.T) {
 	}
 	conform(t, conformance.Target{Command: bin}, "my-cloud")
 
+	// `make wasm` builds the WebAssembly platform the manifest lists, and
+	// that build conforms too, run by the host.
+	makefile, _ := os.ReadFile(filepath.Join(dir, "Makefile"))
+	if !strings.Contains(string(makefile), "GOOS=wasip1 GOARCH=wasm go build -trimpath -o bin/wasm/plugin.wasm .") {
+		t.Fatalf("the Makefile has no wasm target:\n%s", makefile)
+	}
+	wasmBuild := exec.Command("go", "build", "-trimpath", "-o", filepath.Join("bin", "wasm", "plugin.wasm"), ".")
+	wasmBuild.Dir = dir
+	wasmBuild.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOOS="+WASMOS, "GOARCH="+WASMArch)
+	if out, err := wasmBuild.CombinedOutput(); err != nil {
+		t.Fatalf("make wasm: %v\n%s", err, out)
+	}
+	wasm, err := Load(dir, true, PreferWASM(true))
+	if err != nil || !wasm.WASM || wasm.Bin != filepath.Join(dir, "bin", "wasm", "plugin.wasm") {
+		t.Fatalf("Load preferring WebAssembly = %+v, %v", wasm, err)
+	}
+	conform(t, wasmTarget(t, wasm), "my-cloud")
+
 	// The scaffold packages and installs.
 	res, err := Package(dir, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Manifest.Spec.Platforms) != 1 || len(res.Missing) != 4 {
+	if len(res.Manifest.Spec.Platforms) != 2 || len(res.Missing) != 4 {
 		t.Fatalf("packaged %d platforms, %d missing", len(res.Manifest.Spec.Platforms), len(res.Missing))
 	}
 	staged, err := NewDirs(t.TempDir()).Stage(res.Path, res.SHA256)

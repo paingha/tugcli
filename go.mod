@@ -17,6 +17,7 @@ require (
 	github.com/sigstore/protobuf-specs v0.5.1
 	github.com/sigstore/sigstore-go v1.3.0
 	github.com/spf13/cobra v1.10.2
+	github.com/tetratelabs/wazero v1.12.0
 	github.com/theupdateframework/go-tuf/v2 v2.4.2
 	github.com/xtaci/smux v1.5.58
 	github.com/zalando/go-keyring v0.2.8
