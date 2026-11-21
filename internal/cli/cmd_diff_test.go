@@ -56,7 +56,7 @@ func (f *fakeNamespace) apply(w http.ResponseWriter, r *http.Request, resource, 
 	var entries []map[string]any
 	if md, ok := live["metadata"].(map[string]any); ok {
 		for _, e := range asList(md["managedFields"]) {
-			if m, ok := e.(map[string]any); ok && !(m["manager"] == manager && m["operation"] == "Apply") {
+			if m, ok := e.(map[string]any); ok && (m["manager"] != manager || m["operation"] != "Apply") {
 				entries = append(entries, m)
 			}
 		}

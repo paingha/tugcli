@@ -73,10 +73,10 @@ func (p *Path) UnmarshalText(b []byte) error {
 	s := string(b)
 	var out Path
 	for s != "" {
-		switch {
-		case s[0] == '.':
+		switch s[0] {
+		case '.':
 			s = s[1:]
-		case s[0] == '[':
+		case '[':
 			end := strings.IndexByte(s, ']')
 			if strings.HasPrefix(s, `[name="`) {
 				// The name is a JSON string, which may hold a "]".
