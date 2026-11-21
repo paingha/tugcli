@@ -39,6 +39,11 @@ while `kubectl` run directly is only guarded with
 When the terminal isn't connected, `tug <command>` behaves like plain kubectl
 with your usual config.
 
+Your own [aliases](/docs/reference/commands/shortcuts#tug-alias) are expanded
+first, so `tug alias set wide 'get -o wide'` makes `tug wide pods` run
+`kubectl get -o wide pods`. An alias can never take the name of one of tug's
+commands, and one that may write says what it runs before the guard sees it.
+
 ## Names tug uses for itself
 
 A few of tug's commands share a name with a kubectl command. For these, tug's

@@ -39,6 +39,9 @@ terminal. Any command not listed here is passed to
 | [`tug tree`](/docs/reference/commands/workloads#tug-tree) | Show what a workload or any other object owns, with the health of each part. |
 | [`tug watch`](/docs/reference/commands/workloads#tug-watch) | Follow a rollout, or any object's reconciliation, as it happens. |
 | [`tug support bundle`](/docs/reference/commands/workloads#tug-support-bundle) | Collect an object's or a namespace's YAML, diagnosis, events, logs and nodes into a redacted archive. |
+| [`tug pick`](/docs/reference/commands/shortcuts#tug-pick) | Fuzzy-pick an object, then run why, tree, logs, describe or pf on it. |
+| [`tug bookmark`](/docs/reference/commands/shortcuts#tug-bookmark) | Save objects and places under short names, and open them from any terminal. |
+| [`tug open`](/docs/reference/commands/shortcuts#tug-open) | Open the file that defines an object in your editor, or else its live YAML. |
 
 ## Discover
 
@@ -57,6 +60,7 @@ terminal. Any command not listed here is passed to
 | --- | --- |
 | [`tug unlock`](/docs/reference/commands/safety#tug-unlock) | Allow writes on a read-only session for a while. |
 | [`tug lock`](/docs/reference/commands/safety#tug-lock) | Make it read-only again now. |
+| [`tug audit`](/docs/reference/commands/safety#tug-audit) | List what tug let through and refused, and sessions and unlocks. |
 
 ## Other
 
@@ -68,6 +72,7 @@ terminal. Any command not listed here is passed to
 | [`tug auth token`](/docs/reference/commands/other#tug-auth-token) | The credential helper kubectl calls. |
 | [`tug daemon`](/docs/reference/commands/other#tug-daemon) | Manage tugd, the local API proxy. |
 | [`tug version`](/docs/reference/commands/other#tug-version) | Print tug's version. |
+| [`tug alias`](/docs/reference/commands/shortcuts#tug-alias) | Name your own shortcuts for tug and kubectl commands. |
 | [`tug completion`](/docs/reference/commands/other#tug-completion) | Generate tab completion for your shell. |
 
 ## Global flags
