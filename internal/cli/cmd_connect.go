@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -489,28 +488,6 @@ func newShellCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&o.readOnly, "read-only", false, "open read-only whatever the cluster's labels")
 	cmd.Flags().BoolVar(&o.readWrite, "read-write", false, "open read-write even on a production cluster")
 	return cmd
-}
-
-func newUICmd(a *app) *cobra.Command {
-	return &cobra.Command{
-		Use:   "ui",
-		Short: "Open k9s on this session's cluster",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := a.currentSession()
-			if err != nil {
-				return err
-			}
-			if !s.State.Connected() {
-				return errors.New("not connected; run `tug connect` first")
-			}
-			k9s, err := exec.LookPath("k9s")
-			if err != nil {
-				return errors.New("k9s is not installed; see https://k9scli.io")
-			}
-			env := append(os.Environ(), "KUBECONFIG="+s.KubeconfigPath())
-			return a.replaceProcess(k9s, args, env)
-		},
-	}
 }
 
 // completeClusters completes cluster names from the catalog.
