@@ -40,8 +40,9 @@ func newConnectCmd(a *app) *cobra.Command {
 touched. The cluster can be a name, a prefix, or a fuzzy match; label=value
 arguments filter first, for example: tug connect gpu=true.
 
-Clusters labelled env=prod open read-only. Use tug unlock to allow writes for a
-while, or --read-write to connect without the guard.`,
+Clusters labelled env=prod open read-only, as do those a team policy makes
+read-only. Use tug unlock to allow writes for a while, or --read-write to
+connect without the guard where no policy limits unlocks.`,
 		Aliases: []string{"c"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := a.currentSession()
@@ -70,6 +71,12 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	if err != nil {
 		return err
 	}
+	limits := a.limits(cl)
+	if o.readWrite {
+		if err := limits.CheckReadWrite(cl.Name); err != nil {
+			return err
+		}
+	}
 	readOnly, auth, err := a.connectByHand(ctx, s, cl, o)
 	if err != nil {
 		return err
@@ -78,7 +85,7 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	c := a.colors()
 	mode := c.Green("read-write")
 	if readOnly {
-		mode = c.Red("read-only") + c.Dim(" (tug unlock 15m to allow writes)")
+		mode = c.Red("read-only") + c.Dim(" (tug unlock "+guard.ShortDuration(limits.Unlock(defaultUnlock))+" to allow writes)")
 	}
 	fmt.Fprintf(a.stdout, "Connected to %s, namespace %s, %s\n", c.Bold(cl.Name), s.State.Namespace, mode)
 	if auth.ProxyURL != "" {
@@ -118,11 +125,19 @@ func (a *app) connectByHand(ctx context.Context, s *session.Session, cl *catalog
 // connectTo points session s at cl: read-only by its labels unless o says
 // otherwise, and through tugd when o asks or the cluster has a tunnel.
 func (a *app) connectTo(ctx context.Context, s *session.Session, cl *catalog.Cluster, o connectOptions) (bool, session.AuthCommand, error) {
-	readOnly := guard.ReadOnlyFor(cl.EffectiveLabels(), a.cfg.Guard.ReadOnlyLabels)
+	limits := a.limits(cl)
+	readOnly := limits.ReadOnly
 	switch {
 	case o.readOnly:
 		readOnly = true
 	case o.readWrite:
+		// tug connect refuses --read-write where a policy limits unlocks;
+		// putting a connection back, as leaving a pinned directory does,
+		// opens read-only there instead.
+		if err := limits.CheckReadWrite(cl.Name); err != nil {
+			fmt.Fprintf(a.stderr, "%s %v\n", a.colors().Yellow("warning:"), err)
+			break
+		}
 		readOnly = false
 	}
 	auth := session.AuthCommand{Command: selfPath()}
@@ -439,13 +454,20 @@ func (a *app) namespaces(ctx context.Context, s *session.Session) ([]string, err
 	return names, nil
 }
 
+// defaultUnlock is how long tug unlock allows writes when no duration is
+// given and no policy says less.
+const defaultUnlock = 15 * time.Minute
+
 func newUnlockCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock [duration]",
 		Short: "Allow writes on a read-only session for a while (default 15m)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Allow writes on a read-only session for a while, 15 minutes by default. A
+team policy can limit how long an unlock lasts; tug unlock then refuses a
+longer one, and without a duration unlocks for the limit if it is shorter.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d := 15 * time.Minute
+			d := defaultUnlock
 			if len(args) == 1 {
 				var err error
 				if d, err = time.ParseDuration(args[0]); err != nil || d <= 0 {
@@ -462,6 +484,19 @@ func newUnlockCmd(a *app) *cobra.Command {
 			if !s.State.ReadOnly {
 				_, err := fmt.Fprintf(a.stdout, "%s is already read-write\n", s.State.ClusterName)
 				return err
+			}
+			cat, err := a.loadCatalog()
+			if err != nil {
+				return err
+			}
+			if cl, err := cat.Get(s.State.ClusterID); err == nil {
+				limits := a.limits(cl)
+				if len(args) == 1 {
+					if err := limits.CheckUnlock(cl.Name, d); err != nil {
+						return err
+					}
+				}
+				d = limits.Unlock(d)
 			}
 			if err := s.Unlock(d); err != nil {
 				return err

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/render"
@@ -32,6 +34,17 @@ func (a *app) indexSources() ([]plugin.IndexSource, error) {
 		}
 		if ix.Name == "" || ix.URL == "" {
 			return nil, errors.New("every entry in plugins.indexes needs a name, a url and a publicKey")
+		}
+		srcs = append(srcs, plugin.IndexSource{Name: ix.Name, URL: ix.URL, PublicKey: key})
+	}
+	// Indexes a team approves come after the user's own, named
+	// <team>/<index>; one that config.yaml lists already is left out.
+	for _, ix := range a.teamIndexes() {
+		key, err := plugin.ParsePublicKey(ix.PublicKey)
+		if err != nil || slices.ContainsFunc(a.cfg.Plugins.Indexes, func(own config.PluginIndex) bool {
+			return own.URL == ix.URL && own.PublicKey == ix.PublicKey
+		}) {
+			continue
 		}
 		srcs = append(srcs, plugin.IndexSource{Name: ix.Name, URL: ix.URL, PublicKey: key})
 	}
