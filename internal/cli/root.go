@@ -62,7 +62,7 @@ prefixed with its cluster:
 		newWhyCmd(a), newTreeCmd(a),
 	)
 	add("discover", newImportCmd(a), newSyncCmd(a), newLsCmd(a), newLabelCmd(a), newForgetCmd(a), newPluginCmd(a))
-	add("safety", newUnlockCmd(a), newLockCmd(a))
+	add("safety", newUnlockCmd(a), newLockCmd(a), newAuditCmd(a))
 	add("other", newAuthCmd(a), newDaemonCmd(a), newVersionCmd(a))
 	root.AddCommand(newSessionCmd(a), newProviderExecCmd(a))
 	root.SetHelpCommandGroupID("other")

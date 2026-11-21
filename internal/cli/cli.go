@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/rest"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/browser"
 	"github.com/paingha/tugcli/internal/builtin/argocd"
 	"github.com/paingha/tugcli/internal/builtin/aws"
@@ -371,6 +372,9 @@ func (a *app) signInUI(device bool) oidc.UI {
 		Device: device || os.Getenv("SSH_CONNECTION") != "",
 	}
 }
+
+// audit returns the log of the writes tug lets through.
+func (a *app) audit() *audit.Log { return audit.New(audit.Dir(a.paths.Data), audit.WithNow(a.now)) }
 
 func (a *app) catalogPath() string { return catalog.Path(a.paths.Data) }
 

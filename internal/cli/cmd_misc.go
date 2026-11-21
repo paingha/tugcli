@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/passthrough"
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/session"
@@ -88,18 +89,31 @@ func shortCommit(c string) string {
 
 // passthrough runs kubectl with the session commands run in (see
 // app.session). On a read-only session, commands that may write are
-// refused unless the user confirms.
-func (a *app) passthrough(_ context.Context, args []string) (int, error) {
+// refused unless the user confirms. Those that run are recorded in the
+// audit log first, unless the session goes through tugd, which records
+// each of their requests instead.
+func (a *app) passthrough(ctx context.Context, args []string) (int, error) {
 	kubeconfigPath := ""
+	var write *audit.Entry
 	s, err := a.session()
 	switch {
 	case err == nil && s.State.Connected():
 		kubeconfigPath = s.KubeconfigPath()
-		if !s.State.Writable(a.now()) && !passthrough.IsRead(args) {
-			question := fmt.Sprintf("%s is read-only. Run `kubectl %s` anyway?", s.State.ClusterName, strings.Join(args, " "))
-			if !a.confirm(question, false) {
-				return 1, fmt.Errorf("refused: %s is read-only and `kubectl %s` may write; run `tug unlock 15m` to allow writes",
-					s.State.ClusterName, strings.Join(args, " "))
+		if passthrough.IsRead(args) {
+			break
+		}
+		allowed, err := a.allowKubectlWrite(s, args)
+		if err != nil {
+			return 1, err
+		}
+		if s.State.ProxyURL == "" {
+			write = &audit.Entry{
+				Source:    audit.SourceKubectl,
+				Cluster:   s.State.ClusterName,
+				ClusterID: s.State.ClusterID,
+				Session:   s.State.ID,
+				Allowed:   allowed,
+				Command:   audit.RedactCommand(args),
 			}
 		}
 	case err == nil, errors.Is(err, session.ErrNoSession):
@@ -111,6 +125,12 @@ func (a *app) passthrough(_ context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	if write != nil {
+		if err := a.audit().Record(ctx, *write); err != nil {
+			return 1, fmt.Errorf("not running `kubectl %s`, since it could not be recorded in the audit log: %w",
+				strings.Join(write.Command, " "), err)
+		}
+	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = a.stdin, a.stdout, a.stderr
 	if err := cmd.Run(); err != nil {
 		code := passthrough.ExitCode(err)
@@ -121,4 +141,22 @@ func (a *app) passthrough(_ context.Context, args []string) (int, error) {
 		return code, nil
 	}
 	return 0, nil
+}
+
+// allowKubectlWrite says how a kubectl command that may write is allowed on
+// session s, as the audit log puts it. On a read-only session that is not
+// unlocked it asks first, and refuses when the answer is no.
+func (a *app) allowKubectlWrite(s *session.Session, args []string) (string, error) {
+	switch {
+	case !s.State.ReadOnly:
+		return audit.AllowedReadWrite, nil
+	case s.State.Writable(a.now()):
+		return audit.AllowedUnlocked, nil
+	}
+	question := fmt.Sprintf("%s is read-only. Run `kubectl %s` anyway?", s.State.ClusterName, strings.Join(args, " "))
+	if !a.confirm(question, false) {
+		return "", fmt.Errorf("refused: %s is read-only and `kubectl %s` may write; run `tug unlock 15m` to allow writes",
+			s.State.ClusterName, strings.Join(args, " "))
+	}
+	return audit.AllowedConfirmed, nil
 }
