@@ -1,0 +1,30 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: omni
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/omni
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-omni}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-omni}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-omni}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-omni}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-omni.exe}
+  secrets:
+  - {name: service_account_key, prompt: "Omni service account key (OMNI_SERVICE_ACCOUNT_KEY)", optional: true}
+  env: [OMNICONFIG]
+  # omnictl talks to the Omni instance of the omniconfig context, or of the
+  # account's endpoint setting, so there is no fixed host to list.
+  network: ["the Omni instance of the omniconfig context or the endpoint setting"]
+  accountConfig:
+    type: object
+    properties:
+      context: {type: string, description: "omniconfig context omnictl uses (default: the current one)"}
+      endpoint: {type: string, description: "Omni endpoint (https), passed to omnictl as OMNI_ENDPOINT (default: the omniconfig context's); required with a service account key"}
+      serviceAccountUser: {type: string, description: "user of the Kubernetes service account tokens made with a service account key (default: the service account's name)"}
+      serviceAccountGroups: {type: string, description: "comma-separated groups of those tokens (default: system:masters)"}
+      tokenTTL: {type: string, description: "lifetime of those tokens, such as 8h (default: 1h)"}

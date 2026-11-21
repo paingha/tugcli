@@ -1,0 +1,30 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: openshift
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/openshift
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-openshift}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-openshift}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-openshift}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-openshift}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-openshift.exe}
+  secrets:
+  - {name: offline_token, prompt: "OpenShift Cluster Manager offline token (https://console.redhat.com/openshift/token)"}
+  # oc reads the user's kubeconfig for the tokens oc login keeps.
+  env: [KUBECONFIG]
+  # oc also talks to the API servers of the clusters it is asked about.
+  network: [sso.redhat.com, api.openshift.com, "the API servers of the clusters, through oc"]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "OpenShift Cluster Manager API endpoint override (https)"}
+      tokenURL: {type: string, description: "Red Hat single sign-on token endpoint override (https)"}
+      search: {type: string, description: "OpenShift Cluster Manager search expression that narrows the listing, such as product.id = 'rosa'"}
+      oidcClientID: {type: string, description: "client ID to sign in with on clusters with an external OIDC issuer (default: the cluster's client for the CLI)"}
+      oidcScopes: {type: string, description: "extra scopes for those sign-ins, comma separated"}
