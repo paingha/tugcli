@@ -132,12 +132,16 @@ billing-5d4f-x2x4z   CrashLoopBackOff   0/1     7          node-1   3h
 
 error    pod/billing-5d4f-x2x4z, container main: CrashLoopBackOff
          keeps crashing and waits to restart; last exit code 1 (Error)
-         next: read the crashed container's logs: `tug logs pod/billing-5d4f-x2x4z --previous -n shop`
+         next: read the crashed container's logs:
+               tug logs pod/billing-5d4f-x2x4z --previous -n shop
 
 Recent warning events:
 LAST SEEN   OBJECT                   REASON    MESSAGE
 2m (x31)    pod/billing-5d4f-x2x4z   BackOff   Back-off restarting failed container main in pod billing-5d4f-x2x4z
 ```
+
+The command to try next gets a line of its own, so you can copy it straight
+into your shell.
 
 It works for deployments, statefulsets, daemonsets, jobs and pods
 (`tug why job/migrate`), and only ever reads. A healthy workload gets
