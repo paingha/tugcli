@@ -20,6 +20,14 @@ spec:
   env: [KUBECONFIG]
   # oc also talks to the API servers of the clusters it is asked about.
   network: [sso.redhat.com, api.openshift.com, "the API servers of the clusters, through oc"]
+  # The plugin runs oc, which reads the kubeconfig, caches API discovery
+  # beside it, and asks the clusters' API servers, on 6443, about the tokens
+  # it keeps there.
+  sandbox:
+    tools: [oc]
+    read: ["~/.kube/config", "$KUBECONFIG"]
+    write: ["~/.kube/cache"]
+    ports: [6443]
   accountConfig:
     type: object
     properties:

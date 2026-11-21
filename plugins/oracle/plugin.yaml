@@ -20,6 +20,10 @@ spec:
   secrets: []
   env: [OCI_CLI_CONFIG_FILE, OCI_CLI_PROFILE]
   network: [containerengine.*.oci.oraclecloud.com, identity.*.oci.oraclecloud.com]
+  # The plugin reads the OCI CLI config file and the private key it names,
+  # which `oci setup config` puts in ~/.oci.
+  sandbox:
+    read: ["~/.oci", "$OCI_CLI_CONFIG_FILE"]
   accountConfig:
     type: object
     properties:

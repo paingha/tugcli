@@ -20,6 +20,11 @@ spec:
   # omnictl talks to the Omni instance of the omniconfig context, or of the
   # account's endpoint setting, so there is no fixed host to list.
   network: ["the Omni instance of the omniconfig context or the endpoint setting"]
+  # The plugin runs omnictl, which reads the omniconfig (~/.talos/omni/config,
+  # or OMNICONFIG) and keeps the keys it signs in with under ~/.talos.
+  sandbox:
+    tools: [omnictl]
+    write: ["~/.talos", "$OMNICONFIG"]
   accountConfig:
     type: object
     properties:
