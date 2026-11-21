@@ -256,7 +256,7 @@ func (d Dirs) Stage(archive, wantSHA256 string) (*Staged, error) {
 		return nil, err
 	}
 	s := &Staged{Plugin: u.Plugin, dir: u.dir, Receipt: Receipt{SHA256: u.SHA256, Source: archive}}
-	if err := u.Plugin.Manifest.CheckTugVersion(d.TugVersion); err != nil {
+	if err := errors.Join(u.RunErr, u.Plugin.Manifest.CheckTugVersion(d.TugVersion)); err != nil {
 		s.Discard()
 		return nil, err
 	}
@@ -266,9 +266,14 @@ func (d Dirs) Stage(archive, wantSHA256 string) (*Staged, error) {
 // Unpacked is an archive extracted into a temporary directory to be looked
 // at, not installed.
 type Unpacked struct {
+	// Plugin is the plugin the archive holds. When RunErr is set it has
+	// only its Manifest and Dir.
 	Plugin *Plugin
 	// SHA256 is the archive's sha256.
 	SHA256 string
+	// RunErr says why the plugin cannot run here: it has no build for
+	// this machine.
+	RunErr error
 	dir    string
 }
 
@@ -277,7 +282,8 @@ func (u *Unpacked) Close() error { return os.RemoveAll(u.dir) }
 
 // Unpack extracts an archive into a temporary directory and loads it, as
 // Stage does, checking every binary against the manifest's sha256 but not
-// whether this tug is new enough to run it.
+// whether this tug is new enough to run it. A plugin with no build for this
+// machine is unpacked with RunErr set.
 func (d Dirs) Unpack(archive string) (*Unpacked, error) {
 	return d.unpack(archive, "", "", "tug-plugin-")
 }
@@ -303,6 +309,15 @@ func (d Dirs) unpack(archive, wantSHA256, parent, pattern string) (*Unpacked, er
 	if err != nil {
 		_ = u.Close()
 		return nil, err
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		_ = u.Close()
+		return nil, err
+	}
+	if len(m.Runnable(d.PreferWASM)) == 0 {
+		u.Plugin, u.RunErr = &Plugin{Manifest: m, Dir: root}, m.noBuild()
+		return u, nil
 	}
 	if u.Plugin, err = d.load(root, false); err != nil {
 		_ = u.Close()

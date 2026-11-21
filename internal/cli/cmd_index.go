@@ -69,6 +69,23 @@ func (a *app) loadIndexes(ctx context.Context) (loaded []plugin.Loaded, errs []e
 // the archive's URL and sha256. Without a version it is the highest one no
 // index has revoked; a revoked version is refused.
 func resolveIndexed(loaded []plugin.Loaded, errs []error, ref string) (plugin.Match, plugin.IndexVersion, error) {
+	m, v, err := lookupIndexed(loaded, errs, ref)
+	if err != nil {
+		return m, v, err
+	}
+	if r, by, revoked := plugin.FindRevoked(loaded, v.SHA256); revoked {
+		if !strings.Contains(ref, "@") {
+			return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has revoked every version of %s", by, m.Plugin.Name)
+		}
+		return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has revoked %s %s: %s; not installed", by, m.Plugin.Name, v.Version, dash(r.Reason))
+	}
+	return m, v, nil
+}
+
+// lookupIndexed finds name[@version] in the loaded indexes, revoked or not.
+// Without a version it is the highest one no index has revoked, or the
+// highest of all when every one is.
+func lookupIndexed(loaded []plugin.Loaded, errs []error, ref string) (plugin.Match, plugin.IndexVersion, error) {
 	name, version, _ := strings.Cut(ref, "@")
 	for _, m := range plugin.Search(loaded, name) {
 		if m.Plugin.Name != name {
@@ -78,17 +95,14 @@ func resolveIndexed(loaded []plugin.Loaded, errs []error, ref string) (plugin.Ma
 			_, _, revoked := plugin.FindRevoked(loaded, v.SHA256)
 			return !revoked
 		})
-		if version != "" {
-			v, ok = m.Plugin.Version(version)
-		}
 		switch {
-		case !ok && version == "":
-			return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has revoked every version of %s", m.Index, name)
+		case version != "":
+			v, ok = m.Plugin.Version(version)
 		case !ok:
-			return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has no version %q of %s", m.Index, version, name)
+			v, ok = m.Plugin.Latest()
 		}
-		if r, by, revoked := plugin.FindRevoked(loaded, v.SHA256); revoked {
-			return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has revoked %s %s: %s; not installed", by, name, v.Version, dash(r.Reason))
+		if !ok {
+			return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has no version %q of %s", m.Index, version, name)
 		}
 		return m, v, nil
 	}

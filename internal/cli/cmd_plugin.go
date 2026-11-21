@@ -34,7 +34,7 @@ func newPluginCmd(a *app) *cobra.Command {
 		Short:   "Install, write and test provider plugins",
 	}
 	cmd.AddCommand(
-		newPluginLsCmd(a), newPluginInstallCmd(a), newPluginRemoveCmd(a),
+		newPluginLsCmd(a), newPluginInstallCmd(a), newPluginInspectCmd(a), newPluginRemoveCmd(a),
 		newPluginLinkCmd(a), newPluginUnlinkCmd(a), newPluginDescribeCmd(a), newPluginSearchCmd(a), newPluginIndexCmd(a),
 		newPluginNewCmd(a), newPluginTestCmd(a), newPluginPackageCmd(a),
 	)
@@ -425,6 +425,7 @@ func (a *app) printManifest(p *plugin.Plugin) {
 	} else {
 		fmt.Fprintf(a.stderr, "  runs as:       %s\n", a.describeSandbox(m))
 	}
+	fmt.Fprintf(a.stderr, "  limits:        %s\n", describeLimits(limitsReport(m.Budget(a.pluginCaps()), p.WASM, sandbox.SupportedLimits())))
 	for i, s := range m.Settings() {
 		label := ""
 		if i == 0 {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,10 +74,17 @@ func (s *pluginSite) configPath() string { return filepath.Join(s.home, "config"
 // version, and returns the archive's path.
 func packagePlugin(t *testing.T, name, version string) string {
 	t.Helper()
+	return packagePluginWith(t, name, version, "")
+}
+
+// packagePluginWith packages a shell script plugin whose manifest's spec
+// also has the given lines.
+func packagePluginWith(t *testing.T, name, version, spec string) string {
+	t.Helper()
 	dir := t.TempDir()
 	manifest := "apiVersion: tug.plugin/v1alpha1\nkind: ProviderPlugin\nmetadata: {name: " + name + ", version: " + version + ", publisher: tests}\n" +
 		"spec:\n  protocols: [provider/v1alpha1]\n  capabilities: [list, credential]\n  platforms:\n" +
-		"  - {os: " + runtime.GOOS + ", arch: " + runtime.GOARCH + ", bin: tug-provider-" + name + "}\n"
+		"  - {os: " + runtime.GOOS + ", arch: " + runtime.GOARCH + ", bin: tug-provider-" + name + "}\n" + spec
 	if err := os.WriteFile(filepath.Join(dir, "plugin.yaml"), []byte(manifest), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -228,5 +236,102 @@ func TestPluginIndexKeyRotation(t *testing.T) {
 	}
 	if r := tug(t, "plugin", "search"); strings.Contains(r.stdout, "idx") || !strings.Contains(r.stderr, "index test: the index signature does not match its key") {
 		t.Fatalf("plugin search of an index signed with the replaced key: %+v", r)
+	}
+}
+
+func TestPluginInspect(t *testing.T) {
+	s := newPluginSite(t, "  limits: {cpuSeconds: 30}\n", "1.0.0")
+	archive := packagePluginWith(t, "idx", "2.0.0", `  secrets: [{name: token}, {name: org, optional: true}]
+  env: [IDX_PROFILE]
+  network: [api.idx.example]
+  sandbox: {tools: [sh, idxctl-not-installed], read: ["~/.idx"], ports: [8443]}
+  limits: {cpuSeconds: 120, memoryMiB: 256, timeouts: {list: 2m}}
+`)
+	published := filepath.Join(s.site, filepath.Base(archive))
+	if err := os.Rename(archive, published); err != nil {
+		t.Fatal(err)
+	}
+	mustTug(t, "plugin", "index", "add", s.index, published, "--url", s.srv.URL+"/"+filepath.Base(published))
+	s.sign(t)
+
+	out := mustTug(t, "plugin", "inspect", published)
+	for _, want := range []string{
+		"idx 2.0.0",
+		"listed in index test",
+		"signature:     none: index test names no Sigstore signature for it",
+		"revoked:       no",
+		"secrets:       token, org (optional)",
+		"environment:   IDX_PROFILE",
+		"network hosts: api.idx.example",
+		"reads:         ~/.idx",
+		"idxctl-not-installed (not found here)",
+		"30s of CPU time and 256 MiB of memory per process",
+		"list 2m0s",
+		"it asks for more: cpuSeconds 120, capped at 30",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("plugin inspect of an archive lacks %q:\n%s", want, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(s.home, "data", "plugins", "idx")); err == nil {
+		t.Fatal("plugin inspect installed the plugin")
+	}
+
+	var r inspection
+	if err := json.Unmarshal([]byte(mustTug(t, "plugin", "inspect", published, "-o", "json")), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Source.Kind != "archive" || r.Source.Index != "test" || r.Limits.CPUSeconds != 30 || len(r.Secrets) != 2 || r.Runs.As != "native" || r.Revoked != nil {
+		t.Fatalf("plugin inspect -o json = %+v", r)
+	}
+
+	// From the index, by name@version, and installed.
+	if out := mustTug(t, "plugin", "inspect", "idx@1.0.0"); !strings.Contains(out, "idx 1.0.0") || !strings.Contains(out, "source:        index test, "+s.srv.URL) {
+		t.Fatalf("plugin inspect from the index: %s", out)
+	}
+	mustTug(t, "plugin", "install", "idx@1.0.0", "--yes")
+	out = mustTug(t, "plugin", "inspect", "idx")
+	if !strings.Contains(out, "source:        installed in ") || !strings.Contains(out, "listed in index test") || !strings.Contains(out, "installed from "+s.srv.URL) {
+		t.Fatalf("plugin inspect of an installed plugin: %s", out)
+	}
+
+	// Revoked once installed, and from the index while pinned elsewhere.
+	mustTug(t, "plugin", "index", "revoke", s.index, s.archives["1.0.0"], "--reason", "leaks tokens")
+	s.sign(t)
+	if out := mustTug(t, "plugin", "inspect", "idx"); !strings.Contains(out, "revoked:       REVOKED by index test: leaks tokens") {
+		t.Fatalf("plugin inspect of a revoked installed plugin: %s", out)
+	}
+	s.config(t, "  pins: {idx: \"2.0.0\"}\n")
+	out = mustTug(t, "plugin", "inspect", "idx@1.0.0")
+	if !strings.Contains(out, "revoked:       REVOKED by index test: leaks tokens") || !strings.Contains(out, "pinned:        2.0.0 in config.yaml, so tug plugin install refuses 1.0.0") {
+		t.Fatalf("plugin inspect of a revoked version pinned to another: %s", out)
+	}
+
+	if r := tug(t, "plugin", "inspect", "kubeconfig"); r.code == 0 || !strings.Contains(r.stderr, "built into tug") {
+		t.Fatalf("plugin inspect of a built-in: %+v", r)
+	}
+	if r := tug(t, "plugin", "inspect", "nope"); r.code == 0 || !strings.Contains(r.stderr, "no plugin nope in the plugin indexes") {
+		t.Fatalf("plugin inspect of an unknown plugin: %+v", r)
+	}
+}
+
+func TestPluginInspectSigned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plugin")
+	}
+	s := newSignedIndex(t, false)
+	s.add(t, s.signedBy(releaseWorkflow)...)
+	if out := mustTug(t, "plugin", "inspect", "idx@1.0.0"); !strings.Contains(out, "signed by:     "+releaseWorkflow) || !strings.Contains(out, "(checked now)") {
+		t.Fatalf("plugin inspect of a signed plugin: %s", out)
+	}
+	mustTug(t, "plugin", "install", "idx", "--yes")
+	if out := mustTug(t, "plugin", "inspect", "idx"); !strings.Contains(out, "signed by:     "+releaseWorkflow+" (checked when it was installed from ") {
+		t.Fatalf("plugin inspect of an installed signed plugin: %s", out)
+	}
+
+	// A signature by someone else shows as invalid.
+	s.add(t, s.signedBy(strings.Replace(releaseWorkflow, "tests/", "mallory/", 1))...)
+	if out := mustTug(t, "plugin", "inspect", "idx@1.0.0"); !strings.Contains(out, "signature:     INVALID") {
+		t.Fatalf("plugin inspect with the wrong signer: %s", out)
 	}
 }
