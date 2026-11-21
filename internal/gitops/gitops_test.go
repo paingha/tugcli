@@ -152,6 +152,9 @@ func fixtures(t *testing.T, file string) []*unstructured.Unstructured {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Git may check the file out with CRLF line ends, as it does on
+	// Windows.
+	b = bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
 	var out []*unstructured.Unstructured
 	for _, doc := range bytes.Split(b, []byte("\n---\n")) {
 		// Through JSON, as the dynamic client decodes, so numbers are
