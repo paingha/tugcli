@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -70,16 +69,9 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	if err != nil {
 		return err
 	}
-	readOnly, auth, err := a.connectTo(ctx, s, cl, o)
+	readOnly, auth, err := a.connectByHand(ctx, s, cl, o)
 	if err != nil {
 		return err
-	}
-	// Connecting by hand ends any pin: leaving the pinned directory must
-	// not undo the user's own choice.
-	if s.State.Pin != nil {
-		if err := s.SetPin(nil); err != nil {
-			return err
-		}
 	}
 
 	c := a.colors()
@@ -104,6 +96,22 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 		fmt.Fprintf(a.stderr, "%s %v\n", c.Yellow("warning: credentials are not ready:"), err)
 	}
 	return nil
+}
+
+// connectByHand points session s at cl as the user chose, in tug connect or
+// the TUI. It ends any pin: leaving the pinned directory must not undo the
+// user's own choice.
+func (a *app) connectByHand(ctx context.Context, s *session.Session, cl *catalog.Cluster, o connectOptions) (bool, session.AuthCommand, error) {
+	readOnly, auth, err := a.connectTo(ctx, s, cl, o)
+	if err != nil {
+		return false, auth, err
+	}
+	if s.State.Pin != nil {
+		if err := s.SetPin(nil); err != nil {
+			return false, auth, err
+		}
+	}
+	return readOnly, auth, nil
 }
 
 // connectTo points session s at cl: read-only by its labels unless o says
@@ -483,28 +491,6 @@ func newShellCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&o.readOnly, "read-only", false, "open read-only whatever the cluster's labels")
 	cmd.Flags().BoolVar(&o.readWrite, "read-write", false, "open read-write even on a production cluster")
 	return cmd
-}
-
-func newUICmd(a *app) *cobra.Command {
-	return &cobra.Command{
-		Use:   "ui",
-		Short: "Open k9s on this session's cluster",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := a.currentSession()
-			if err != nil {
-				return err
-			}
-			if !s.State.Connected() {
-				return errors.New("not connected; run `tug connect` first")
-			}
-			k9s, err := exec.LookPath("k9s")
-			if err != nil {
-				return errors.New("k9s is not installed; see https://k9scli.io")
-			}
-			env := append(os.Environ(), "KUBECONFIG="+s.KubeconfigPath())
-			return a.replaceProcess(k9s, args, env)
-		},
-	}
 }
 
 // completeClusters completes cluster names from the catalog.

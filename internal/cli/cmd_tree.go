@@ -63,21 +63,6 @@ shows only the key names of Secrets.`,
 	return cmd
 }
 
-// treeKinds are the short names tree labels objects with.
-var treeKinds = map[string]string{
-	"Deployment":            "deploy",
-	"StatefulSet":           "sts",
-	"DaemonSet":             "ds",
-	"Job":                   "job",
-	"ReplicaSet":            "rs",
-	"ControllerRevision":    "controllerrevision",
-	"Pod":                   "pod",
-	"Service":               "svc",
-	"ConfigMap":             "cm",
-	"Secret":                "secret",
-	"PersistentVolumeClaim": "pvc",
-}
-
 // treeLines turns a workload's tree into lines with a health marker.
 func (a *app) treeLines(n ops.TreeNode) render.TreeNode {
 	c := a.colors()
@@ -90,7 +75,7 @@ func (a *app) treeLines(n ops.TreeNode) render.TreeNode {
 	case ops.KindEphemeralContainer:
 		label = "ephemeral container " + n.Name
 	default:
-		label = treeKinds[n.Kind] + "/" + n.Name
+		label = ops.ShortKind(n.Kind) + "/" + n.Name
 	}
 	marker := c.Yellow("?")
 	switch n.Health {

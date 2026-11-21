@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -87,23 +86,6 @@ func (a *app) resolveTarget(ctx context.Context, env *opsEnv, arg string) (resol
 		return resolve.Target{}, err
 	}
 	return matches[i], nil
-}
-
-// targetPod picks the pod to act on: the first ready one.
-func (a *app) targetPod(ctx context.Context, env *opsEnv, t resolve.Target) (*corev1.Pod, error) {
-	pods, err := resolve.Pods(ctx, env.cs, t)
-	if err != nil {
-		return nil, err
-	}
-	for i := range pods {
-		if pods[i].Status.Phase == corev1.PodRunning {
-			return &pods[i], nil
-		}
-	}
-	if len(pods) == 0 {
-		return nil, fmt.Errorf("%s has no pods", t)
-	}
-	return nil, fmt.Errorf("%s has no running pod (first is %s, %s)", t, pods[0].Name, pods[0].Status.Phase)
 }
 
 // ensureWritable asks once, before any request, whether to write on a
@@ -249,7 +231,7 @@ until the pod is replaced, and adding one is a write.`,
 			if err != nil {
 				return err
 			}
-			pod, err := a.targetPod(ctx, env, t)
+			pod, err := resolve.RunningPod(ctx, env.cs, t)
 			if err != nil {
 				return err
 			}
@@ -263,9 +245,9 @@ until the pod is replaced, and adding one is a write.`,
 			if err := a.ensureWritable(env, fmt.Sprintf("Run a command in pod/%s", pod.Name)); err != nil {
 				return err
 			}
-			err = a.exec(ctx, env, pod.Name, c, command)
+			err = a.exec(ctx, env, a.console(), pod.Name, c, command)
 			if len(command) > 0 || !ops.NoShell(err) {
-				return err
+				return remoteExit(err)
 			}
 			if !a.confirm(fmt.Sprintf("Container %s of pod/%s has no shell. Add an ephemeral debug container (%s) to the pod?", c, pod.Name, o.image), false) {
 				return fmt.Errorf("container %s of pod/%s has no shell; to open one in an ephemeral debug container, run `%s`",
@@ -297,20 +279,28 @@ func debugCommand(cmd *cobra.Command, target string, o shOptions) string {
 	return line
 }
 
-// debugShell adds an ephemeral debug container beside a pod's container,
-// waits for it to start and attaches to it. A command it runs may finish
-// before tug can attach; its logs are shown then.
+// debugShell asks before writing on a read-only session, then opens a
+// shell in a debug container on tug's own streams.
 func (a *app) debugShell(ctx context.Context, env *opsEnv, pod, target, image string, command []string) error {
 	if err := a.ensureWritable(env, fmt.Sprintf("Add a debug container to pod/%s", pod)); err != nil {
 		return err
 	}
+	return remoteExit(a.debugContainer(ctx, env, a.console(), pod, target, image, command))
+}
+
+// debugContainer adds an ephemeral debug container beside a pod's
+// container, waits for it to start and attaches con to it. A command it
+// runs may finish before tug can attach; its logs are shown then. The
+// caller has dealt with the guard.
+func (a *app) debugContainer(ctx context.Context, env *opsEnv, con console, pod, target, image string, command []string) error {
 	name, err := ops.AddDebugContainer(ctx, env.cs, ops.DebugOptions{
-		Namespace: env.namespace, Pod: pod, Target: target, Image: image, Command: command, TTY: a.localTTY(),
+		Namespace: env.namespace, Pod: pod, Target: target, Image: image, Command: command, TTY: con.tty(),
 	})
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stderr, "%s\n", a.colors().Dim(fmt.Sprintf(
+	c := con.colors()
+	fmt.Fprintf(con.stderr, "%s\n", c.Dim(fmt.Sprintf(
 		"Added debug container %s (%s) to pod/%s, sharing the processes of %s; waiting for it to start", name, image, pod, target)))
 
 	wait, cancel := context.WithTimeout(ctx, debugStartTimeout)
@@ -329,9 +319,9 @@ func (a *app) debugShell(ctx context.Context, env *opsEnv, pod, target, image st
 	if t := state.Terminated; t != nil {
 		err := ops.Logs(ctx, env.cs, resolve.Target{Kind: resolve.KindPod, Name: pod, Namespace: env.namespace},
 			ops.LogOptions{Container: name, Tail: -1}, ops.LogSink{
-				Line: func(l ops.LogLine) { fmt.Fprintln(a.stdout, l.Text) },
+				Line: func(l ops.LogLine) { fmt.Fprintln(con.stdout, l.Text) },
 				Error: func(pod, container string, err error) {
-					fmt.Fprintf(a.stderr, "%s %s/%s: %v\n", a.colors().Yellow("warning:"), pod, container, err)
+					fmt.Fprintf(con.stderr, "%s %s/%s: %v\n", c.Yellow("warning:"), pod, container, err)
 				},
 			})
 		if err != nil {
@@ -343,32 +333,47 @@ func (a *app) debugShell(ctx context.Context, env *opsEnv, pod, target, image st
 		return nil
 	}
 	banner := fmt.Sprintf("pod/%s, debug container %s; exit to leave, and press Enter if there is no prompt", pod, name)
-	err = a.interact(banner, func(r remoteIO) error {
+	return con.interact(banner, func(r remoteIO) error {
 		return ops.Attach(ctx, env.cfg, env.cs, ops.AttachOptions{
 			Namespace: env.namespace, Pod: pod, Container: name,
-			Stdin: r.stdin, Stdout: a.stdout, Stderr: a.stderr, TTY: r.tty, Sizes: r.sizes,
+			Stdin: r.stdin, Stdout: con.stdout, Stderr: con.stderr, TTY: r.tty, Sizes: r.sizes,
 		})
 	})
+}
+
+// exec runs a command in a container on con, with a raw TTY when con is a
+// terminal. A command that exits non-zero returns an error ops.ExitCode
+// reads.
+func (a *app) exec(ctx context.Context, env *opsEnv, con console, pod, container string, command []string) error {
+	banner := fmt.Sprintf("pod/%s, container %s; exit to leave", pod, container)
+	return con.interact(banner, func(r remoteIO) error {
+		return ops.Exec(ctx, env.cfg, env.cs, ops.ExecOptions{
+			Namespace: env.namespace, Pod: pod, Container: container, Command: command,
+			Stdin: r.stdin, Stdout: con.stdout, Stderr: con.stderr, TTY: r.tty, Sizes: r.sizes,
+		})
+	})
+}
+
+// remoteExit makes a remote command's exit status tug's own.
+func remoteExit(err error) error {
 	if code, ok := ops.ExitCode(err); ok {
 		return &exitError{code: code}
 	}
 	return err
 }
 
-// exec runs a command in a container, with a raw TTY when interactive.
-func (a *app) exec(ctx context.Context, env *opsEnv, pod, container string, command []string) error {
-	banner := fmt.Sprintf("pod/%s, container %s; exit to leave", pod, container)
-	err := a.interact(banner, func(r remoteIO) error {
-		return ops.Exec(ctx, env.cfg, env.cs, ops.ExecOptions{
-			Namespace: env.namespace, Pod: pod, Container: container, Command: command,
-			Stdin: r.stdin, Stdout: a.stdout, Stderr: a.stderr, TTY: r.tty, Sizes: r.sizes,
-		})
-	})
-	if code, ok := ops.ExitCode(err); ok {
-		return &exitError{code: code}
-	}
-	return err
+// console is the local end of an exec or attach: tug's own streams, or the
+// terminal the TUI hands over while it is suspended.
+type console struct {
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
 }
+
+// console returns tug's own streams.
+func (a *app) console() console { return console{stdin: a.stdin, stdout: a.stdout, stderr: a.stderr} }
+
+func (c console) colors() render.Colors { return render.ColorsFor(c.stdout) }
 
 // remoteIO is the local end of an exec or attach.
 type remoteIO struct {
@@ -377,25 +382,25 @@ type remoteIO struct {
 	sizes remotecommand.TerminalSizeQueue
 }
 
-// localTTY reports whether stdin and stdout are both terminals, so that a
-// remote shell can have one too.
-func (a *app) localTTY() bool {
-	in, inIsFile := a.stdin.(*os.File)
-	out, outIsFile := a.stdout.(*os.File)
+// tty reports whether stdin and stdout are both terminals, so that a remote
+// shell can have one too.
+func (c console) tty() bool {
+	in, inIsFile := c.stdin.(*os.File)
+	out, outIsFile := c.stdout.(*os.File)
 	return inIsFile && outIsFile && term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
 }
 
-// interact runs an exec or attach with the local streams: in raw mode with
-// resizes when both ends are terminals, else with piped input.
-func (a *app) interact(banner string, run func(remoteIO) error) error {
-	r := remoteIO{tty: a.localTTY()}
-	in, inIsFile := a.stdin.(*os.File)
-	out, _ := a.stdout.(*os.File)
+// interact runs an exec or attach with the console's streams: in raw mode
+// with resizes when both ends are terminals, else with piped input.
+func (c console) interact(banner string, run func(remoteIO) error) error {
+	r := remoteIO{tty: c.tty()}
+	in, inIsFile := c.stdin.(*os.File)
+	out, _ := c.stdout.(*os.File)
 	if r.tty || !inIsFile || !term.IsTerminal(int(in.Fd())) {
-		r.stdin = a.stdin // a terminal, or piped input
+		r.stdin = c.stdin // a terminal, or piped input
 	}
 	if r.tty {
-		fmt.Fprintf(a.stderr, "%s\n", a.colors().Dim(banner))
+		fmt.Fprintf(c.stderr, "%s\n", c.colors().Dim(banner))
 		state, err := term.MakeRaw(int(in.Fd()))
 		if err != nil {
 			return err
@@ -434,7 +439,7 @@ deploy/ls or deploy/stop.`,
 			if err != nil {
 				return err
 			}
-			pod, err := a.targetPod(ctx, env, t)
+			pod, err := resolve.RunningPod(ctx, env.cs, t)
 			if err != nil {
 				return err
 			}

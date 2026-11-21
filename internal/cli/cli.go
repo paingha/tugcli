@@ -151,11 +151,7 @@ func (a *app) fail(err error) int {
 // setup resolves paths, loads config and the logger.
 func (a *app) setup(debug bool) error {
 	a.debug = a.debug || debug
-	level := slog.LevelWarn
-	if a.debug {
-		level = slog.LevelDebug
-	}
-	a.log = slog.New(slog.NewTextHandler(a.stderr, &slog.HandlerOptions{Level: level}))
+	a.log = a.logger(a.stderr)
 	paths, err := config.DefaultPaths()
 	if err != nil {
 		return err
@@ -167,6 +163,15 @@ func (a *app) setup(debug bool) error {
 	}
 	a.cfg = cfg
 	return nil
+}
+
+// logger logs to w at Warn, or at Debug with --debug.
+func (a *app) logger(w io.Writer) *slog.Logger {
+	level := slog.LevelWarn
+	if a.debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
 }
 
 // credentialStore opens the keychain or encrypted file on first use.
