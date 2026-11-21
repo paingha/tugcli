@@ -3,8 +3,10 @@ package apiclient
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/paingha/tugcli/pkg/provider"
@@ -93,5 +95,45 @@ func TestDoSign(t *testing.T) {
 	}}
 	if err := failing.Do(context.Background(), http.MethodGet, "/x", nil, nil); provider.CodeOf(err) != provider.Unauthenticated {
 		t.Fatalf("Do with a failing Sign = %v, want its error", err)
+	}
+}
+
+func TestSend(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		switch r.URL.Path {
+		case "/form":
+			if ct := r.Header.Get("Content-Type"); ct != "application/x-www-form-urlencoded" || string(body) != "a=1" {
+				t.Errorf("form request has Content-Type %q and body %q", ct, body)
+			}
+			w.Header().Set("Next-Page", "p2")
+			fmt.Fprint(w, "kind: Config\n")
+		case "/missing":
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"errorCode":"INVALID_KEY"}`)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
+	}))
+	defer srv.Close()
+	code := func(status int, body []byte) provider.Code {
+		if status == http.StatusForbidden && strings.Contains(string(body), "INVALID_KEY") {
+			return provider.Unauthenticated
+		}
+		return ""
+	}
+	c := &Client{BaseURL: srv.URL, Token: "tok", Code: code}
+	ctx := context.Background()
+
+	form := RawBody{ContentType: "application/x-www-form-urlencoded", Data: []byte("a=1")}
+	resp, err := c.Send(ctx, http.MethodPost, "/form", form)
+	if err != nil || string(resp.Body) != "kind: Config\n" || resp.Header.Get("Next-Page") != "p2" {
+		t.Fatalf("Send(/form) = %+v, %v, want the body and headers", resp, err)
+	}
+	if _, err := c.Send(ctx, http.MethodGet, "/missing", nil); provider.CodeOf(err) != provider.Unauthenticated {
+		t.Errorf("Send(/missing) = %v, want the Unauthenticated that Code picks", err)
+	}
+	if _, err := c.Send(ctx, http.MethodGet, "/other", nil); provider.CodeOf(err) != provider.PermissionDenied {
+		t.Errorf("Send(/other) = %v, want the PermissionDenied of a 403", err)
 	}
 }

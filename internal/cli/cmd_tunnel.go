@@ -19,10 +19,12 @@ import (
 func newTunnelCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tunnel",
-		Short: "Reach private clusters through an SSH jump host, a proxy, AWS SSM or Google IAP",
+		Short: "Reach private clusters through an SSH jump host, a proxy, AWS SSM, Google IAP or tsh",
 		Long: `Give a cluster a tunnel when its API server is not directly reachable. tug
 commands then go through the tunnel, and tug connect routes kubectl, helm and
-k9s through tugd, which keeps the tunnel open.
+k9s through tugd, which keeps the tunnel open. A provider may list a cluster
+with a tunnel of its own; one you set wins over it, and tug tunnel ls says
+where each comes from.
 
 Tunnels:
   ssh://[user@]host[:port][?identity=<key file>]
@@ -36,7 +38,11 @@ Tunnels:
   iap://<instance>?project=<project>&zone=<zone>
   iap://?project=<project>&region=<region>&network=<network>&group=<group>
       Google Cloud IAP TCP forwarding to a VM, or to a host in a destination
-      group such as a private GKE endpoint; needs only Google credentials`,
+      group such as a private GKE endpoint; needs only Google credentials
+  tsh://<Teleport proxy>/<Teleport cluster>/<Kubernetes cluster>
+      Teleport's tsh proxy kube, for clusters that kubectl cannot reach
+      directly: behind a load balancer that needs connection upgrades, or
+      with a hardware key; tsh keeps the Teleport certificate`,
 	}
 	cmd.AddCommand(newTunnelSetCmd(a), newTunnelRmCmd(a), newTunnelLsCmd(a), newTunnelTestCmd(a))
 	return cmd
@@ -74,12 +80,15 @@ func newTunnelRmCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:     "rm <cluster>",
 		Aliases: []string{"unset"},
-		Short:   "Reach a cluster directly again",
+		Short:   "Remove the tunnel you set for a cluster",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cat, cl, err := a.tunnelCluster(args[0])
 			if err != nil {
 				return err
+			}
+			if cl.Tunnel == "" && cl.ProviderTunnel != "" {
+				return fmt.Errorf("%s goes through %s, which comes from %s; tug tunnel set replaces it with yours", cl.Name, tunnel.Redacted(cl.ProviderTunnel), cl.Provider)
 			}
 			if cl.Tunnel == "" {
 				return fmt.Errorf("%s has no tunnel", cl.Name)
@@ -89,8 +98,13 @@ func newTunnelRmCmd(a *app) *cobra.Command {
 			if err := cat.Save(a.catalogPath()); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.stdout, "Removed the tunnel %s from %s\n", tunnel.Redacted(was), cl.Name)
-			return err
+			if _, err := fmt.Fprintf(a.stdout, "Removed the tunnel %s from %s\n", tunnel.Redacted(was), cl.Name); err != nil {
+				return err
+			}
+			if cl.ProviderTunnel != "" {
+				fmt.Fprintln(a.stderr, a.colors().Dim(cl.Name+" goes through "+tunnel.Redacted(cl.ProviderTunnel)+" again, from "+cl.Provider))
+			}
+			return nil
 		},
 		ValidArgsFunction: a.completeClusters,
 	}
@@ -115,11 +129,17 @@ func newTunnelLsCmd(a *app) *cobra.Command {
 			type row struct {
 				Cluster string `json:"cluster"`
 				Tunnel  string `json:"tunnel"`
+				// Source is "user" for a tunnel set with tug tunnel set,
+				// or "provider".
+				Source string `json:"source"`
 			}
 			var rows []row
 			for _, cl := range cat.Clusters {
-				if cl.Tunnel != "" {
-					rows = append(rows, row{Cluster: cl.Name, Tunnel: tunnel.Redacted(cl.Tunnel)})
+				switch {
+				case cl.Tunnel != "":
+					rows = append(rows, row{Cluster: cl.Name, Tunnel: tunnel.Redacted(cl.Tunnel), Source: "user"})
+				case cl.ProviderTunnel != "":
+					rows = append(rows, row{Cluster: cl.Name, Tunnel: tunnel.Redacted(cl.ProviderTunnel), Source: "provider"})
 				}
 			}
 			switch format {
@@ -133,9 +153,9 @@ func newTunnelLsCmd(a *app) *cobra.Command {
 			}
 			table := make([][]string, 0, len(rows))
 			for _, r := range rows {
-				table = append(table, []string{r.Cluster, r.Tunnel})
+				table = append(table, []string{r.Cluster, r.Tunnel, r.Source})
 			}
-			return render.Table(a.stdout, []string{"CLUSTER", "TUNNEL"}, table)
+			return render.Table(a.stdout, []string{"CLUSTER", "TUNNEL", "SOURCE"}, table)
 		},
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: table, json, yaml or name")
@@ -170,7 +190,7 @@ how long that took. Without a cluster, test this terminal's cluster.`,
 					return err
 				}
 			}
-			if cl.Tunnel == "" {
+			if cl.EffectiveTunnel() == "" {
 				return fmt.Errorf("%s has no tunnel; tug tunnel set gives it one", cl.Name)
 			}
 			addr, err := serverAddress(cl.Server)
@@ -184,16 +204,17 @@ how long that took. Without a cluster, test this terminal's cluster.`,
 }
 
 func (a *app) testTunnel(ctx context.Context, cl *catalog.Cluster, addr string) error {
-	fmt.Fprintf(a.stderr, "Opening %s...\n", tunnel.Redacted(cl.Tunnel))
+	spec := cl.EffectiveTunnel()
+	fmt.Fprintf(a.stderr, "Opening %s...\n", tunnel.Redacted(spec))
 	start := a.now()
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	conn, err := a.tunnels().Dial(ctx, cl.Tunnel, addr)
+	conn, err := a.tunnels().Dial(ctx, spec, addr)
 	if err != nil {
-		return fmt.Errorf("reaching %s through %s: %w; run with --debug to see why the tunnel refused", addr, tunnel.Redacted(cl.Tunnel), err)
+		return fmt.Errorf("reaching %s through %s: %w; run with --debug to see why the tunnel refused", addr, tunnel.Redacted(spec), err)
 	}
 	conn.Close()
-	_, err = fmt.Fprintf(a.stdout, "Reached %s through %s in %s\n", addr, tunnel.Redacted(cl.Tunnel), a.now().Sub(start).Round(time.Millisecond))
+	_, err = fmt.Fprintf(a.stdout, "Reached %s through %s in %s\n", addr, tunnel.Redacted(spec), a.now().Sub(start).Round(time.Millisecond))
 	return err
 }
 

@@ -13,7 +13,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +24,7 @@ import (
 
 	"k8s.io/client-go/rest"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/session"
 )
@@ -90,7 +93,8 @@ type fixture struct {
 }
 
 // setup connects a read-only session to a fake cluster and registers it.
-func setup(t *testing.T) *fixture {
+// opts change tugd's config before it starts.
+func setup(t *testing.T, opts ...func(*Config)) *fixture {
 	t.Helper()
 	f := &fixture{runtime: t.TempDir(), cluster: newFakeCluster(t)}
 	mgr := session.NewManager(f.runtime)
@@ -104,7 +108,7 @@ func setup(t *testing.T) *fixture {
 	}
 	f.sess = s
 	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.cluster.srv.Certificate().Raw})
-	f.srv = New(Config{
+	cfg := Config{
 		RuntimeDir: f.runtime,
 		Sessions:   mgr,
 		Upstream: func(context.Context, string) (*rest.Config, error) {
@@ -112,7 +116,11 @@ func setup(t *testing.T) *fixture {
 			time.Sleep(f.upstreamDelay)
 			return &rest.Config{Host: f.cluster.srv.URL, BearerToken: upstreamToken, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}, nil
 		},
-	})
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	f.srv = New(cfg)
 	if f.token, err = f.srv.Register(s.State.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +200,74 @@ func TestProxyGuardsWritesForEveryClient(t *testing.T) {
 	}
 	if f.cluster.deletes.Load() != 1 {
 		t.Fatal("the unlocked write did not reach the cluster")
+	}
+}
+
+// recorder keeps the audit entries it is given, or fails with err.
+type recorder struct {
+	mu      sync.Mutex
+	entries []audit.Entry
+	err     error
+}
+
+func (r *recorder) Record(_ context.Context, e audit.Entry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err != nil {
+		return r.err
+	}
+	r.entries = append(r.entries, e)
+	return nil
+}
+
+func (r *recorder) recorded() []audit.Entry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.entries)
+}
+
+func TestProxyRecordsTheWritesItForwards(t *testing.T) {
+	rec := &recorder{}
+	now := time.Now().UTC().Round(0)
+	f := setup(t, func(c *Config) {
+		c.Audit = rec
+		c.Now = func() time.Time { return now }
+	})
+	f.do(t, http.MethodGet, "/api/v1/namespaces", f.token)
+	f.do(t, http.MethodDelete, "/api/v1/namespaces/payments", f.token) // refused: read-only
+	if got := rec.recorded(); len(got) != 0 {
+		t.Fatalf("recorded a read or a refused write: %+v", got)
+	}
+
+	if err := f.sess.Unlock(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodDelete, f.proxy.URL+"/s/"+f.sess.State.ID+"/api/v1/namespaces/payments?propagationPolicy=Foreground", nil)
+	req.Header.Set("Authorization", "Bearer "+f.token)
+	req.Header.Set("User-Agent", "Helm/3.16.2")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	want := audit.Entry{
+		Time: now, Source: audit.SourceProxy, Cluster: "prod", ClusterID: "kubeconfig/x/prod", Session: f.sess.State.ID,
+		Allowed: audit.AllowedUnlocked, Method: http.MethodDelete, Path: "/api/v1/namespaces/payments", Client: "Helm/3.16.2",
+	}
+	if got := rec.recorded(); resp.StatusCode != http.StatusOK || len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Fatalf("DELETE = %d, recorded %+v; want %+v", resp.StatusCode, got, want)
+	}
+
+	// A write that cannot be recorded is not forwarded.
+	rec.mu.Lock()
+	rec.err = errors.New("no space left on device")
+	rec.mu.Unlock()
+	code, body := f.do(t, http.MethodDelete, "/api/v1/namespaces/payments", f.token)
+	if code != http.StatusInternalServerError || !strings.Contains(body, "could not be recorded in the audit log") {
+		t.Fatalf("DELETE with a failing audit log = %d %s", code, body)
+	}
+	if f.cluster.deletes.Load() != 1 {
+		t.Fatalf("the cluster saw %d deletes, want only the recorded one", f.cluster.deletes.Load())
 	}
 }
 

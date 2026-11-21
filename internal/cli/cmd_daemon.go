@@ -55,6 +55,7 @@ func newDaemonRunCmd(a *app) *cobra.Command {
 				Sessions:   a.sessions(),
 				Upstream:   a.daemonUpstream,
 				Forward:    a.daemonForward,
+				Audit:      a.audit(),
 				Version:    version.String(),
 				Now:        a.now,
 				Log:        a.log,

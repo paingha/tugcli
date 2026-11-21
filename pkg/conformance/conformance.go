@@ -60,6 +60,10 @@ type Target struct {
 	Env []string
 	// Timeout per call; defaults to 30 seconds.
 	Timeout time.Duration
+	// Module is the path of the plugin's WebAssembly module, when Command
+	// runs one, as `tug provider-exec` does. The suite then also checks that
+	// the module imports only what tug provides.
+	Module string
 }
 
 // Options configure the run.
@@ -86,6 +90,9 @@ func Run(ctx context.Context, t Target, o Options) Report {
 	r := &runner{target: t, opts: o, ctx: ctx}
 	if r.opts.Now == nil {
 		r.opts.Now = time.Now
+	}
+	if t.Module != "" {
+		r.checkModule()
 	}
 	desc := r.checkDescribe()
 	r.checkUnknownOp()
@@ -299,6 +306,17 @@ func (r *runner) checkList() ([]provider.Cluster, bool) {
 			}
 			if u, err := url.Parse(ep); err != nil || u.Scheme == "" || u.Host == "" {
 				r.fail(name, "%s: endpoint %q is not a URL", where, ep)
+				return nil, false
+			}
+		}
+		if c.Tunnel != "" {
+			u, err := url.Parse(c.Tunnel)
+			if err != nil || u.Scheme == "" {
+				r.fail(name, "%s: tunnel is not a URL", where)
+				return nil, false
+			}
+			if _, ok := u.User.Password(); ok {
+				r.fail(name, "%s: tunnel %s carries a password, which tug does not keep in its catalog", where, u.Redacted())
 				return nil, false
 			}
 		}

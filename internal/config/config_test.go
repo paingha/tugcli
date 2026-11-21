@@ -221,6 +221,9 @@ plugins:
   allowOverride: [kubeconfig]
   timeouts:
     list: 90s
+  wasm:
+    prefer: true
+    memoryLimitMiB: 512
 sessions:
   maxAge: 24h
 oidc:
@@ -244,6 +247,12 @@ oidc:
 	}
 	if got := c.Plugins.Timeouts["list"].Duration; got != 90*time.Second {
 		t.Errorf("Plugins.Timeouts[list] = %v, want 90s", got)
+	}
+	if !c.Plugins.WASM.Prefer || c.Plugins.WASM.MemoryLimit() != 512<<20 {
+		t.Errorf("Plugins.WASM = %+v (limit %d), want prefer and 512 MiB", c.Plugins.WASM, c.Plugins.WASM.MemoryLimit())
+	}
+	if got := (WASMConfig{}).MemoryLimit(); got != 0 {
+		t.Errorf("MemoryLimit() unset = %d, want 0 for the default", got)
 	}
 	if want := []string{"127.0.0.1:9000"}; !reflect.DeepEqual(c.OIDC.ListenAddresses, want) {
 		t.Errorf("OIDC.ListenAddresses = %v, want %v", c.OIDC.ListenAddresses, want)
@@ -278,6 +287,37 @@ func TestLoadErrors(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPluginSandbox(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		confines map[string]bool
+	}{
+		{"on by default", "", map[string]bool{"acme": true, "teleport": true}},
+		{"plugins left out", "plugins:\n  sandbox:\n    exclude: [teleport]\n", map[string]bool{"acme": true, "teleport": false}},
+		{"turned on", "plugins:\n  sandbox:\n    enabled: true\n", map[string]bool{"acme": true}},
+		{"turned off", "plugins:\n  sandbox:\n    enabled: false\n", map[string]bool{"acme": false, "teleport": false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			c, err := Load(writeConfig(t, tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range tt.confines {
+				if got := c.Plugins.Sandbox.Confines(name); got != want {
+					t.Errorf("Plugins.Sandbox.Confines(%q) = %v, want %v", name, got, want)
+				}
+			}
+		})
+	}
+	clearConfigEnv(t)
+	if _, err := Load(writeConfig(t, "plugins:\n  sandbox:\n    exclud: [teleport]\n")); err == nil || !strings.Contains(err.Error(), "exclud") {
+		t.Errorf("Load with a misspelt sandbox field = %v, want it refused", err)
 	}
 }
 

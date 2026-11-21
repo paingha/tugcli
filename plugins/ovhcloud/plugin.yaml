@@ -1,0 +1,30 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: ovhcloud
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/ovhcloud
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-ovhcloud}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-ovhcloud}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-ovhcloud}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-ovhcloud}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-ovhcloud.exe}
+  # The consumer key needs GET /cloud/project, GET /cloud/project/* and
+  # POST /cloud/project/*/kube/*/kubeconfig.
+  secrets:
+  - {name: application_key, prompt: "OVHcloud API application key"}
+  - {name: application_secret, prompt: "OVHcloud API application secret"}
+  - {name: consumer_key, prompt: "OVHcloud API consumer key"}
+  env: []
+  network: [api.eu.ovhcloud.com, api.ca.ovhcloud.com, api.us.ovhcloud.com]
+  accountConfig:
+    type: object
+    properties:
+      endpoint: {type: string, enum: [eu, ca, us], description: "API endpoint of the OVHcloud account: eu, ca or us (default: eu)"}
+      project: {type: string, description: "ID of the Public Cloud project to list clusters in (default: the only project the keys can see)"}
+      apiURL: {type: string, description: "API endpoint override (https), in place of endpoint"}

@@ -116,6 +116,46 @@ func TestSaveLoad(t *testing.T) {
 	}
 }
 
+func TestMergeKeepsTheUsersTunnel(t *testing.T) {
+	src := Source{Provider: "teleport", Account: "work"}
+	c := &Catalog{}
+	t0 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	listed := func(tunnel string) []provider.Cluster {
+		return []provider.Cluster{{ID: "root/prod", Name: "prod", Endpoints: provider.Endpoints{Public: "https://teleport.example.com:443"}, Tunnel: tunnel}}
+	}
+	const (
+		fromProvider = "tsh://teleport.example.com:443/root/prod"
+		fromUser     = "socks5://127.0.0.1:1080"
+	)
+	steps := []struct {
+		name                string
+		userSets            string // set by the user before the sync, if not ""
+		listed              string
+		provider, effective string
+	}{
+		{"the provider's tunnel", "", fromProvider, fromProvider, fromProvider},
+		{"the user's wins", fromUser, fromProvider, fromProvider, fromUser},
+		{"the provider drops its tunnel", "", "", "", fromUser},
+	}
+	for i, st := range steps {
+		if st.userSets != "" {
+			cl, err := c.Get("prod")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cl.Tunnel = st.userSets
+		}
+		c.Merge(src, listed(st.listed), t0.Add(time.Duration(i)*time.Hour))
+		cl, err := c.Get("prod")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cl.ProviderTunnel != st.provider || cl.EffectiveTunnel() != st.effective {
+			t.Errorf("%s: provider tunnel %q, effective %q; want %q, %q", st.name, cl.ProviderTunnel, cl.EffectiveTunnel(), st.provider, st.effective)
+		}
+	}
+}
+
 func TestMergeKeepsCAWhenAListingOmitsIt(t *testing.T) {
 	src := Source{Provider: "akamai", Account: "work"}
 	c := &Catalog{}

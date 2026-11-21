@@ -244,7 +244,7 @@ func (p *Provider) ContextCluster(cfg *clientcmdapi.Config, name, path string) (
 	}
 	pc.CAData = ca
 	if auth != nil {
-		if c, inline, err := p.credential(auth, path); err == nil && inline {
+		if c, inline, err := p.credential(auth, cl, path); err == nil && inline {
 			pc.Credential = &c
 		}
 	}
@@ -261,7 +261,7 @@ func (p *Provider) ContextCredential(cfg *clientcmdapi.Config, name, path string
 	if !ok {
 		return provider.Credential{}, provider.Errorf(provider.NotFound, "context %q has no user", name)
 	}
-	c, _, err := p.credential(auth, path)
+	c, _, err := p.credential(auth, cfg.Clusters[kctx.Cluster], path)
 	return c, err
 }
 
@@ -342,7 +342,7 @@ func (p *Provider) Credential(_ context.Context, req provider.CredentialRequest)
 	if !ok {
 		return provider.Credential{}, provider.Errorf(provider.NotFound, "context %q has no user in %s", req.ClusterID, path)
 	}
-	c, _, err := p.credential(auth, path)
+	c, _, err := p.credential(auth, cfg.Clusters[kctx.Cluster], path)
 	return c, err
 }
 
@@ -362,12 +362,13 @@ func load(acct provider.Account) (string, *clientcmdapi.Config, error) {
 	return path, cfg, nil
 }
 
-// credential converts a kubeconfig user. inline is true when the secret is
-// embedded in the file and should be moved to the keychain at import.
-func (p *Provider) credential(auth *clientcmdapi.AuthInfo, path string) (c provider.Credential, inline bool, err error) {
+// credential converts a kubeconfig user of a context whose cluster is cl,
+// which may be nil. inline is true when the secret is embedded in the file
+// and should be moved to the keychain at import.
+func (p *Provider) credential(auth *clientcmdapi.AuthInfo, cl *clientcmdapi.Cluster, path string) (c provider.Credential, inline bool, err error) {
 	switch {
 	case auth.Exec != nil:
-		return provider.Credential{Type: provider.CredentialDelegate, Exec: execConfig(auth.Exec, path)}, true, nil
+		return provider.Credential{Type: provider.CredentialDelegate, Exec: execConfig(auth.Exec, cl, path)}, true, nil
 
 	case auth.Token != "":
 		return provider.Token(auth.Token, provider.NoExpiry), true, nil
@@ -408,22 +409,35 @@ func (p *Provider) credential(auth *clientcmdapi.AuthInfo, path string) (c provi
 	}
 }
 
-func execConfig(e *clientcmdapi.ExecConfig, path string) *provider.ExecConfig {
+// execExtension is the cluster extension that kubectl passes to an exec
+// plugin that sets provideClusterInfo, as spec.cluster.config.
+const execExtension = "client.authentication.k8s.io/exec"
+
+// execConfig converts a kubeconfig exec section for a context whose cluster
+// is cl, which may be nil.
+func execConfig(e *clientcmdapi.ExecConfig, cl *clientcmdapi.Cluster, path string) *provider.ExecConfig {
 	cmd := e.Command
 	if strings.ContainsRune(cmd, filepath.Separator) && !filepath.IsAbs(cmd) {
 		cmd = resolve(cmd, path)
 	}
 	out := &provider.ExecConfig{
-		Command:         cmd,
-		Args:            slices.Clone(e.Args),
-		APIVersion:      e.APIVersion,
-		InteractiveMode: string(e.InteractiveMode),
-		InstallHint:     e.InstallHint,
+		Command:            cmd,
+		Args:               slices.Clone(e.Args),
+		APIVersion:         e.APIVersion,
+		InteractiveMode:    string(e.InteractiveMode),
+		InstallHint:        e.InstallHint,
+		ProvideClusterInfo: e.ProvideClusterInfo,
 	}
 	if len(e.Env) > 0 {
 		out.Env = make(map[string]string, len(e.Env))
 		for _, kv := range e.Env {
 			out.Env[kv.Name] = kv.Value
+		}
+	}
+	if e.ProvideClusterInfo && cl != nil {
+		// clientcmd keeps an extension as the JSON it read.
+		if u, ok := cl.Extensions[execExtension].(*runtime.Unknown); ok && len(u.Raw) > 0 {
+			out.ClusterConfig = slices.Clone(u.Raw)
 		}
 	}
 	return out

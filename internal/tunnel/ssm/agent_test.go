@@ -1,10 +1,17 @@
 package ssm
 
 import (
+	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,20 +20,22 @@ import (
 	"time"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/gorilla/websocket"
+	"github.com/xtaci/smux"
 )
 
 const (
 	testTarget    = "i-0123456789abcdef0"
-	testSessionID = "tug-test-0123456789"
+	testSessionID = "tug-test"
 	testToken     = "token-for-test"
 )
 
-// fakeAgent plays Session Manager and the SSM agent at the far end of a
-// data channel. It serves the WebSocket, runs the Port session handshake and
-// echoes input back as output, acknowledging, holding back and reordering
-// messages the way the agent does.
+// fakeAgent plays Session Manager and the SSM agent at the far end of data
+// channels. It issues sessions, serves their WebSockets, runs the Port
+// session handshake and echoes input back as output, acknowledging, holding
+// back and reordering messages the way the agent does.
 type fakeAgent struct {
 	agentVersion string
 	// actions are the handshake's requested actions; nil asks for a Port
@@ -43,28 +52,63 @@ type fakeAgent struct {
 	// closeWith, when set, closes the channel after the handshake with
 	// this output.
 	closeWith *string
+	// dropOnData, when set, drops the WebSocket on the session's nth data
+	// message: the agent processes it but loses both its acknowledgement
+	// and the echo, as if the connection broke mid-flight.
+	dropOnData int
+	// kmsKeyID, when set, asks for KMS encryption with this key, whose data
+	// keys the agent gets from kms.
+	kmsKeyID string
+	kms      *fakeKMS
 
-	done chan struct{} // closed when the session ends
+	streamURL string
 
 	mu       sync.Mutex
 	problems []string
-	header   http.Header
-	hello    openDataChannel
-	inputs   []message     // every input message, resends included
-	acks     map[int64]int // output sequence numbers the client acknowledged
-	sent     []int64       // output sequence numbers sent, duplicates included
-	response *handshakeResponse
-	flags    []flag
+	sessions []*agentSession
+	byToken  map[string]*agentSession
 }
 
-// agentSession is the state of one data channel on the agent's side.
+// agentSession is one session on the agent's side. Its protocol state is
+// used by one connection's handler at a time, under proto.
 type agentSession struct {
-	a        *fakeAgent
-	ws       *websocket.Conn
+	a    *fakeAgent
+	id   string
+	done chan struct{} // closed when the client ends the session
+
+	writeMu sync.Mutex // serialises writes to ws
+	proto   sync.Mutex // held by the connection being served
+
+	mu         sync.Mutex
+	ws         *websocket.Conn
+	header     http.Header
+	urls       []string // the request URI of each connection
+	hellos     []openDataChannel
+	inputs     []message     // every input message, resends included
+	acks       map[int64]int // output sequence numbers the client acknowledged
+	sent       []int64       // output sequence numbers sent, duplicates included
+	unackedOut map[int64]message
+	response   *handshakeResponse
+	flags      []flag
+
 	expected int64
 	held     map[int64]message
 	nextSeq  int64
 	dropped  bool
+	data     int // data messages processed
+	lost     bool
+
+	// With KMS encryption: the agent seals with the first half of the data
+	// key and opens what the client sealed with the second.
+	agentSeal, clientOpen cipher.AEAD
+	challenge             []byte
+	sealedInput           [][]byte // data payloads as they arrived
+
+	// With multiplexing: stream data goes into muxIn, the far end of a pipe
+	// whose near end is an smux server, as in the agent.
+	muxIn   net.Conn
+	muxSess *smux.Session
+	streams int
 }
 
 func (a *fakeAgent) problem(format string, args ...any) {
@@ -83,17 +127,65 @@ func (a *fakeAgent) check(t *testing.T) {
 	}
 }
 
+// issue creates a session, as StartSession does, and returns its ID and
+// token.
+func (a *fakeAgent) issue() (id, token string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := len(a.sessions) + 1
+	s := &agentSession{a: a, id: fmt.Sprintf("%s-%d", testSessionID, n), done: make(chan struct{}),
+		acks: map[int64]int{}, held: map[int64]message{}, unackedOut: map[int64]message{}}
+	token = testToken
+	if n > 1 {
+		token = fmt.Sprintf("%s-%d", testToken, n)
+	}
+	a.sessions = append(a.sessions, s)
+	if a.byToken == nil {
+		a.byToken = map[string]*agentSession{}
+	}
+	a.byToken[token] = s
+	return s.id, token
+}
+
+// resumeToken returns a new token for a session, as ResumeSession does, or
+// "" for a session it does not know.
+func (a *fakeAgent) resumeToken(id string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, s := range a.sessions {
+		if s.id == id {
+			token := fmt.Sprintf("%s-resumed-%d", id, len(a.byToken))
+			a.byToken[token] = s
+			return token
+		}
+	}
+	return ""
+}
+
+// session returns the nth session issued, counting from zero.
+func (a *fakeAgent) session(t *testing.T, n int) *agentSession {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if n >= len(a.sessions) {
+		t.Fatalf("the fake agent issued %d sessions, not %d", len(a.sessions), n+1)
+	}
+	return a.sessions[n]
+}
+
+func (a *fakeAgent) sessionCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.sessions)
+}
+
 func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
-	defer close(a.done)
 	ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 	if err != nil {
 		a.problem("upgrading: %v", err)
 		return
 	}
 	defer ws.Close()
-	a.mu.Lock()
-	a.header = r.Header.Clone()
-	a.mu.Unlock()
 
 	kind, data, err := ws.ReadMessage()
 	if err != nil {
@@ -106,15 +198,42 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	a.hello = hello
+	s := a.byToken[hello.TokenValue]
 	a.mu.Unlock()
-	if hello.TokenValue != testToken {
-		a.problem("token = %q, want %q", hello.TokenValue, testToken)
+	if s == nil {
+		a.problem("unknown token %q", hello.TokenValue)
 		return
 	}
+	s.proto.Lock()
+	defer s.proto.Unlock()
+	s.mu.Lock()
+	s.ws = ws
+	s.header = r.Header.Clone()
+	s.urls = append(s.urls, r.URL.RequestURI())
+	s.hellos = append(s.hellos, hello)
+	first := len(s.hellos) == 1
+	s.mu.Unlock()
+	s.run(ws, first)
+}
 
-	s := &agentSession{a: a, ws: ws, held: map[int64]message{}}
-	if !a.silent {
+// run speaks the agent's side of one connection of the session.
+func (s *agentSession) run(ws *websocket.Conn, first bool) {
+	a := s.a
+	if !first {
+		// A resumed connection: send again what the client has not
+		// acknowledged, as the agent's resend scheduler does.
+		s.mu.Lock()
+		var resend []message
+		for _, m := range s.unackedOut {
+			resend = append(resend, m)
+		}
+		s.mu.Unlock()
+		slices.SortFunc(resend, func(x, y message) int { return int(x.Sequence - y.Sequence) })
+		for _, m := range resend {
+			s.write(m)
+		}
+	}
+	if first && !a.silent {
 		actions := a.actions
 		if actions == nil {
 			actions = []requestedAction{{
@@ -122,11 +241,22 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 				ActionParameters: json.RawMessage(`{"SessionType":"Port","Properties":{"portNumber":"443","type":"LocalPortForwarding","host":"10.0.0.1","localPortNumber":"0"}}`),
 			}}
 		}
+		if a.kmsKeyID != "" {
+			actions = append(actions, requestedAction{
+				ActionType:       actionKMSEncryption,
+				ActionParameters: mustJSON(map[string]string{"KMSKeyId": a.kmsKeyID, "Challenge": "cmFuZG9tIGNoYWxsZW5nZQ=="}),
+			})
+		}
 		s.sendJSON(payloadHandshakeRequest, handshakeRequest{AgentVersion: a.agentVersion, RequestedClientActions: actions})
 	}
 	for {
 		_, data, err := ws.ReadMessage()
 		if err != nil {
+			if s.muxSess != nil {
+				_ = s.muxSess.Close()
+				_ = s.muxIn.Close()
+			}
+			close(s.done)
 			return
 		}
 		m, err := parseMessage(data)
@@ -142,6 +272,34 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		default:
 			a.problem("client sent a %s message", m.Type)
 		}
+		if s.isLost() {
+			// Break the connection without a close frame.
+			_ = ws.NetConn().Close()
+			s.setLost(false)
+			return
+		}
+	}
+}
+
+func (s *agentSession) setLost(lost bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lost = lost
+}
+
+func (s *agentSession) isLost() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lost
+}
+
+// waitDone waits for the client to end the session's connection.
+func (s *agentSession) waitDone(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the fake agent's session %s did not end", s.id)
 	}
 }
 
@@ -154,20 +312,18 @@ func (s *agentSession) acknowledged(m message) {
 	if a.MessageType != typeOutput || !a.Sequential || m.Flags != flagsAck {
 		s.a.problem("acknowledgement %+v with flags %d", a, m.Flags)
 	}
-	s.a.mu.Lock()
-	defer s.a.mu.Unlock()
-	if s.a.acks == nil {
-		s.a.acks = map[int64]int{}
-	}
-	s.a.acks[a.Sequence]++
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acks[a.Sequence]++
+	delete(s.unackedOut, a.Sequence)
 }
 
 // input handles an input message the way the agent's data channel does:
 // in order, holding back and acknowledging messages that arrive early.
 func (s *agentSession) input(m message) {
-	s.a.mu.Lock()
-	s.a.inputs = append(s.a.inputs, m)
-	s.a.mu.Unlock()
+	s.mu.Lock()
+	s.inputs = append(s.inputs, m)
+	s.mu.Unlock()
 	if s.a.dropFirst && m.PayloadType == payloadOutput && !s.dropped {
 		s.dropped = true
 		return
@@ -179,6 +335,17 @@ func (s *agentSession) input(m message) {
 		s.held[m.Sequence] = m
 		s.ack(m)
 	default:
+		if m.PayloadType == payloadOutput {
+			s.data++
+			if s.data == s.a.dropOnData {
+				// Process it, but lose the acknowledgement and the echo
+				// with the connection.
+				s.setLost(true)
+				s.process(m)
+				s.expected++
+				return
+			}
+		}
 		s.ack(m)
 		s.process(m)
 		s.expected++
@@ -202,30 +369,185 @@ func (s *agentSession) process(m message) {
 			s.a.problem("bad handshake response %q: %v", m.Payload, err)
 			return
 		}
-		s.a.mu.Lock()
-		s.a.response = &resp
-		s.a.mu.Unlock()
+		s.mu.Lock()
+		s.response = &resp
+		s.mu.Unlock()
 		for _, action := range resp.ProcessedClientActions {
 			if action.ActionStatus != actionSuccess {
 				return // the agent cancels the session
 			}
 		}
-		s.sendJSON(payloadHandshakeComplete, handshakeComplete{HandshakeTimeToComplete: time.Second})
-		s.greet()
-		if s.a.closeWith != nil {
-			s.write(newMessage(typeChannelClosed, 0, flagsAck, 0, mustJSON(channelClosed{
-				MessageType: typeChannelClosed, SessionID: testSessionID, SchemaVersion: 1, Output: *s.a.closeWith,
-			}), time.Now()))
+		// The agent multiplexes LocalPortForwarding sessions for clients
+		// from 1.1.70, if it is new enough to have multiplexing at all.
+		if versionAfter(s.a.agentVersion, muxAgentVersion) && !versionAfter("1.1.70", resp.ClientVersion) {
+			s.startMux(resp.ClientVersion)
 		}
+		for _, action := range resp.ProcessedClientActions {
+			if action.ActionType == actionKMSEncryption {
+				s.startEncryption(action)
+				return // the handshake completes once the challenge is answered
+			}
+		}
+		s.complete()
+	case payloadEncChallengeResponse:
+		var resp encryptionChallenge
+		_ = json.Unmarshal(m.Payload, &resp)
+		got, err := agentOpen(s.clientOpen, resp.Challenge)
+		if err != nil || !bytes.Equal(got, s.challenge) {
+			s.a.problem("the encryption challenge came back as %x (%v), want %x", got, err, s.challenge)
+			return
+		}
+		s.complete()
 	case payloadOutput:
-		s.send(payloadOutput, m.Payload)
+		payload := m.Payload
+		if s.clientOpen != nil {
+			s.mu.Lock()
+			s.sealedInput = append(s.sealedInput, bytes.Clone(payload))
+			s.mu.Unlock()
+			var err error
+			if payload, err = agentOpen(s.clientOpen, payload); err != nil {
+				s.a.problem("decrypting input %d: %v", m.Sequence, err)
+				return
+			}
+		}
+		if s.muxIn != nil {
+			if _, err := s.muxIn.Write(payload); err != nil {
+				s.a.problem("feeding smux: %v", err)
+			}
+			return
+		}
+		s.send(payloadOutput, payload)
 	case payloadFlag:
-		s.a.mu.Lock()
-		s.a.flags = append(s.a.flags, flag(binary.BigEndian.Uint32(m.Payload)))
-		s.a.mu.Unlock()
+		s.mu.Lock()
+		s.flags = append(s.flags, flag(binary.BigEndian.Uint32(m.Payload)))
+		s.mu.Unlock()
 	default:
 		s.a.problem("unexpected input payload type %d", m.PayloadType)
 	}
+}
+
+// startMux serves the session's stream data with an smux server, as the
+// agent's multiplexed port session does, keeping smux keepalives on unless
+// the client is later than 1.2.331.0. Each stream echoes, and closes when
+// it reads "bye", as a destination that hangs up would.
+func (s *agentSession) startMux(clientVersion string) {
+	agentEnd, smuxEnd := net.Pipe()
+	config := smux.DefaultConfig()
+	config.KeepAliveDisabled = versionAfter(s.a.agentVersion, keepAliveAgentVersion) && versionAfter(clientVersion, "1.2.331.0")
+	sess, err := smux.Server(smuxEnd, config)
+	if err != nil {
+		s.a.problem("starting smux: %v", err)
+		return
+	}
+	s.muxIn, s.muxSess = agentEnd, sess
+	go func() {
+		buf := make([]byte, chunkSize)
+		for {
+			n, err := agentEnd.Read(buf)
+			if err != nil {
+				return
+			}
+			s.send(payloadOutput, bytes.Clone(buf[:n]))
+		}
+	}()
+	go func() {
+		for {
+			stream, err := sess.AcceptStream()
+			if err != nil {
+				return
+			}
+			s.mu.Lock()
+			s.streams++
+			s.mu.Unlock()
+			go func() {
+				defer stream.Close()
+				buf := make([]byte, 4096)
+				for {
+					n, err := stream.Read(buf)
+					if err != nil || string(buf[:n]) == "bye" {
+						return
+					}
+					if _, err := stream.Write(buf[:n]); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+}
+
+func (s *agentSession) streamCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.streams
+}
+
+// closeChannel ends the session from Session Manager's side.
+func (s *agentSession) closeChannel() {
+	s.write(newMessage(typeChannelClosed, 0, flagsAck, 0, mustJSON(channelClosed{
+		MessageType: typeChannelClosed, SessionID: s.id, SchemaVersion: 1,
+	}), time.Now()))
+}
+
+// complete ends the handshake and sends what the test asked for after it.
+func (s *agentSession) complete() {
+	s.sendJSON(payloadHandshakeComplete, handshakeComplete{HandshakeTimeToComplete: time.Second})
+	s.greet()
+	if s.a.closeWith != nil {
+		s.write(newMessage(typeChannelClosed, 0, flagsAck, 0, mustJSON(channelClosed{
+			MessageType: typeChannelClosed, SessionID: s.id, SchemaVersion: 1, Output: *s.a.closeWith,
+		}), time.Now()))
+	}
+}
+
+// startEncryption does what the agent does with the client's KMS result:
+// it decrypts the data key with KMS, under the session's encryption
+// context, and challenges the client to prove it holds the key too.
+func (s *agentSession) startEncryption(action processedAction) {
+	var result kmsEncryptionResponse
+	if err := json.Unmarshal(mustJSON(action.ActionResult), &result); err != nil {
+		s.a.problem("KMS action result %v: %v", action.ActionResult, err)
+		return
+	}
+	key, err := s.a.kms.decrypt(result.KMSCipherTextKey, map[string]string{contextSessionID: s.id, contextTargetID: testTarget})
+	if err != nil {
+		s.a.problem("decrypting the data key: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.agentSeal, s.clientOpen = agentGCM(key[:32]), agentGCM(key[32:])
+	s.mu.Unlock()
+	s.challenge = make([]byte, 64)
+	_, _ = rand.Read(s.challenge)
+	s.sendJSON(payloadEncChallengeRequest, encryptionChallenge{Challenge: agentSeal(s.agentSeal, s.challenge)})
+}
+
+// agentGCM, agentSeal and agentOpen are AES-GCM as the agent and the
+// plugin use it, written apart from the code under test: a random 12-byte
+// nonce in front of the sealed data.
+func agentGCM(key []byte) cipher.AEAD {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		panic(err)
+	}
+	return aead
+}
+
+func agentSeal(aead cipher.AEAD, plain []byte) []byte {
+	nonce := make([]byte, 12)
+	_, _ = rand.Read(nonce)
+	return append(nonce, aead.Seal(nil, nonce, plain, nil)...)
+}
+
+func agentOpen(aead cipher.AEAD, sealed []byte) ([]byte, error) {
+	if aead == nil || len(sealed) < 12 {
+		return nil, errors.New("nothing to open")
+	}
+	return aead.Open(nil, sealed[:12], sealed[12:], nil)
 }
 
 // greet sends the greeting last part first, then the second part again.
@@ -249,8 +571,14 @@ func (s *agentSession) ack(m message) {
 	}), time.Now()))
 }
 
-// next numbers an output message.
+// next numbers an output message, encrypting stream data once the session
+// is encrypted.
 func (s *agentSession) next(pt payloadType, payload []byte) message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if pt == payloadOutput && s.agentSeal != nil {
+		payload = agentSeal(s.agentSeal, payload)
+	}
 	var f uint64
 	if s.nextSeq == 0 {
 		f = 1 // SYN, as the agent sets on its first message
@@ -265,14 +593,81 @@ func (s *agentSession) send(pt payloadType, payload []byte) { s.write(s.next(pt,
 func (s *agentSession) sendJSON(pt payloadType, v any) { s.send(pt, mustJSON(v)) }
 
 func (s *agentSession) write(m message) {
+	s.mu.Lock()
 	if m.Type == typeOutput {
-		s.a.mu.Lock()
-		s.a.sent = append(s.a.sent, m.Sequence)
-		s.a.mu.Unlock()
+		s.sent = append(s.sent, m.Sequence)
+		s.unackedOut[m.Sequence] = m
 	}
+	ws := s.ws
+	lost := s.lost
+	s.mu.Unlock()
+	if lost {
+		return
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	// A write can fail once the client has closed the WebSocket, as when
 	// acknowledging its last message; the client side is checked instead.
-	_ = s.ws.WriteMessage(websocket.BinaryMessage, m.marshal())
+	_ = ws.WriteMessage(websocket.BinaryMessage, m.marshal())
+}
+
+func (s *agentSession) hello() openDataChannel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hellos[len(s.hellos)-1]
+}
+
+func (s *agentSession) handshakeResponse() *handshakeResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.response
+}
+
+func (s *agentSession) flagsSent() []flag {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.flags)
+}
+
+// fakeKMS generates data keys and, for the fake agent, decrypts them under
+// the encryption context they were generated with.
+type fakeKMS struct {
+	err error
+
+	mu       sync.Mutex
+	calls    []*kms.GenerateDataKeyInput
+	keys     map[string][]byte
+	contexts map[string]map[string]string
+}
+
+func (f *fakeKMS) GenerateDataKey(_ context.Context, in *kms.GenerateDataKeyInput, _ ...func(*kms.Options)) (*kms.GenerateDataKeyOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, in)
+	if f.err != nil {
+		return nil, f.err
+	}
+	key := make([]byte, awsv2.ToInt32(in.NumberOfBytes))
+	_, _ = rand.Read(key)
+	blob := fmt.Sprintf("encrypted-data-key-%d", len(f.calls))
+	if f.keys == nil {
+		f.keys, f.contexts = map[string][]byte{}, map[string]map[string]string{}
+	}
+	f.keys[blob], f.contexts[blob] = bytes.Clone(key), maps.Clone(in.EncryptionContext)
+	return &kms.GenerateDataKeyOutput{CiphertextBlob: []byte(blob), Plaintext: key, KeyId: in.KeyId}, nil
+}
+
+func (f *fakeKMS) decrypt(blob []byte, context map[string]string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, ok := f.keys[string(blob)]
+	if !ok {
+		return nil, fmt.Errorf("unknown ciphertext %q", blob)
+	}
+	if !maps.Equal(f.contexts[string(blob)], context) {
+		return nil, fmt.Errorf("encryption context %v, generated with %v", context, f.contexts[string(blob)])
+	}
+	return key, nil
 }
 
 func mustJSON(v any) []byte {
@@ -283,14 +678,52 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-// fakeAPI is the SSM API: StartSession points at a fake agent.
+// fakeAPI is the SSM API. StartSession issues a session on the fake agent,
+// or, without one, points at streamURL.
 type fakeAPI struct {
+	agent     *fakeAgent
 	streamURL string
 	startErr  error
+	// resumeErrs fail ResumeSession calls in turn; once they run out, it
+	// succeeds.
+	resumeErrs []error
+	// noResumeToken makes ResumeSession return no token, as for a session
+	// that timed out.
+	noResumeToken bool
 
 	mu         sync.Mutex
 	starts     []*ssm.StartSessionInput
+	resumes    []string
 	terminated []string
+}
+
+func (f *fakeAPI) ResumeSession(_ context.Context, in *ssm.ResumeSessionInput, _ ...func(*ssm.Options)) (*ssm.ResumeSessionOutput, error) {
+	f.mu.Lock()
+	f.resumes = append(f.resumes, awsv2.ToString(in.SessionId))
+	var err error
+	if len(f.resumeErrs) > 0 {
+		err, f.resumeErrs = f.resumeErrs[0], f.resumeErrs[1:]
+	}
+	noToken := f.noResumeToken
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	token := f.agent.resumeToken(awsv2.ToString(in.SessionId))
+	if token == "" || noToken {
+		return &ssm.ResumeSessionOutput{SessionId: in.SessionId}, nil
+	}
+	return &ssm.ResumeSessionOutput{
+		SessionId:  in.SessionId,
+		StreamUrl:  awsv2.String(f.agent.streamURL + "&resumed=1"),
+		TokenValue: awsv2.String(token),
+	}, nil
+}
+
+func (f *fakeAPI) resumeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.resumes)
 }
 
 func (f *fakeAPI) StartSession(_ context.Context, in *ssm.StartSessionInput, _ ...func(*ssm.Options)) (*ssm.StartSessionOutput, error) {
@@ -300,11 +733,11 @@ func (f *fakeAPI) StartSession(_ context.Context, in *ssm.StartSessionInput, _ .
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
-	return &ssm.StartSessionOutput{
-		SessionId:  awsv2.String(testSessionID),
-		StreamUrl:  awsv2.String(f.streamURL),
-		TokenValue: awsv2.String(testToken),
-	}, nil
+	if f.agent == nil {
+		return &ssm.StartSessionOutput{SessionId: awsv2.String(testSessionID), StreamUrl: awsv2.String(f.streamURL), TokenValue: awsv2.String(testToken)}, nil
+	}
+	id, token := f.agent.issue()
+	return &ssm.StartSessionOutput{SessionId: awsv2.String(id), StreamUrl: awsv2.String(f.agent.streamURL), TokenValue: awsv2.String(token)}, nil
 }
 
 func (f *fakeAPI) TerminateSession(_ context.Context, in *ssm.TerminateSessionInput, _ ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error) {
@@ -314,33 +747,37 @@ func (f *fakeAPI) TerminateSession(_ context.Context, in *ssm.TerminateSessionIn
 	return &ssm.TerminateSessionOutput{SessionId: in.SessionId}, nil
 }
 
+func (f *fakeAPI) startCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.starts)
+}
+
 func (f *fakeAPI) terminations() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.terminated)
 }
 
-// startAgent serves a over TLS and returns the stream URL and a dialer that
-// trusts the server.
-func startAgent(t *testing.T, a *fakeAgent) (string, *websocket.Dialer) {
+// startAgent serves a over TLS and returns a dialer that trusts the server.
+func startAgent(t *testing.T, a *fakeAgent) *websocket.Dialer {
 	t.Helper()
 	if a.agentVersion == "" {
 		a.agentVersion = "3.3.1142.0"
 	}
-	a.done = make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(a.serve))
 	t.Cleanup(srv.Close)
 	tlsConfig := srv.Client().Transport.(*http.Transport).TLSClientConfig
-	streamURL := "wss://" + srv.Listener.Addr().String() + "/v1/data-channel/" + testSessionID + "?role=publish_subscribe"
-	return streamURL, &websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 5 * time.Second}
+	a.streamURL = "wss://" + srv.Listener.Addr().String() + "/v1/data-channel/session?role=publish_subscribe"
+	return &websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 5 * time.Second}
 }
 
 // newFake starts a fake agent and returns the options that make Dial use
 // it through a fake SSM API.
 func newFake(t *testing.T, a *fakeAgent) (*fakeAPI, []Option) {
 	t.Helper()
-	streamURL, dialer := startAgent(t, a)
-	api := &fakeAPI{streamURL: streamURL}
+	dialer := startAgent(t, a)
+	api := &fakeAPI{agent: a}
 	return api, []Option{WithAPI(api), WithDialer(dialer)}
 }
 
@@ -353,15 +790,5 @@ func eventually(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// waitDone waits for the fake agent's session to end.
-func (a *fakeAgent) waitDone(t *testing.T) {
-	t.Helper()
-	select {
-	case <-a.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the fake agent's session did not end")
 	}
 }

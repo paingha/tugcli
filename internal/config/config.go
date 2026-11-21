@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"time"
 
@@ -130,6 +131,56 @@ type PluginsConfig struct {
 	// Indexes are the signed plugin indexes that tug plugin search and
 	// tug plugin install <name> use, in order.
 	Indexes []PluginIndex `json:"indexes,omitempty"`
+	// RequireSignatures refuses to install a plugin by name when its index
+	// entry has no Sigstore signature. Archives installed from a file or
+	// URL given on the command line are not affected; tug warns that they
+	// are unsigned.
+	RequireSignatures bool `json:"requireSignatures,omitempty"`
+	// SigstoreTrustedRoot is a trusted_root.json to check plugin signatures
+	// against instead of the public-good Sigstore deployment's, for a
+	// private deployment or a machine that cannot reach Sigstore's TUF
+	// repository. A relative path is taken from the config directory.
+	SigstoreTrustedRoot string `json:"sigstoreTrustedRoot,omitempty"`
+	// WASM controls plugins' WebAssembly builds.
+	WASM WASMConfig `json:"wasm,omitempty"`
+	// Sandbox confines plugins' native builds with the operating system's
+	// sandbox.
+	Sandbox SandboxConfig `json:"sandbox,omitzero"`
+}
+
+// WASMConfig controls the WebAssembly builds of plugins, which tug runs in
+// its own sandbox.
+type WASMConfig struct {
+	// Prefer runs a plugin's WebAssembly build even when it also has a
+	// build for this machine. Without it, the WebAssembly build is used
+	// only when there is no such build.
+	Prefer bool `json:"prefer,omitempty"`
+	// MemoryLimitMiB caps each module's memory. Default 256.
+	MemoryLimitMiB int `json:"memoryLimitMiB,omitempty"`
+}
+
+// MemoryLimit returns the configured memory limit in bytes, or zero for the
+// plugin host's default.
+func (c WASMConfig) MemoryLimit() uint64 {
+	if c.MemoryLimitMiB <= 0 {
+		return 0
+	}
+	return uint64(c.MemoryLimitMiB) << 20
+}
+
+// SandboxConfig is plugins.sandbox. The sandbox is on unless it says
+// otherwise.
+type SandboxConfig struct {
+	// Enabled set to false runs every plugin without the sandbox.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Exclude lists plugins that run without the sandbox, for ones that
+	// need more than it allows.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// Confines reports whether the named plugin runs in the sandbox.
+func (s SandboxConfig) Confines(plugin string) bool {
+	return (s.Enabled == nil || *s.Enabled) && !slices.Contains(s.Exclude, plugin)
 }
 
 // PluginIndex is one signed plugin index.

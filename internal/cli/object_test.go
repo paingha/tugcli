@@ -105,7 +105,15 @@ func TestWhyOfACustomResource(t *testing.T) {
 	newSession(t)
 	mustTug(t, "connect", "payments-prod")
 
-	out := mustTug(t, "why", "db/orders", "-n", "shop") // db is the CRD's short name
+	unhealthy := func(args ...string) string {
+		t.Helper()
+		r := tug(t, append([]string{"why"}, args...)...)
+		if r.code != 1 {
+			t.Fatalf("tug why %v: exit %d, want 1 for an object that is not ready\n%s%s", args, r.code, r.stdout, r.stderr)
+		}
+		return r.stdout
+	}
+	out := unhealthy("db/orders", "-n", "shop") // db is the CRD's short name
 	for _, want := range []string{
 		"database/orders in shop is not ready: BackupFailing: the latest backup failed (owns 2, 1 not ready)\n",
 		"CONDITION   STATUS   REASON          SINCE\nReady       False    BackupFailing   10m\n",
@@ -126,7 +134,7 @@ func TestWhyOfACustomResource(t *testing.T) {
 	}
 
 	var d ops.Diagnosis
-	if err := json.Unmarshal([]byte(mustTug(t, "why", "database/orders", "-n", "shop", "-o", "json")), &d); err != nil {
+	if err := json.Unmarshal([]byte(unhealthy("database/orders", "-n", "shop", "-o", "json")), &d); err != nil {
 		t.Fatal(err)
 	}
 	if d.Healthy || d.Target != "database/orders" || len(d.Conditions) != 1 || d.Conditions[0].Reason != "BackupFailing" {

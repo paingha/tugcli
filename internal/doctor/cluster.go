@@ -82,11 +82,17 @@ func checkCluster(ctx context.Context, cfg Config, kubectlVersion string) []Resu
 	} else if !networkChecks(ctx, cfg, host, addr, add) {
 		return out
 	}
-	if !proxied && u.Scheme == "https" && !checkTLS(ctx, cfg, host, addr, add) {
+	if cfg.TunnelEndpoint {
+		// The tunnel's local proxy has its own certificate and signs in
+		// to the cluster itself, so neither the stored CA nor the stored
+		// credential is used; the API check covers both.
+		add(cluster("TLS", Skip, "the tunnel's local proxy has a certificate of its own; the API check below covers TLS", ""))
+		add(cluster("credentials", Skip, "the tunnel's local proxy signs in to the cluster", ""))
+	} else if !proxied && u.Scheme == "https" && !checkTLS(ctx, cfg, host, addr, add) {
 		return out
 	}
 
-	if cfg.Credential != nil {
+	if cfg.Credential != nil && !cfg.TunnelEndpoint {
 		res, err := cfg.Credential(ctx)
 		if err != nil {
 			fix := "run `tug sync`, or import the account again"

@@ -264,6 +264,24 @@ func Pods(ctx context.Context, cs kubernetes.Interface, t Target) ([]corev1.Pod,
 	return pods, nil
 }
 
+// RunningPod returns the pod of a target to act on, as tug sh and tug pf
+// do: a running one, ready ones first, then the newest.
+func RunningPod(ctx context.Context, cs kubernetes.Interface, t Target) (*corev1.Pod, error) {
+	pods, err := Pods(ctx, cs, t)
+	if err != nil {
+		return nil, err
+	}
+	for i := range pods {
+		if pods[i].Status.Phase == corev1.PodRunning {
+			return &pods[i], nil
+		}
+	}
+	if len(pods) == 0 {
+		return nil, fmt.Errorf("%s has no pods", t)
+	}
+	return nil, fmt.Errorf("%s has no running pod (first is %s, %s)", t, pods[0].Name, pods[0].Status.Phase)
+}
+
 // PodReady reports whether a pod is running with its Ready condition true.
 func PodReady(p *corev1.Pod) bool {
 	if p.Status.Phase != corev1.PodRunning {

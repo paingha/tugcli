@@ -6,6 +6,9 @@
 // local providers file names and runs the exec plugin that file configures
 // for it. The hub says where a cluster is but never which command to run;
 // it adds arguments or environment variables only where the file allows.
+// A plugin that sets provideClusterInfo is told about the access provider's
+// cluster, with its client.authentication.k8s.io/exec extension as
+// spec.cluster.config, as the library does.
 //
 // The API and the plugin protocol are alpha. This package follows the
 // v1alpha2 types and the providers file read by the cluster-inventory-api
@@ -14,6 +17,7 @@ package clusterprofile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -63,6 +67,11 @@ const (
 	extensionArgs = "clusterprofiles.multicluster.x-k8s.io/exec/additional-args"
 	extensionEnvs = "clusterprofiles.multicluster.x-k8s.io/exec/additional-envs"
 )
+
+// extensionExec is the extension that client-go reserves for an exec
+// plugin's settings for one cluster. A plugin that sets provideClusterInfo
+// gets it as spec.cluster.config.
+const extensionExec = "client.authentication.k8s.io/exec"
 
 // Policies for what a ClusterProfile may add to an exec plugin. Both
 // default to Ignore, so the hub cannot change the command line unless the
@@ -267,7 +276,7 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 			ProxyURL:              acc.Cluster.ProxyURL,
 			Labels:                pr.Metadata.Labels,
 		}
-		if cred, err := delegate(ac, acc, &pr, path); err == nil {
+		if cred, err := delegate(ac, acc, &pr); err == nil {
 			pc.Credential = &cred
 		}
 		out = append(out, pc)
@@ -311,7 +320,7 @@ func (p *Provider) Credential(ctx context.Context, req provider.CredentialReques
 	if acc == nil {
 		return provider.Credential{}, provider.Errorf(provider.NotFound, "ClusterProfile %s on %s offers no access provider that %s configures", req.ClusterID, mc.Name, path)
 	}
-	return delegate(ac, acc, &pr, path)
+	return delegate(ac, acc, &pr)
 }
 
 func (p *Provider) connect(ctx context.Context, acct provider.Account) (*management.Cluster, dynamic.NamespaceableResourceInterface, error) {
@@ -332,21 +341,26 @@ func (p *Provider) connect(ctx context.Context, acct provider.Account) (*managem
 
 // delegate builds the exec plugin credential for an access provider: the
 // command from the providers file, with the arguments and environment the
-// profile's extensions add where the file's policies allow it.
-func delegate(ac *accessConfig, acc *access, pr *profile, path string) (provider.Credential, error) {
+// profile's extensions add where the file's policies allow it, and the
+// cluster's exec extension when the plugin asks for cluster information.
+func delegate(ac *accessConfig, acc *access, pr *profile) (provider.Credential, error) {
 	e := ac.ExecConfig
-	if e.ProvideClusterInfo {
-		return provider.Credential{}, provider.Errorf(provider.Unimplemented,
-			"provider %q in %s sets provideClusterInfo, and tug cannot pass cluster information to exec plugins", ac.Name, path).
-			WithHint("set provideClusterInfo to false if the plugin works without it, or pass what it needs through the additional-args extension")
-	}
 	args := slices.Clone(e.Args)
 	env := make(map[string]string, len(e.Env))
 	for _, kv := range e.Env {
 		env[kv.Name] = kv.Value
 	}
+	var clusterConfig json.RawMessage
 	for _, ext := range acc.Cluster.Extensions {
 		switch {
+		case ext.Name == extensionExec && e.ProvideClusterInfo:
+			// The library reads the extensions into a map, so the last
+			// one of a name wins there too.
+			b, err := json.Marshal(ext.Extension)
+			if err != nil {
+				return provider.Credential{}, provider.Errorf(provider.InvalidConfig, "ClusterProfile %s: encoding %s: %v", pr.id(), extensionExec, err)
+			}
+			clusterConfig = b
 		case ext.Name == extensionArgs && ac.ProfileSourcedCLIArgsPolicy == PolicyAppend:
 			var extra []string
 			if err := convert(ext.Extension, &extra); err != nil {
@@ -372,6 +386,8 @@ func delegate(ac *accessConfig, acc *access, pr *profile, path string) (provider
 	cred.Exec.APIVersion = e.APIVersion
 	cred.Exec.InteractiveMode = e.InteractiveMode
 	cred.Exec.InstallHint = e.InstallHint
+	cred.Exec.ProvideClusterInfo = e.ProvideClusterInfo
+	cred.Exec.ClusterConfig = clusterConfig
 	return cred, nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/kubernetes"
@@ -41,7 +42,12 @@ type Factory struct {
 	CacheDir  string
 	UserAgent string
 	// Tunnels opens the cluster's tunnel, when it has one.
-	Tunnels *tunnel.Pool
+	Tunnels Tunnels
+}
+
+// Tunnels opens tunnels; *tunnel.Pool is one.
+type Tunnels interface {
+	Route(ctx context.Context, spec string) (tunnel.Route, error)
 }
 
 // RESTConfig returns a client config for the cluster.
@@ -58,18 +64,28 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 		QPS:   50,
 		Burst: 100,
 	}
-	switch {
-	case cl.Tunnel != "":
+	switch tun := cl.EffectiveTunnel(); {
+	case tun != "":
 		// The tunnel is a proxy to client-go, so exec, attach and
 		// port-forward upgrades go through it too.
 		if f.Tunnels == nil {
 			return nil, fmt.Errorf("cluster %s is reached through a tunnel, which this command cannot open", cl.Name)
 		}
-		u, err := f.Tunnels.ProxyURL(ctx, cl.Tunnel)
+		route, err := f.Tunnels.Route(ctx, tun)
 		if err != nil {
 			return nil, fmt.Errorf("opening the tunnel to %s: %w", cl.Name, err)
 		}
-		cfg.Proxy = http.ProxyURL(u)
+		cfg.Proxy = http.ProxyURL(route.Proxy)
+		if ep := route.Endpoint; ep != nil {
+			// The tunnel ends in a local proxy, such as tsh's, that signs
+			// in to the cluster itself. Its address, CA and client
+			// certificate take the place of the cluster's endpoint and
+			// credential.
+			cfg.Host = ep.Server
+			cfg.TLSClientConfig = rest.TLSClientConfig{CAData: ep.CAData, ServerName: ep.ServerName, CertData: ep.CertData, KeyData: ep.KeyData}
+			f.wrapGuard(cfg)
+			return cfg, nil
+		}
 	case cl.ProxyURL != "":
 		u, err := url.Parse(cl.ProxyURL)
 		if err != nil {
@@ -90,10 +106,22 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 	default:
 		cfg.Wrap(transport.TokenSourceWrapTransport(newBrokerTokenSource(f.Broker, cl.ID, r)))
 	}
-	if f.Guard != nil {
-		cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper { return guard.Wrap(rt, f.Guard) })
-	}
+	f.wrapGuard(cfg)
 	return cfg, nil
+}
+
+// wrapGuard puts the factory's guard, when it has one, in front of cfg's
+// requests. The guard judges paths below the server's own path, where the
+// Kubernetes API starts.
+func (f *Factory) wrapGuard(cfg *rest.Config) {
+	if f.Guard == nil {
+		return
+	}
+	var base string
+	if u, err := url.Parse(cfg.Host); err == nil {
+		base = u.Path
+	}
+	cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper { return guard.WrapBase(rt, f.Guard, base) })
 }
 
 // Clientset returns a typed client.
@@ -142,6 +170,17 @@ func execProvider(r *credentials.Resolved) *clientcmdapi.ExecConfig {
 		APIVersion:      apiVersion,
 		InteractiveMode: mode,
 		InstallHint:     d.InstallHint,
+		// client-go then builds spec.cluster from the rest.Config, which
+		// RESTConfig fills from the catalog cluster, as kubectl builds it
+		// from a kubeconfig cluster. Its proxy URL is the tunnel's local
+		// proxy when the cluster has one, since that is how it is reached.
+		ProvideClusterInfo: d.ProvideClusterInfo,
+	}
+	if d.ProvideClusterInfo && len(d.ClusterConfig) > 0 {
+		// client-go passes this on as spec.cluster.config. clientcmd holds
+		// a kubeconfig cluster's client.authentication.k8s.io/exec
+		// extension the same way.
+		ec.Config = &runtime.Unknown{Raw: d.ClusterConfig, ContentType: runtime.ContentTypeJSON}
 	}
 	for k, v := range d.Env {
 		ec.Env = append(ec.Env, clientcmdapi.ExecEnvVar{Name: k, Value: v})

@@ -8,15 +8,31 @@
 // binary agent messages, the handshake, acknowledgements and
 // retransmission. The session carries exactly one TCP connection from the
 // instance to the requested address, and the returned net.Conn is that
-// connection.
+// connection. If the WebSocket drops, the session is resumed with
+// ResumeSession on a new one, and unacknowledged data is sent again. When
+// the Session Manager preferences name a KMS key, the session's data is
+// encrypted with a KMS data key as the plugin does it (see crypto.go).
 //
-// tug asks the agent for basic port forwarding rather than the multiplexed
-// mode the current plugin uses (see clientVersion). In that mode the agent
-// does not report the far end closing its TCP connection: it dials again
-// when more data arrives. In-band ends such as a TLS close_notify or an
-// HTTP/2 GOAWAY still reach the reader, and the session ends when the
-// connection is closed here, when Session Manager closes the channel, or
-// when the agent cannot connect.
+// By default tug asks the agent for basic port forwarding, one session per
+// connection, rather than the multiplexed mode the current plugin uses. In
+// basic mode the agent does not report the far end closing its TCP
+// connection: it dials again when more data arrives. In-band ends such as a
+// TLS close_notify or an HTTP/2 GOAWAY still reach the reader, and the
+// session ends when the connection is closed here, when Session Manager
+// closes the channel, or when the agent cannot connect.
+//
+// With Config.Mux (ssm://...?mux=true), a Dialer shares one session per
+// address among its connections, multiplexed with smux as the plugin does,
+// wherever the agent can (see mux.go). New connections then skip
+// StartSession and the handshake, and the agent reports the far end
+// closing. The cost is that the connections share one fate and one
+// ordered channel: smux protocol version 1, which the agent speaks, has no
+// per-stream flow control, so a connection whose reader stops reading
+// stalls the others once 4 MiB is buffered; a retransmission delays them
+// all; the agent dials each new connection's destination in turn; and when
+// the session ends, every connection over it ends too. A session per
+// connection keeps a stalled or failed connection to itself, so it stays
+// the default.
 package ssm
 
 import (
@@ -29,14 +45,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
-	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/gorilla/websocket"
-
-	"github.com/paingha/tugcli/internal/version"
 )
 
 // Scheme is the URL scheme of SSM tunnels.
@@ -51,13 +64,16 @@ type Config struct {
 	Target  string // instance ID, e.g. i-0123456789abcdef0
 	Region  string // optional; else from the profile
 	Profile string // optional AWS profile
+	// Mux shares one multiplexed session per address among a Dialer's
+	// connections, where the agent supports it; see the package
+	// documentation for the trade-off.
+	Mux bool
 }
 
-// ErrKMSEncryption is returned by Dial when the account's Session Manager
-// preferences require KMS encryption of session data, which tug does not
-// support.
-var ErrKMSEncryption = errors.New("the Session Manager preferences require KMS encryption, which tug does not support; " +
-	"turn off KMS encryption in the Session Manager preferences to tunnel through SSM")
+// ErrKMSEncryption is returned by Dial, wrapped with the cause, when the
+// account's Session Manager preferences require KMS encryption of session
+// data and it cannot be set up, as when KMS refuses GenerateDataKey.
+var ErrKMSEncryption = errors.New("the Session Manager preferences require KMS encryption, which could not be set up")
 
 // ErrSessionClosed is returned by Read and Write once Session Manager has
 // closed the session, wrapped with the reason it gave if there was one.
@@ -71,7 +87,7 @@ var (
 	regionPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)+$`)
 )
 
-// ParseURL reads ssm://<target>?region=..&profile=..
+// ParseURL reads ssm://<target>?region=..&profile=..&mux=..
 func ParseURL(u *url.URL) (Config, error) {
 	if u == nil {
 		return Config{}, errors.New("no SSM tunnel URL")
@@ -99,8 +115,12 @@ func ParseURL(u *url.URL) (Config, error) {
 			cfg.Region = values[0]
 		case "profile":
 			cfg.Profile = values[0]
+		case "mux":
+			if cfg.Mux, err = strconv.ParseBool(values[0]); err != nil {
+				return Config{}, fmt.Errorf("tunnel URL %q sets mux to %q; use true or false", u.Redacted(), values[0])
+			}
 		default:
-			return Config{}, fmt.Errorf("tunnel URL %q has unknown parameter %q; the parameters are region and profile", u.Redacted(), key)
+			return Config{}, fmt.Errorf("tunnel URL %q has unknown parameter %q; the parameters are region, profile and mux", u.Redacted(), key)
 		}
 	}
 	if err := cfg.validate(); err != nil {
@@ -123,6 +143,7 @@ func (c Config) validate() error {
 // API is the part of the SSM client that Dial uses.
 type API interface {
 	StartSession(ctx context.Context, in *ssm.StartSessionInput, opts ...func(*ssm.Options)) (*ssm.StartSessionOutput, error)
+	ResumeSession(ctx context.Context, in *ssm.ResumeSessionInput, opts ...func(*ssm.Options)) (*ssm.ResumeSessionOutput, error)
 	TerminateSession(ctx context.Context, in *ssm.TerminateSessionInput, opts ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error)
 }
 
@@ -133,15 +154,25 @@ type Option func(*options)
 
 type options struct {
 	api      API
+	kms      KMSAPI
 	endpoint string
 	dialer   *websocket.Dialer
 	log      *slog.Logger
+	// resumeDelay is the first wait before retrying ResumeSession.
+	resumeDelay time.Duration
 }
+
+// withResumeDelay shortens the wait between attempts to resume, for tests.
+func withResumeDelay(d time.Duration) Option { return func(o *options) { o.resumeDelay = d } }
 
 // WithAPI replaces the SSM client that Dial builds from the AWS profile, for
 // tests. The data channel is then opened without request signing, which
 // relies on the session token alone, as older Session Manager plugins do.
 func WithAPI(api API) Option { return func(o *options) { o.api = api } }
+
+// WithKMS replaces the KMS client that sets up KMS-encrypted sessions, for
+// tests. Without it, a Dialer given WithAPI refuses encrypted sessions.
+func WithKMS(api KMSAPI) Option { return func(o *options) { o.kms = api } }
 
 // WithEndpoint sends SSM API requests to endpoint, such as an interface VPC
 // endpoint, instead of the regional one.
@@ -159,50 +190,33 @@ func WithLogger(l *slog.Logger) Option { return func(o *options) { o.log = l } }
 //
 // The context bounds starting the session and the handshake; once Dial has
 // returned, cancelling it does not affect the connection. Closing the
-// connection ends the session.
+// connection ends the session. Dial loads the AWS configuration on every
+// call; a Dialer loads it once for many connections.
 func Dial(ctx context.Context, cfg Config, address string, opts ...Option) (net.Conn, error) {
-	o := options{dialer: websocket.DefaultDialer, log: slog.New(slog.DiscardHandler)}
-	for _, opt := range opts {
-		opt(&o)
-	}
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	host, port, err := splitAddress(address)
+	d, err := NewDialer(cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
-	api, signer, err := o.clients(ctx, cfg)
+	c, err := d.Dial(ctx, address)
 	if err != nil {
+		_ = d.Close()
 		return nil, err
 	}
-	out, err := api.StartSession(ctx, &ssm.StartSessionInput{
-		Target:       awsv2.String(cfg.Target),
-		DocumentName: awsv2.String(DocumentName),
-		// localPortNumber only tells the Session Manager plugin where to
-		// listen; the document defaults it, and the agent ignores it.
-		Parameters: map[string][]string{"host": {host}, "portNumber": {port}},
-	})
-	if err != nil {
-		return nil, startError(cfg.Target, err)
+	if !cfg.Mux {
+		return c, nil
 	}
-	sessionID := awsv2.ToString(out.SessionId)
-	streamURL := awsv2.ToString(out.StreamUrl)
-	token := awsv2.ToString(out.TokenValue)
-	log := o.log.With("session", sessionID, "target", cfg.Target, "address", address)
-	c := newConn(api, sessionID, address, log)
-	if sessionID == "" || streamURL == "" || token == "" {
-		// Best effort: the session is unusable either way.
-		_ = c.terminate()
-		return nil, fmt.Errorf("starting an SSM session on %s: StartSession returned no session, stream URL or token", cfg.Target)
-	}
-	log.Debug("started SSM session")
-	if err := c.open(ctx, o.dialer, signer, streamURL, token); err != nil {
-		// abort ends the session, whatever state the channel got to.
-		c.abort(err)
-		return nil, fmt.Errorf("opening SSM session %s on %s to %s: %w", sessionID, cfg.Target, address, err)
-	}
-	return c, nil
+	// The connection is the only one on its session; closing it ends both.
+	return &ownedConn{Conn: c, d: d}, nil
+}
+
+// ownedConn is a connection that closes the Dialer it came from.
+type ownedConn struct {
+	net.Conn
+	d *Dialer
+}
+
+func (c *ownedConn) Close() error {
+	return errors.Join(c.Conn.Close(), c.d.Close())
 }
 
 // splitAddress checks that address is host:port and returns its parts.
@@ -218,58 +232,6 @@ func splitAddress(address string) (host, port string, err error) {
 		return "", "", fmt.Errorf("tunnel address %q has no port between 1 and 65535", address)
 	}
 	return host, port, nil
-}
-
-// clients returns the SSM API and, when credentials are at hand, what signs
-// the data channel's WebSocket request.
-func (o *options) clients(ctx context.Context, cfg Config) (API, *streamSigner, error) {
-	if o.api != nil {
-		return o.api, nil, nil
-	}
-	awsCfg, err := loadConfig(ctx, cfg.Profile, cfg.Region)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading AWS configuration%s: %w", profileSuffix(cfg.Profile), err)
-	}
-	if awsCfg.Region == "" {
-		return nil, nil, fmt.Errorf("no AWS region for the SSM tunnel to %s; add ?region=<region> to the ssm:// URL or set a region in the AWS profile", cfg.Target)
-	}
-	if awsCfg.Credentials == nil {
-		return nil, nil, fmt.Errorf("no AWS credentials%s; configure the profile or set AWS_PROFILE", profileSuffix(cfg.Profile))
-	}
-	// Resolve credentials now so that an expired sign-in is reported as
-	// such. The SDK caches them, so the API calls reuse the result.
-	creds, err := awsCfg.Credentials.Retrieve(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolving AWS credentials%s; sign in again or refresh the profile's credentials: %w", profileSuffix(cfg.Profile), err)
-	}
-	var ssmOpts []func(*ssm.Options)
-	if o.endpoint != "" {
-		endpoint := o.endpoint
-		ssmOpts = append(ssmOpts, func(so *ssm.Options) { so.BaseEndpoint = &endpoint })
-	}
-	return ssm.NewFromConfig(awsCfg, ssmOpts...), &streamSigner{creds: creds, region: awsCfg.Region}, nil
-}
-
-// loadConfig loads the shared AWS configuration the way the built-in EKS
-// provider does: the named profile, or the default chain, with an explicit
-// region taking precedence over the profile's.
-func loadConfig(ctx context.Context, profile, region string) (awsv2.Config, error) {
-	var opts []func(*awsconfig.LoadOptions) error
-	if profile != "" {
-		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
-	}
-	if region != "" {
-		opts = append(opts, awsconfig.WithRegion(region))
-	}
-	opts = append(opts, awsconfig.WithAppID("tug/"+version.String()))
-	return awsconfig.LoadDefaultConfig(ctx, opts...)
-}
-
-func profileSuffix(profile string) string {
-	if profile == "" {
-		return ""
-	}
-	return fmt.Sprintf(" for profile %q", profile)
 }
 
 // startError explains why StartSession failed, with what to do about the

@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -10,12 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
 	"github.com/paingha/tugcli/internal/catalog"
@@ -224,6 +228,55 @@ func TestDelegateCredential(t *testing.T) {
 	}
 }
 
+// The plugin that client-go runs for a delegate that asks for cluster
+// information is told about the catalog cluster.
+func TestDelegateGetsClusterInfo(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("shell script plugin")
+	}
+	srv := newFakeAPI(t)
+	dir := t.TempDir()
+	info := filepath.Join(dir, "exec-info.json")
+	plugin := filepath.Join(dir, "secretreader-plugin")
+	script := "#!/bin/sh\nprintf '%s' \"$KUBERNETES_EXEC_INFO\" > \"$1\"\n" +
+		`echo '{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","status":{"token":"` + testToken + `"}}'` + "\n"
+	if err := os.WriteFile(plugin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cred := provider.Delegate(plugin, info)
+	cred.Exec.InteractiveMode = "Never"
+	cred.Exec.ProvideClusterInfo = true
+	cred.Exec.ClusterConfig = json.RawMessage(`{"clusterName":"member-1"}`)
+	cl := clusterFor(srv.Server, "clusterprofile/inv/fleet/member-1")
+	// The test server's certificate is also valid for example.com.
+	cl.TLSServerName = "example.com"
+	f := newFactory(t, cl, cred)
+
+	cs, err := f.Clientset(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got clientauthv1.ExecCredential
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("KUBERNETES_EXEC_INFO = %s: %v", b, err)
+	}
+	c := got.Spec.Cluster
+	if got.APIVersion != "client.authentication.k8s.io/v1" || got.Spec.Interactive || c == nil {
+		t.Fatalf("KUBERNETES_EXEC_INFO = %s, want a v1 ExecCredential with spec.cluster, not interactive", b)
+	}
+	if c.Server != cl.Server || string(c.CertificateAuthorityData) != string(cl.CAData) || c.TLSServerName != "example.com" ||
+		c.InsecureSkipTLSVerify || c.ProxyURL != "" || string(c.Config.Raw) != `{"clusterName":"member-1"}` {
+		t.Fatalf("KUBERNETES_EXEC_INFO spec.cluster = %s, want the catalog cluster and its config", b)
+	}
+}
+
 func TestExecProvider(t *testing.T) {
 	tests := []struct {
 		name string
@@ -256,6 +309,27 @@ func TestExecProvider(t *testing.T) {
 				APIVersion:      "client.authentication.k8s.io/v1beta1",
 				InteractiveMode: clientcmdapi.NeverExecInteractiveMode,
 				InstallHint:     "install the AWS CLI",
+			},
+		},
+		{
+			name: "cluster info",
+			in:   provider.ExecConfig{Command: "secretreader-plugin", ProvideClusterInfo: true, ClusterConfig: json.RawMessage(`{"clusterName":"member-1"}`)},
+			want: &clientcmdapi.ExecConfig{
+				Command:            "secretreader-plugin",
+				APIVersion:         "client.authentication.k8s.io/v1",
+				InteractiveMode:    clientcmdapi.IfAvailableExecInteractiveMode,
+				ProvideClusterInfo: true,
+				Config:             &runtime.Unknown{Raw: []byte(`{"clusterName":"member-1"}`), ContentType: runtime.ContentTypeJSON},
+			},
+		},
+		{
+			name: "cluster info without config",
+			in:   provider.ExecConfig{Command: "cp-creds", ProvideClusterInfo: true},
+			want: &clientcmdapi.ExecConfig{
+				Command:            "cp-creds",
+				APIVersion:         "client.authentication.k8s.io/v1",
+				InteractiveMode:    clientcmdapi.IfAvailableExecInteractiveMode,
+				ProvideClusterInfo: true,
 			},
 		},
 	}

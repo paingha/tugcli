@@ -27,12 +27,15 @@ type payloadType uint32
 
 // Payload types used by port sessions.
 const (
-	payloadOutput              payloadType = 1
-	payloadHandshakeRequest    payloadType = 5
-	payloadHandshakeResponse   payloadType = 6
-	payloadHandshakeComplete   payloadType = 7
-	payloadEncChallengeRequest payloadType = 8
-	payloadFlag                payloadType = 10
+	payloadOutput               payloadType = 1
+	payloadHandshakeRequest     payloadType = 5
+	payloadHandshakeResponse    payloadType = 6
+	payloadHandshakeComplete    payloadType = 7
+	payloadEncChallengeRequest  payloadType = 8
+	payloadEncChallengeResponse payloadType = 9
+	payloadFlag                 payloadType = 10
+	payloadStdErr               payloadType = 11
+	payloadExitCode             payloadType = 12
 )
 
 // flag is the payload of a payloadFlag message, sent as a big-endian uint32.

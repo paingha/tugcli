@@ -20,9 +20,17 @@ jobs:
           go-version-file: go.mod
       - uses: sigstore/cosign-installer@v3
       - uses: anchore/sbom-action/download-syft@v0 # SBOMs for the archives
+      - name: Find the previous release
+        # GoReleaser's own lookup could stop at a Python SDK tag that shares
+        # a commit with a release, so name tug's previous tag outright.
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then echo "GORELEASER_PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"; fi
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Pushes the Homebrew cask, Scoop manifest and krew manifest; unset skips them.
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}

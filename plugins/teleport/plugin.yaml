@@ -17,6 +17,13 @@ spec:
   - {os: windows, arch: arm64, bin: bin/windows_arm64/tug-provider-teleport.exe}
   env: [TELEPORT_HOME]
   network: []
+  # The plugin runs tsh, which keeps its profiles and keys in ~/.tsh (or
+  # TELEPORT_HOME) and may refresh them, and reaches a self-hosted proxy on
+  # its web port, 3080, or its SSH port, 3023.
+  sandbox:
+    tools: [tsh]
+    write: ["~/.tsh", "$TELEPORT_HOME"]
+    ports: [3023, 3080]
   accountConfig:
     type: object
     properties:

@@ -65,3 +65,56 @@ func TestIndexValidate(t *testing.T) {
 		}
 	}
 }
+
+const signedIndexYAML = `apiVersion: tug.plugin.index/v1alpha1
+kind: PluginIndex
+plugins:
+- name: acme
+  versions:
+  - version: 0.1.0
+    url: https://example.com/a-0.1.0.tar.gz
+    sha256: %s
+    sigstore:
+      bundle: https://example.com/a-0.1.0.tar.gz.sigstore.json
+      identity: https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0
+      issuer: https://token.actions.githubusercontent.com
+`
+
+func TestIndexSigstore(t *testing.T) {
+	sum := strings.Repeat("a", 64)
+	priv, pub, _ := NewIndexKey()
+	key, _ := ParsePublicKey(pub)
+	data := []byte(strings.Replace(signedIndexYAML, "%s", sum, 1))
+	sig, err := SignIndex(data, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix, err := ParseIndex(data, sig, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := ix.Plugins[0].Latest()
+	if v.Sigstore == nil {
+		t.Fatal("Latest().Sigstore = nil, want the signature")
+	}
+	if got := v.Sigstore.Signer(); got.Subject != "https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0" || got.Issuer != "https://token.actions.githubusercontent.com" {
+		t.Errorf("Signer() = %+v, want the release workflow from GitHub Actions", got)
+	}
+
+	tests := []struct{ name, from, to, want string }{
+		{"plain http bundle", "bundle: https://example.com", "bundle: http://example.com", "https url for the Sigstore bundle"},
+		{"no identity", "      identity: https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0\n", "", "identity or identity regexp"},
+		{"identity and regexp", "      issuer:", "      identityRegexp: .*\n      issuer:", "not both"},
+		{"bad regexp", "identity: https", "identityRegexp: (https", "identity regexp"},
+		{"no issuer", "      issuer: https://token.actions.githubusercontent.com\n", "", "OIDC issuer"},
+		{"unknown field", "      issuer:", "      subject: x\n      issuer:", "subject"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Replace(strings.Replace(signedIndexYAML, tt.from, tt.to, 1), "%s", sum, 1)
+			if _, err := SignIndex([]byte(body), priv); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("SignIndex = %v, want an error mentioning %q", err, tt.want)
+			}
+		})
+	}
+}

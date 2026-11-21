@@ -222,7 +222,15 @@ func TestWhy(t *testing.T) {
 	newSession(t)
 	mustTug(t, "connect", "payments-prod") // read-only, which why does not mind
 
-	out := mustTug(t, "why", "billing", "-n", "shop")
+	unhealthy := func(args ...string) string {
+		t.Helper()
+		r := tug(t, append([]string{"why"}, args...)...)
+		if r.code != 1 {
+			t.Fatalf("tug why %v: exit %d, want 1 for a workload that is not ready\n%s%s", args, r.code, r.stdout, r.stderr)
+		}
+		return r.stdout
+	}
+	out := unhealthy("billing", "-n", "shop")
 	for _, want := range []string{
 		"deploy/billing in shop is not ready: 0/1 ready",
 		"billing-5d4f-x2x4z   CrashLoopBackOff   0/1     7",
@@ -243,7 +251,7 @@ func TestWhy(t *testing.T) {
 	}
 
 	var d ops.Diagnosis
-	if err := json.Unmarshal([]byte(mustTug(t, "why", "ml", "-n", "shop", "-o", "json")), &d); err != nil {
+	if err := json.Unmarshal([]byte(unhealthy("ml", "-n", "shop", "-o", "json")), &d); err != nil {
 		t.Fatal(err)
 	}
 	if d.Healthy || d.Target != "deploy/ml-trainer" || len(d.Findings) != 1 {
@@ -255,7 +263,7 @@ func TestWhy(t *testing.T) {
 	}
 
 	var y map[string]any
-	if err := yaml.Unmarshal([]byte(mustTug(t, "why", "billing", "-n", "shop", "-o", "yaml")), &y); err != nil || y["healthy"] != false {
+	if err := yaml.Unmarshal([]byte(unhealthy("billing", "-n", "shop", "-o", "yaml")), &y); err != nil || y["healthy"] != false {
 		t.Errorf("tug why -o yaml = %v, %v", y, err)
 	}
 	if r := tug(t, "why", "billing", "-n", "shop", "-o", "name"); r.code == 0 || !strings.Contains(r.stderr, "table, json or yaml") {
@@ -263,7 +271,7 @@ func TestWhy(t *testing.T) {
 	}
 
 	// A volume claim stuck in Pending, and the reason the provisioner gave.
-	out = mustTug(t, "why", "sts/ledger", "-n", "shop")
+	out = unhealthy("sts/ledger", "-n", "shop")
 	for _, want := range []string{
 		"error    pvc/data-ledger-0: Pending",
 		`is Pending: no volume is bound to it: storageclass.storage.k8s.io "fast-ssd" not found`,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 // statusJSON is tailscale status --json on a laptop in a tailnet with two
@@ -72,11 +73,14 @@ const statusJSON = `{
 
 // fakeTailscale puts a shell script called tailscale first on PATH. It
 // prints status for tailscale status --json and fails on anything else.
+// Like tailscale, it runs no other programs, only shell builtins, and has
+// no here-document, which macOS's sh writes to /tmp; so it also works in
+// tug's sandbox.
 func fakeTailscale(t *testing.T, status string) {
 	t.Helper()
 	fakeTool(t, "#!/bin/sh\n"+
 		"[ \"$*\" = \"status --json\" ] || { echo \"unexpected arguments: $*\" >&2; exit 2; }\n"+
-		"cat <<'EOF'\n"+status+"\nEOF\n")
+		"printf '%s\\n' '"+strings.ReplaceAll(status, "'", `'\''`)+"'\n")
 }
 
 func fakeTool(t *testing.T, script string) {
@@ -226,4 +230,5 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the tailscale plugin does not conform")
 	}
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Name: Name, Manifest: "plugin.yaml", Bin: bin, Settings: map[string]any{ConfigTag: DefaultTag}})
 }

@@ -378,8 +378,9 @@ func restarts(p *corev1.Pod) int32 {
 	return n
 }
 
-// shortKind returns kubectl's short name for a kind, as used in "rs/api".
-func shortKind(kind string) string {
+// ShortKind returns kubectl's short name for a kind, as in "rs/api", and the
+// kind in lower case when it has none.
+func ShortKind(kind string) string {
 	switch kind {
 	case "Deployment":
 		return "deploy"

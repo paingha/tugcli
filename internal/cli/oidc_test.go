@@ -21,6 +21,7 @@ spec:
   capabilities: [list, credential]
   platforms:
   - {os: GOOS, arch: GOARCH, bin: tug-provider-idp}
+  sandbox: {tools: [cat]}
 `
 
 // oidcPluginScript lists one cluster whose credential is a sign-in to

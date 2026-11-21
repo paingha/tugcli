@@ -359,7 +359,7 @@ func (d *objectDiagnoser) events(ctx context.Context) error {
 				continue
 			}
 			found = append(found, Event{
-				Object: shortKind(e.InvolvedObject.Kind) + "/" + e.InvolvedObject.Name, Reason: e.Reason,
+				Object: ShortKind(e.InvolvedObject.Kind) + "/" + e.InvolvedObject.Name, Reason: e.Reason,
 				Message: e.Message, Count: eventCount(&e), LastSeen: lastSeen(&e),
 			})
 		}

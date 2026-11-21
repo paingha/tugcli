@@ -3,7 +3,9 @@
 // signed in with: clusters come from tsh kube ls, and credentials are
 // delegated to tsh kube credentials, so Teleport's certificates stay with
 // tsh. The endpoint, CA and TLS server name are the ones tsh kube login
-// writes into a kubeconfig, worked out from the tsh profile.
+// writes into a kubeconfig, worked out from the tsh profile. When kubectl
+// cannot reach the proxy directly, each cluster is listed with a tsh://
+// tunnel, through which tug runs tsh proxy kube.
 package teleport
 
 import (
@@ -162,11 +164,9 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 	}
 	cluster := cmp.Or(req.Account.ConfigString(ConfigCluster), active.Cluster, profileName)
 
-	if prof.needsLocalProxy() {
-		return nil, provider.Errorf(provider.Unimplemented,
-			"%s does not let Kubernetes clients connect directly; tsh would need to run a local proxy, which tug cannot use", profileName).
-			WithHint("use `tsh proxy kube` or `tsh kubectl` for these clusters")
-	}
+	// Without a direct way in, tug reaches the clusters through tsh proxy
+	// kube, named by the profile's own proxy address.
+	localProxy := prof.needsLocalProxy()
 	if prof.KubeProxyAddr == "" && prof.relayAddr() == "" {
 		return nil, provider.Errorf(provider.Unavailable, "the tsh profile for %s has no Kubernetes proxy address", profileName).
 			WithHint(fmt.Sprintf("if Kubernetes access has been enabled since you signed in, run `tsh login --proxy=%s`", proxy))
@@ -211,6 +211,9 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 			// keeps the --proxy it was listed through.
 			Credential: &cred,
 		}
+		if localProxy {
+			pc.Tunnel = tshTunnel(cmp.Or(prof.WebProxyAddr, u.Host), cluster, kc.Name)
+		}
 		for k, v := range kc.Labels {
 			// tug sets the region label from Region.
 			if strings.EqualFold(k, "region") {
@@ -223,6 +226,13 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 		clusters = append(clusters, pc)
 	}
 	return clusters, nil
+}
+
+// tshTunnel returns the tunnel that reaches a cluster through tsh proxy
+// kube. tsh's local proxy then holds the Teleport certificate, and its own
+// CA and client certificate take the place of the listed ones.
+func tshTunnel(proxy, cluster, kube string) string {
+	return "tsh://" + proxy + "/" + url.PathEscape(cluster) + "/" + url.PathEscape(kube)
 }
 
 // Credential returns the tsh kube credentials command for a listed cluster.
@@ -332,7 +342,8 @@ func readProfile(home, name string) (profile, error) {
 // needsLocalProxy reports what tsh's Profile.RequireKubeLocalProxy does:
 // kubectl cannot connect directly when the private key lives on a hardware
 // key, or when the proxy sits behind a load balancer that needs tsh to
-// upgrade the connection.
+// upgrade the connection. tsh kube credentials then refuses, and tsh proxy
+// kube is the way in.
 func (p profile) needsLocalProxy() bool {
 	if strings.HasPrefix(p.PrivateKeyPolicy, "hardware_key") {
 		return true

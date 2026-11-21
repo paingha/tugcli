@@ -24,6 +24,13 @@ type Dirs struct {
 	// TugVersion is the running tug's version. Plugins whose minTugVersion
 	// is newer are refused; empty, or a development build, accepts them all.
 	TugVersion string
+	// PreferWASM runs a plugin's WebAssembly build even when it also has a
+	// build for this machine.
+	PreferWASM bool
+}
+
+func (d Dirs) load(dir string, dev bool) (*Plugin, error) {
+	return Load(dir, dev, PreferWASM(d.PreferWASM))
 }
 
 // NewDirs returns the plugin directories under tug's data directory.
@@ -71,14 +78,14 @@ func (d Dirs) Discover() ([]*Plugin, []Problem) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err == nil {
-			p, err := Load(dir, true)
+			p, err := d.load(dir, true)
 			add(p, err, dir)
 			continue
 		}
 		for _, e := range entries {
 			sub := filepath.Join(dir, e.Name())
 			if _, err := os.Stat(filepath.Join(sub, ManifestFile)); err == nil {
-				p, err := Load(sub, true)
+				p, err := d.load(sub, true)
 				add(p, err, sub)
 			}
 		}
@@ -89,7 +96,7 @@ func (d Dirs) Discover() ([]*Plugin, []Problem) {
 		problems = append(problems, Problem{Location: d.linksFile(), Err: err})
 	}
 	for _, name := range sortedKeys(links) {
-		p, err := Load(links[name], true)
+		p, err := d.load(links[name], true)
 		if err == nil && p.Name() != name {
 			err = fmt.Errorf("linked as %q but the manifest names %q", name, p.Name())
 		}
@@ -106,36 +113,73 @@ func (d Dirs) Discover() ([]*Plugin, []Problem) {
 			problems = append(problems, Problem{Location: filepath.Join(d.Installed, n.Name()), Err: err})
 			continue
 		}
-		p, err := Load(dir, false)
+		p, err := d.load(dir, false)
 		add(p, err, dir)
 	}
 	return out, problems
 }
 
+// LoadOption changes how Load picks a plugin's build.
+type LoadOption func(*loadOptions)
+
+type loadOptions struct{ preferWASM bool }
+
+// PreferWASM makes Load pick a plugin's WebAssembly build over its build
+// for this machine, when it has both.
+func PreferWASM(prefer bool) LoadOption {
+	return func(o *loadOptions) { o.preferWASM = prefer }
+}
+
 // Load reads a plugin directory. Dev plugins skip the checksum check.
-func Load(dir string, dev bool) (*Plugin, error) {
+//
+// It uses the best build that can run here (see Manifest.Runnable) whose
+// file exists, so a directory under development needs only one of the
+// builds its manifest lists.
+func Load(dir string, dev bool, opts ...LoadOption) (*Plugin, error) {
+	var o loadOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	m, err := LoadManifest(dir)
 	if err != nil {
 		return nil, err
 	}
-	plat, err := m.Platform()
-	if err != nil {
-		return nil, err
+	builds := m.Runnable(o.preferWASM)
+	if len(builds) == 0 {
+		return nil, m.noBuild()
 	}
-	bin := filepath.Join(dir, filepath.FromSlash(plat.Bin))
-	st, err := os.Stat(bin)
-	if err != nil {
-		return nil, fmt.Errorf("plugin %s: %w", m.Metadata.Name, err)
+	var (
+		plat     Platform
+		bin      string
+		firstErr error
+	)
+	for _, b := range builds {
+		path := filepath.Join(dir, filepath.FromSlash(b.Bin))
+		st, err := os.Stat(path)
+		if err == nil && st.IsDir() {
+			err = fmt.Errorf("%s is a directory", path)
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		plat, bin = b, path
+		break
 	}
-	if st.IsDir() {
-		return nil, fmt.Errorf("plugin %s: %s is a directory", m.Metadata.Name, bin)
+	if bin == "" {
+		return nil, fmt.Errorf("plugin %s: %w", m.Metadata.Name, firstErr)
 	}
 	if !dev {
 		if err := VerifyChecksum(bin, plat.SHA256); err != nil {
 			return nil, fmt.Errorf("plugin %s: %w", m.Metadata.Name, err)
 		}
 	}
-	return &Plugin{Manifest: m, Dir: dir, Bin: bin, Dev: dev}, nil
+	if plat.IsWASM() && !isWASMFile(bin) {
+		return nil, fmt.Errorf("plugin %s: %s is not a WebAssembly module; build it with GOOS=%s GOARCH=%s", m.Metadata.Name, bin, WASMOS, WASMArch)
+	}
+	return &Plugin{Manifest: m, Dir: dir, Bin: bin, Dev: dev, WASM: plat.IsWASM()}, nil
 }
 
 // Links returns linked development plugins by name.
@@ -160,7 +204,7 @@ func (d Dirs) Link(dir string) (*Plugin, error) {
 	if err != nil {
 		return nil, err
 	}
-	p, err := Load(abs, true)
+	p, err := d.load(abs, true)
 	if err != nil {
 		return nil, err
 	}

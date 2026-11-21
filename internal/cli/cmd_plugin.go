@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +19,8 @@ import (
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/sandbox"
+	"github.com/paingha/tugcli/internal/sigstore"
 	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
@@ -40,6 +45,7 @@ func newPluginCmd(a *app) *cobra.Command {
 func (a *app) pluginDirs() plugin.Dirs {
 	d := plugin.NewDirs(a.paths.Data)
 	d.TugVersion = version.String()
+	d.PreferWASM = a.cfg.Plugins.WASM.Prefer
 	return d
 }
 
@@ -72,8 +78,14 @@ type installOptions struct {
 	sha256 string
 	yes    bool
 	force  bool
-	// wantName is the plugin an index promised the archive holds.
-	wantName string
+	// wantName is the plugin an index promised the archive holds, and
+	// wantVersion its version.
+	wantName    string
+	wantVersion string
+	// index is the index the archive is listed in, and sig its Sigstore
+	// signature there, if it has one.
+	index string
+	sig   *plugin.IndexSigstore
 }
 
 func newPluginInstallCmd(a *app) *cobra.Command {
@@ -89,7 +101,13 @@ will receive and the hosts it talks to, and asks you to confirm.
 
 A plain name, or name@version, installs from the signed plugin indexes in
 plugins.indexes: the index's signature, the archive's sha256 and every
-binary's sha256 are all checked.`,
+binary's sha256 are all checked. When the index names a Sigstore signature
+for the archive, tug downloads the bundle and checks it first: the Fulcio
+certificate chain, the Rekor transparency log entry and that the signer is
+the one the index names. With plugins.requireSignatures set in config.yaml,
+tug refuses index entries without a signature. An archive from a file or URL
+has no index to name its signer, so tug checks no signature on it and warns
+that it is unsigned.`,
 		Example: `  tug plugin install acme
   tug plugin install acme@0.1.0
   tug plugin install ./tug-provider-acme_0.1.0.tar.gz
@@ -130,12 +148,23 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		if err != nil {
 			return err
 		}
+		if v.Sigstore == nil && a.cfg.Plugins.RequireSignatures {
+			return fmt.Errorf("index %s has no Sigstore signature for %s %s, and plugins.requireSignatures in config.yaml refuses unsigned plugins; not installed",
+				m.Index, m.Plugin.Name, v.Version)
+		}
 		fmt.Fprintf(a.stderr, "%s %s from index %s\n", m.Plugin.Name, v.Version, m.Index)
 		o.sha256 = v.SHA256
-		o.wantName = m.Plugin.Name
+		o.wantName, o.wantVersion = m.Plugin.Name, v.Version
+		o.index, o.sig = m.Index, v.Sigstore
 		return a.installPlugin(ctx, v.URL, o)
 	}
 
+	// The signature comes first, then the archive's sha256 and every
+	// binary's.
+	signer, err := a.checkSignature(ctx, archive, o)
+	if err != nil {
+		return err
+	}
 	staged, err := dirs.Stage(archive, o.sha256)
 	if err != nil {
 		return err
@@ -150,7 +179,28 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		return fmt.Errorf("%s is a built-in provider; a plugin may replace it only if plugins.allowOverride in config.yaml lists it", m.Metadata.Name)
 	}
 
-	a.printManifest(m)
+	if staged.Plugin.WASM {
+		// Compile now: a module tug cannot run is refused before it is
+		// installed, and the first call finds it compiled.
+		runner := a.pluginRunner(staged.Plugin)
+		err := runner.Prepare()
+		_ = runner.Close() // the compiled module stays in the cache
+		if err != nil {
+			return fmt.Errorf("not installed: %w", err)
+		}
+	}
+	a.printManifest(staged.Plugin)
+	c := a.colors()
+	switch {
+	case signer != nil:
+		fmt.Fprintf(a.stderr, "  signed by:     %s\n", sigstore.Identity{Subject: signer.Subject, Issuer: signer.Issuer})
+	case o.index != "":
+		fmt.Fprintf(a.stderr, "%s index %s has no Sigstore signature for %s %s, so tug cannot check who built it\n",
+			c.Yellow("warning:"), o.index, o.wantName, o.wantVersion)
+	default:
+		fmt.Fprintf(a.stderr, "%s %s has no Sigstore signature, so tug cannot check who built it; install it only if you trust where it came from\n",
+			c.Yellow("warning:"), src)
+	}
 	a.warnUnknownFields(m, "which it ignores")
 	if !o.yes {
 		if !a.interactive() {
@@ -164,14 +214,56 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	if err != nil {
 		return err
 	}
-	c := a.colors()
 	fmt.Fprintf(a.stdout, "%s %s %s in %s\n", c.Green("Installed"), p.Name(), m.Metadata.Version, p.Dir)
 	fmt.Fprintf(a.stdout, "Next: tug import %s --account <id>\n", p.Name())
 	return nil
 }
 
-// printManifest shows what a plugin will be able to see and reach.
-func (a *app) printManifest(m *plugin.Manifest) {
+// checkSignature checks the archive against the Sigstore signature its
+// index names and returns the signer, or nil when there is no signature to
+// check.
+func (a *app) checkSignature(ctx context.Context, archive string, o installOptions) (*sigstore.Signer, error) {
+	if o.sig == nil {
+		return nil, nil
+	}
+	bundle, err := plugin.FetchBundle(ctx, o.sig.Bundle)
+	if err != nil {
+		return nil, fmt.Errorf("the Sigstore bundle for %s %s: %w", o.wantName, o.wantVersion, err)
+	}
+	v, err := a.sigstoreVerifier(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s, err := v.Verify(archive, bundle, o.sig.Signer())
+	if err != nil {
+		return nil, fmt.Errorf("checking the Sigstore signature of %s %s: %w", o.wantName, o.wantVersion, err)
+	}
+	return s, nil
+}
+
+// sigstoreVerifier checks plugin signatures against plugins.sigstoreTrustedRoot
+// when it is set, and against the public-good Sigstore deployment otherwise.
+func (a *app) sigstoreVerifier(ctx context.Context) (*sigstore.Verifier, error) {
+	if path := a.cfg.Plugins.SigstoreTrustedRoot; path != "" {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(a.paths.Config, path)
+		}
+		return sigstore.FromFile(path)
+	}
+	v, err := sigstore.PublicGood(ctx, filepath.Join(a.paths.Cache, "sigstore"))
+	if err != nil {
+		return nil, err
+	}
+	if err := v.Stale(); err != nil {
+		a.log.Debug("using the Sigstore trust root built into tug", "err", err)
+	}
+	return v, nil
+}
+
+// printManifest shows what a plugin will be able to see and reach, and how
+// tug runs it.
+func (a *app) printManifest(p *plugin.Plugin) {
+	m := p.Manifest
 	secrets := make([]string, 0, len(m.Spec.Secrets))
 	for _, s := range m.Spec.Secrets {
 		secrets = append(secrets, s.Name)
@@ -189,6 +281,11 @@ func (a *app) printManifest(m *plugin.Manifest) {
 	fmt.Fprintf(a.stderr, "  environment:   %s\n", dash(strings.Join(m.Spec.Env, ", ")))
 	fmt.Fprintf(a.stderr, "  network hosts: %s\n", dash(strings.Join(m.Spec.Network, ", ")))
 	fmt.Fprintf(a.stderr, "  platforms:     %s\n", strings.Join(platforms, ", "))
+	if p.WASM {
+		fmt.Fprintf(a.stderr, "  runs as:       WebAssembly in tug's sandbox: https to the network hosts only, no files\n")
+	} else {
+		fmt.Fprintf(a.stderr, "  runs as:       %s\n", a.describeSandbox(m))
+	}
 	for i, s := range m.Settings() {
 		label := ""
 		if i == 0 {
@@ -196,6 +293,36 @@ func (a *app) printManifest(m *plugin.Manifest) {
 		}
 		fmt.Fprintf(a.stderr, "  %-15s%s\n", label, describeSetting(s))
 	}
+}
+
+// describeSandbox says how a native plugin runs: what it may reach in the
+// operating system's sandbox beyond its own directory, or why it runs
+// without one.
+func (a *app) describeSandbox(m *plugin.Manifest) string {
+	const unconfined = "a process with your user's access"
+	if !a.cfg.Plugins.Sandbox.Confines(m.Metadata.Name) {
+		return unconfined + ": plugins.sandbox in config.yaml turns the sandbox off for it"
+	}
+	if st := sandbox.Check(); !st.Any() {
+		return unconfined + ": there is no sandbox here; " + strings.TrimPrefix(st.Missing, "everything: ")
+	}
+	ports := []string{"443"}
+	for _, p := range m.SandboxPorts() {
+		if p != 443 {
+			ports = append(ports, strconv.Itoa(int(p)))
+		}
+	}
+	parts := []string{"TCP ports " + strings.Join(ports, ", ")}
+	s := m.Spec.Sandbox
+	for _, f := range []struct {
+		verb  string
+		items []string
+	}{{"runs", s.Tools}, {"reads", s.Read}, {"writes", s.Write}, {"connects to", s.Sockets}} {
+		if len(f.items) > 0 {
+			parts = append(parts, f.verb+" "+strings.Join(f.items, ", "))
+		}
+	}
+	return "a process in the operating system's sandbox: " + strings.Join(parts, "; ")
 }
 
 // describeSetting shows an account setting as `tug import --set` takes it.
@@ -256,7 +383,18 @@ func newPluginLinkCmd(a *app) *cobra.Command {
 					a.colors().Yellow("warning:"), p.Name())
 			}
 			a.warnUnknownFields(p.Manifest, "which it ignores")
-			_, err = fmt.Fprintf(a.stdout, "Linked %s %s from %s %s\n", p.Name(), p.Manifest.Metadata.Version, p.Dir,
+			build := ""
+			if p.WASM {
+				build = " as WebAssembly"
+				// Compile now, so a module tug cannot run says so here; the
+				// link stands, ready for a rebuilt module.
+				runner := a.pluginRunner(p)
+				if err := runner.Prepare(); err != nil {
+					fmt.Fprintf(a.stderr, "%s %v\n", a.colors().Yellow("warning:"), err)
+				}
+				_ = runner.Close() // the compiled module stays in the cache
+			}
+			_, err = fmt.Fprintf(a.stdout, "Linked %s %s%s from %s %s\n", p.Name(), p.Manifest.Metadata.Version, build, p.Dir,
 				a.colors().Yellow("(dev: not checksummed)"))
 			return err
 		},
@@ -297,9 +435,13 @@ func newPluginDescribeCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			a.printManifest(pp.Plugin().Manifest)
+			a.printManifest(pp.Plugin())
 			fmt.Fprintf(a.stderr, "  description:   %s\n", dash(d.Description))
-			fmt.Fprintf(a.stderr, "  protocols:     %s\n  executable:    %s\n", strings.Join(d.Protocols, ", "), pp.Plugin().Bin)
+			bin := "executable:"
+			if pp.Plugin().WASM {
+				bin = "module:"
+			}
+			fmt.Fprintf(a.stderr, "  protocols:     %s\n  %-15s%s\n", strings.Join(d.Protocols, ", "), bin, pp.Plugin().Bin)
 			a.warnUnknownFields(pp.Plugin().Manifest, "which it ignores")
 			if d.Name != pp.Plugin().Name() {
 				fmt.Fprintf(a.stderr, "%s describe says %q but the manifest says %q\n", a.colors().Yellow("warning:"), d.Name, pp.Plugin().Name())
@@ -446,8 +588,27 @@ func (a *app) testPlugin(ctx context.Context, name string, o pluginTestOptions) 
 	var target conformance.Target
 	switch p := e.Provider.(type) {
 	case *plugin.Provider:
-		runner := &plugin.Runner{Bin: p.Plugin().Bin, Env: p.Plugin().Manifest.Spec.Env}
-		target = conformance.Target{Command: p.Plugin().Bin, Env: runner.Environ()}
+		if pl := p.Plugin(); pl.WASM {
+			// tug runs the module, so the suite runs tug, which gives the
+			// module the plugin's sandbox.
+			target = conformance.Target{Command: selfPath(), Args: []string{"provider-exec", name}, Env: os.Environ(), Module: pl.Bin}
+			// Compile once into the cache, rather than in each process.
+			warm := a.pluginRunner(pl)
+			err := warm.Prepare()
+			_ = warm.Close() // the compiled module stays in the cache
+			if err != nil {
+				return err
+			}
+		} else {
+			// The plugin runs as it would for any other command: scrubbed
+			// environment and sandbox included.
+			c, err := a.pluginRunner(pl).Command()
+			if err != nil {
+				return err
+			}
+			defer c.Cleanup()
+			target = conformance.Target{Command: c.Path, Args: c.Args, Env: c.Env}
+		}
 	default:
 		// Built-ins run through the same process interface as plugins.
 		target = conformance.Target{Command: selfPath(), Args: []string{"provider-exec", name}, Env: os.Environ()}
@@ -539,8 +700,35 @@ func (a *app) printReport(r conformance.Report) {
 	fmt.Fprintf(a.stdout, "\n%d passed, %d skipped, %d failed\n", counts[conformance.Pass], counts[conformance.Skip], counts[conformance.Fail])
 }
 
+// newPluginSandboxExecCmd confines its own process with the sandbox policy
+// tug passes in its environment, then runs the plugin in its place, so the
+// plugin starts restricted. tug starts plugins through it on Linux.
+func newPluginSandboxExecCmd(*app) *cobra.Command {
+	return &cobra.Command{
+		Use:    sandbox.ExecCommand + " <plugin> [args]",
+		Short:  "Run a plugin in tug's sandbox (tug runs this itself)",
+		Hidden: true,
+		Args:   cobra.MinimumNArgs(1),
+		// Everything after the command name is the plugin's.
+		DisableFlagParsing: true,
+		// The plugin's scrubbed environment has no TUG_HOME, so this command
+		// must not read config.yaml or anything else of tug's.
+		PersistentPreRunE: func(*cobra.Command, []string) error { return nil },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// The plugin decides what SIGINT and SIGTERM do; one that came
+			// before this point has already cancelled the context.
+			signal.Reset(os.Interrupt, syscall.SIGTERM)
+			if err := cmd.Context().Err(); err != nil {
+				return err
+			}
+			return sandbox.Exec(args)
+		},
+	}
+}
+
 // newProviderExecCmd serves a provider over the plugin protocol. It lets the
-// conformance suite test built-ins exactly as it tests plugins.
+// conformance suite test built-ins exactly as it tests plugins, and reach a
+// WebAssembly plugin, which only tug can run, through a process.
 func newProviderExecCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:    "provider-exec <provider> <operation>",
@@ -551,6 +739,17 @@ func newProviderExecCmd(a *app) *cobra.Command {
 			p, err := a.registry().Get(args[0])
 			if err != nil {
 				return err
+			}
+			if pp, ok := p.(*plugin.Provider); ok {
+				// The plugin itself answers, bytes and exit status as they are.
+				code, err := pp.Exec(cmd.Context(), args[1:], a.stdin, a.stdout, a.stderr)
+				if err != nil {
+					return err
+				}
+				if code != 0 {
+					return &exitError{code: code}
+				}
+				return nil
 			}
 			if code := provider.Run(cmd.Context(), registry.ToSDK(p), args[1:], a.stdin, a.stdout, a.stderr); code != 0 {
 				return &exitError{code: code}

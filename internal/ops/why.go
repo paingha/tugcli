@@ -819,7 +819,7 @@ func (d *diagnoser) controllerEvents() {
 			if e.InvolvedObject.Kind == "PersistentVolumeClaim" && !d.mounted(e.InvolvedObject.Name) {
 				continue
 			}
-			warnings = append(warnings, keyed{e, shortKind(e.InvolvedObject.Kind) + "/" + e.InvolvedObject.Name})
+			warnings = append(warnings, keyed{e, ShortKind(e.InvolvedObject.Kind) + "/" + e.InvolvedObject.Name})
 		}
 	}
 	slices.SortStableFunc(warnings, func(a, b keyed) int { return lastSeen(&b.e).Compare(lastSeen(&a.e)) })

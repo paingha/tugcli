@@ -13,6 +13,7 @@ import (
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/sigstore"
 )
 
 // IndexKeyEnv supplies an index signing key to tug plugin index sign, for
@@ -131,12 +132,15 @@ func newPluginIndexCmd(a *app) *cobra.Command {
 		Use:   "index",
 		Short: "Build and sign a plugin index, for those who publish one",
 		Long: `A plugin index lists reviewed plugins with the URL and sha256 of each archive,
-and is signed with ed25519 as a whole. Users add it to plugins.indexes in
-config.yaml with its public key; tug plugin install <name> then checks the
-signature, the archive's sha256 and every binary's sha256.
+and is signed with ed25519 as a whole. An archive may also have a Sigstore
+signature from its publisher's release workflow. Users add the index to
+plugins.indexes in config.yaml with its public key; tug plugin install <name>
+then checks the index's signature, the archive's Sigstore signature when the
+index names one, the archive's sha256 and every binary's sha256.
 
   tug plugin index keygen                       # once; prints the public key
-  tug plugin index add index.yaml dist/x.tar.gz --url https://.../x.tar.gz
+  tug plugin index add index.yaml dist/x.tar.gz --url https://.../x.tar.gz \
+    --bundle https://.../x.tar.gz.sigstore.json --identity <workflow> --issuer <issuer>
   tug plugin index sign index.yaml              # writes index.yaml.sig
   # publish index.yaml and index.yaml.sig side by side`,
 	}
@@ -179,28 +183,83 @@ func newIndexKeygenCmd(a *app) *cobra.Command {
 	return cmd
 }
 
+type indexAddOptions struct {
+	url         string
+	description string
+	// The archive's Sigstore bundle and who must have signed it.
+	bundle         string
+	identity       string
+	identityRegexp string
+	issuer         string
+}
+
+// sigstore returns the signature to record, or nil when no Sigstore flag
+// is set.
+func (o indexAddOptions) sigstore() (*plugin.IndexSigstore, error) {
+	if o.bundle == "" && o.identity == "" && o.identityRegexp == "" && o.issuer == "" {
+		return nil, nil
+	}
+	switch {
+	case o.bundle == "":
+		return nil, errors.New("--identity, --identity-regexp and --issuer describe a Sigstore signature; pass the bundle's URL with --bundle")
+	case o.identity == "" && o.identityRegexp == "":
+		return nil, errors.New("--bundle needs the signer's identity: --identity, or --identity-regexp")
+	case o.issuer == "":
+		return nil, fmt.Errorf("--bundle needs the signer's OIDC issuer: --issuer (for GitHub Actions, %s)", sigstore.GitHubIssuer)
+	}
+	s := &plugin.IndexSigstore{Bundle: o.bundle, Identity: o.identity, IdentityRegexp: o.identityRegexp, Issuer: o.issuer}
+	if err := s.Validate(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 func newIndexAddCmd(a *app) *cobra.Command {
-	var archiveURL, description string
+	var o indexAddOptions
 	cmd := &cobra.Command{
 		Use:   "add <index.yaml> <archive>",
 		Short: "Record a packaged plugin archive in an index file",
-		Args:  cobra.ExactArgs(2),
+		Long: `Record a packaged plugin archive in an index file, with its URL and sha256.
+
+When the archive is signed with Sigstore, as the release workflow of
+tug plugin new signs it, --bundle gives the URL of its bundle and
+--identity and --issuer who must have signed it. tug plugin install then
+checks the signature before the sha256. The release workflow prints these
+flags for each release.`,
+		Example: `  tug plugin index add index.yaml dist/tug-provider-acme_0.1.0.tar.gz \
+    --url https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz \
+    --bundle https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz.sigstore.json \
+    --identity https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0 \
+    --issuer https://token.actions.githubusercontent.com`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if archiveURL == "" {
+			if o.url == "" {
 				return errors.New("--url is required: where the archive is published")
 			}
-			p, err := plugin.AddToIndex(args[0], args[1], archiveURL, description)
+			sig, err := o.sigstore()
 			if err != nil {
 				return err
 			}
-			v, _ := p.Latest()
+			p, v, err := plugin.AddToIndex(args[0], args[1], plugin.IndexAddition{URL: o.url, Description: o.description, Sigstore: sig})
+			if err != nil {
+				return err
+			}
 			fmt.Fprintln(a.stderr, a.colors().Dim("sign the index again before publishing it: tug plugin index sign "+args[0]))
+			if sig != nil {
+				_, err = fmt.Fprintf(a.stdout, "Added %s %s to %s, signed by %s\n", p.Name, v.Version, args[0], sig.Signer())
+				return err
+			}
 			_, err = fmt.Fprintf(a.stdout, "Added %s %s to %s\n", p.Name, v.Version, args[0])
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&archiveURL, "url", "", "https URL the archive is published at")
-	cmd.Flags().StringVar(&description, "description", "", "what the plugin reaches, shown by tug plugin search")
+	cmd.Flags().StringVar(&o.url, "url", "", "https URL the archive is published at")
+	cmd.Flags().StringVar(&o.description, "description", "", "what the plugin reaches, shown by tug plugin search")
+	cmd.Flags().StringVar(&o.bundle, "bundle", "", "https URL of the archive's Sigstore bundle")
+	cmd.Flags().StringVar(&o.identity, "identity", "", "certificate identity that must have signed the archive, such as a release workflow's URL and ref")
+	cmd.Flags().StringVar(&o.identityRegexp, "identity-regexp", "", "regular expression the whole certificate identity must match, instead of --identity")
+	cmd.Flags().StringVar(&o.issuer, "issuer", "", "OIDC issuer of the signer's identity")
+	cmd.MarkFlagsMutuallyExclusive("identity", "identity-regexp")
 	return cmd
 }
 

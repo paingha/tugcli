@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -441,39 +443,69 @@ func TestCloseSendsBufferedBytes(t *testing.T) {
 	}
 }
 
+// logBuffer collects log output from the tunnel's goroutines.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestRelayCloses(t *testing.T) {
-	tests := []struct {
-		name string
-		code int
-		want func(error) bool
-	}{
-		{"normally", 1000, func(err error) bool { return errors.Is(err, io.EOF) }},
-		{"with an error", 4010, func(err error) bool {
-			return provider.CodeOf(err) == provider.Unavailable && strings.Contains(err.Error(), "[4010: drop]")
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	// Once the session is open, any close frame ends the stream, as in
+	// gcloud, and the code goes to the debug log and Write's error.
+	for _, code := range []int{1000, 1011, 4003, 4010, 4033} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
 			r := newFakeRelay(t)
-			c := dial(t, r)
+			logs := &logBuffer{}
+			c := dial(t, r, WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))))
 			s := r.session()
-			r.set(func() { s.dropAt, s.dropCode = 3, tt.code })
+			r.set(func() { s.dropAt, s.dropCode = 3, code })
 			if _, err := c.Write([]byte("bye")); err != nil {
 				t.Fatalf("Write: %v", err)
 			}
 			if got := readN(t, c, 3); string(got) != "bye" {
 				t.Errorf("read %q, want bye", got)
 			}
-			if err := readErr(t, c); !tt.want(err) {
-				t.Errorf("Read after the relay closed = %v", err)
+			if err := readErr(t, c); !errors.Is(err, io.EOF) {
+				t.Errorf("Read after the relay closed = %v, want io.EOF", err)
 			}
-			if _, err := c.Write([]byte("more")); err == nil {
-				t.Error("Write after the relay closed succeeded")
+			want := fmt.Sprintf("[%d: drop]", code)
+			if _, err := c.Write([]byte("more")); !errors.Is(err, errRelayClosed) || !strings.Contains(err.Error(), want) {
+				t.Errorf("Write after the relay closed = %v, want errRelayClosed with %s", err, want)
+			}
+			if got := logs.String(); !strings.Contains(got, "code="+strconv.Itoa(code)) {
+				t.Errorf("debug log = %q, want the close code", got)
 			}
 			if n := len(get(r, func() []*http.Request { return r.requests })); n != 1 {
 				t.Errorf("the relay had %d requests, want 1: a closed tunnel must not resume", n)
 			}
 		})
+	}
+}
+
+func TestReauthWithoutResuming(t *testing.T) {
+	r := newFakeRelay(t)
+	c := dial(t, r, WithReconnectTimeout(0))
+	s := r.session()
+	r.set(func() { s.dropAt, s.dropCode = 1, closeReauthRequired })
+	if _, err := c.Write([]byte("x")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	err := readErr(t, c)
+	var pe *provider.Error
+	if !errors.As(err, &pe) || pe.Code != provider.Unauthenticated || pe.Hint != adcHint {
+		t.Errorf("Read after 4004 with resuming off = %v, want Unauthenticated with the ADC hint", err)
 	}
 }
 

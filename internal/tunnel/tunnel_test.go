@@ -61,6 +61,8 @@ func TestParse(t *testing.T) {
 		{"ssm://i-0123456789abcdef0?region=eu-west-1", ""},
 		{"iap://bastion?project=acme&zone=europe-west1-b", ""},
 		{"iap://?project=acme&region=europe-west1&network=default&group=k8s", ""},
+		{"tsh://teleport.example.com:443/root/eks-prod", ""},
+		{"tsh:///root/eks-prod", "name the host"},
 		{"ftp://example.com", "scheme must be one of"},
 		{"ssh://", "name the host"},
 		{"::", "missing protocol scheme"},

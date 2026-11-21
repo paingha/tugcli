@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/rest"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/browser"
 	"github.com/paingha/tugcli/internal/builtin/argocd"
 	"github.com/paingha/tugcli/internal/builtin/aws"
@@ -40,6 +41,7 @@ import (
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/sandbox"
 	"github.com/paingha/tugcli/internal/session"
 	"github.com/paingha/tugcli/internal/tunnel"
 	"github.com/paingha/tugcli/internal/version"
@@ -65,26 +67,42 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	defer a.closeTunnels()
 	defer a.closePlugins()
-	root := newRootCmd(a)
-	root.SetArgs(args)
-	root.SetIn(stdin)
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-
-	if isPassthrough(root, args) {
-		if err := a.setup(false); err != nil {
-			return a.fail(err)
-		}
-		code, err := a.passthrough(ctx, args)
-		if err != nil {
-			return a.fail(err)
-		}
-		return code
-	}
-	if err := root.ExecuteContext(ctx); err != nil {
+	if err := a.execute(ctx, args); err != nil {
 		return a.fail(err)
 	}
 	return 0
+}
+
+// execute runs one command line: on every cluster that --cluster-selector
+// picks, as kubectl when tug has no such command, or as one of tug's own.
+func (a *app) execute(ctx context.Context, args []string) error {
+	fan, args, err := splitFanoutFlags(args)
+	if err != nil {
+		return err
+	}
+	root := newRootCmd(a)
+	root.SetArgs(args)
+	root.SetIn(a.stdin)
+	root.SetOut(a.stdout)
+	root.SetErr(a.stderr)
+
+	if fan != nil {
+		return a.fanout(ctx, root, args, fan)
+	}
+	if isPassthrough(root, args) {
+		if err := a.setup(false); err != nil {
+			return err
+		}
+		code, err := a.passthrough(ctx, args)
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return &exitError{code: code}
+		}
+		return nil
+	}
+	return root.ExecuteContext(ctx)
 }
 
 // app holds what commands share. Expensive pieces load on first use.
@@ -99,6 +117,10 @@ type app struct {
 	paths config.Paths
 	cfg   *config.Config
 	log   *slog.Logger
+
+	// fixed, when set, is the session commands run in instead of this
+	// terminal's: the temporary one a run across clusters made.
+	fixed *session.Session
 
 	// mu guards the pieces below, which load on first use. tugd asks for
 	// them from concurrent proxy requests.
@@ -130,11 +152,7 @@ func (a *app) fail(err error) int {
 // setup resolves paths, loads config and the logger.
 func (a *app) setup(debug bool) error {
 	a.debug = a.debug || debug
-	level := slog.LevelWarn
-	if a.debug {
-		level = slog.LevelDebug
-	}
-	a.log = slog.New(slog.NewTextHandler(a.stderr, &slog.HandlerOptions{Level: level}))
+	a.log = a.logger(a.stderr)
 	paths, err := config.DefaultPaths()
 	if err != nil {
 		return err
@@ -146,6 +164,15 @@ func (a *app) setup(debug bool) error {
 	}
 	a.cfg = cfg
 	return nil
+}
+
+// logger logs to w at Warn, or at Debug with --debug.
+func (a *app) logger(w io.Writer) *slog.Logger {
+	level := slog.LevelWarn
+	if a.debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level}))
 }
 
 // credentialStore opens the keychain or encrypted file on first use.
@@ -191,23 +218,54 @@ func (a *app) registry() *registry.Registry {
 		a.log.Debug("skipping plugin", "location", prob.Location, "err", prob.Err)
 	}
 	for _, p := range plugins {
-		runner := &plugin.Runner{
-			Bin:      p.Bin,
-			Name:     p.Name(),
-			Env:      p.Manifest.Spec.Env,
-			Timeouts: a.cfg.PluginTimeouts(),
-			Serve:    p.Manifest.Spec.Capabilities.Has(provider.CapServe),
-			Log:      a.log,
-		}
 		kind := registry.KindPlugin
 		if p.Dev {
 			kind = registry.KindDevPlugin
 		}
-		if err := r.Add(plugin.NewProvider(p, runner), kind, p.Dir); err != nil {
+		if err := r.Add(plugin.NewProvider(p, a.pluginRunner(p)), kind, p.Dir); err != nil {
 			a.problems = append(a.problems, plugin.Problem{Location: p.Dir, Err: err})
 		}
 	}
 	a.reg = r
+	return r
+}
+
+// pluginRunner returns the runner for a plugin: a process for a native
+// build, in the operating system's sandbox unless plugins.sandbox in
+// config.yaml leaves the plugin out, or tug's own WebAssembly sandbox for a
+// WebAssembly build, whose compiled modules are cached so that only the
+// first run of each pays for compiling it.
+func (a *app) pluginRunner(p *plugin.Plugin) *plugin.Runner {
+	r := &plugin.Runner{
+		Bin:      p.Bin,
+		Name:     p.Name(),
+		Env:      p.Manifest.Spec.Env,
+		Timeouts: a.cfg.PluginTimeouts(),
+		Serve:    p.Manifest.Spec.Capabilities.Has(provider.CapServe),
+		Log:      a.log,
+	}
+	if p.WASM {
+		r.WASM = &plugin.WASMOptions{
+			Network:     p.Manifest.Spec.Network,
+			MemoryLimit: a.cfg.Plugins.WASM.MemoryLimit(),
+			CacheDir:    filepath.Join(a.paths.Cache, "wasm"),
+		}
+		return r
+	}
+	if !a.cfg.Plugins.Sandbox.Confines(p.Name()) {
+		a.log.Debug("plugin runs without the sandbox, as plugins.sandbox in config.yaml says", "plugin", p.Name())
+		return r
+	}
+	self, err := os.Executable()
+	if err != nil {
+		a.log.Debug("finding tug's executable for the sandbox", "err", err)
+	}
+	r.Sandbox = &sandbox.Sandbox{
+		Policy:   p.SandboxPolicy(),
+		Self:     self,
+		TempRoot: filepath.Join(a.paths.Runtime, "plugins"),
+		Log:      a.log,
+	}
 	return r
 }
 
@@ -266,7 +324,13 @@ func (a *app) services(cat *catalog.Catalog) (*importer.Service, *credentials.Br
 		return nil, nil, err
 	}
 	svc := &importer.Service{Registry: a.registry(), Store: store, Now: a.now}
-	broker := &credentials.Broker{Store: store, Now: a.now, Fetch: svc.Fetcher(cat), OIDC: a.oidcClient(store, a.implicitSignIn())}
+	broker := &credentials.Broker{
+		Store:    store,
+		Now:      a.now,
+		Fetch:    svc.Fetcher(cat),
+		Clusters: importer.ClusterLookup(cat),
+		OIDC:     a.oidcClient(store, a.implicitSignIn()),
+	}
 	svc.Broker = broker
 	return svc, broker, nil
 }
@@ -346,15 +410,27 @@ func (a *app) signInUI(device bool) oidc.UI {
 	}
 }
 
+// audit returns the log of the writes tug lets through.
+func (a *app) audit() *audit.Log { return audit.New(audit.Dir(a.paths.Data), audit.WithNow(a.now)) }
+
 func (a *app) catalogPath() string { return catalog.Path(a.paths.Data) }
 
 func (a *app) loadCatalog() (*catalog.Catalog, error) { return catalog.Load(a.catalogPath()) }
 
 func (a *app) sessions() *session.Manager { return session.NewManager(a.paths.Runtime) }
 
+// session returns the session commands run in: this terminal's, or the
+// temporary one a run across clusters made for this app.
+func (a *app) session() (*session.Session, error) {
+	if a.fixed != nil {
+		return a.fixed, nil
+	}
+	return a.sessions().Current()
+}
+
 // currentSession returns this terminal's session with a helpful error.
 func (a *app) currentSession() (*session.Session, error) {
-	s, err := a.sessions().Current()
+	s, err := a.session()
 	if errors.Is(err, session.ErrNoSession) {
 		return nil, fmt.Errorf("%w; add `eval \"$(tug init zsh)\"` (or bash, fish, powershell) to your shell's rc file, or run `tug shell`", err)
 	}

@@ -38,7 +38,7 @@ const (
 )
 
 // errRelayClosed is what Write returns once the relay has ended the tunnel
-// normally, which Read reports as io.EOF.
+// with a close frame, which Read reports as io.EOF.
 var errRelayClosed = errors.New("the IAP relay closed the tunnel")
 
 // conn is an IAP relay session as a net.Conn. One goroutine, run, owns the
@@ -52,7 +52,7 @@ var errRelayClosed = errors.New("the IAP relay closed the tunnel")
 type conn struct {
 	cl     *client
 	t      target
-	cancel context.CancelFunc // ends a resume in progress
+	cancel context.CancelFunc // ends a resume, and a wait for a token, in progress
 
 	closing   chan struct{} // closed by Close
 	closeOnce sync.Once
@@ -74,6 +74,7 @@ type conn struct {
 	sid   string
 	local net.Addr
 	err   error // why the tunnel ended; Read returns it once rbuf is empty
+	werr  error // what Write returns once the tunnel has ended
 
 	rbuf     bytes.Buffer
 	received uint64 // stream bytes received from the relay
@@ -88,10 +89,9 @@ type conn struct {
 
 var _ net.Conn = (*conn)(nil)
 
-// newConn starts the session that ws opened. ctx gives the session's
-// context its values but not its cancellation, which is Close's.
-func newConn(ctx context.Context, cl *client, t target, ws *websocket.Conn, sid string) *conn {
-	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+// newConn starts the session that ws opened. ctx is the tunnel's context,
+// which cancel ends at Close.
+func newConn(ctx context.Context, cancel context.CancelFunc, cl *client, t target, ws *websocket.Conn, sid string) *conn {
 	c := &conn{
 		cl:       cl,
 		t:        t,
@@ -124,14 +124,14 @@ func (c *conn) run(ctx context.Context, ws *websocket.Conn) {
 			return
 		}
 		if c.cl.reconnectTimeout <= 0 || !resumable(err) {
-			c.fail(c.streamError(err))
+			c.fail(c.streamErrors(err))
 			return
 		}
 		c.cl.logger.Debug("resuming the IAP tunnel", "target", c.t.String(), "error", err)
 		ws, err = c.resume(ctx)
 		if err != nil {
 			if !isDone(c.closing) {
-				c.fail(err)
+				c.fail(err, err)
 			}
 			return
 		}
@@ -360,12 +360,13 @@ func (c *conn) writeLoop(ws *websocket.Conn, stop <-chan struct{}) error {
 	}
 }
 
-// fail ends the tunnel with err, unless it has already ended.
-func (c *conn) fail(err error) {
+// fail ends the tunnel, unless it has already ended. Read returns readErr
+// once it has returned every byte received, and Write returns writeErr.
+func (c *conn) fail(readErr, writeErr error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err == nil {
-		c.err = err
+		c.err, c.werr = readErr, writeErr
 		close(c.failed)
 	}
 }
@@ -386,20 +387,28 @@ func resumable(err error) bool {
 	}
 }
 
-// streamError is what Read and Write return after serve stopped with err
+// streamErrors are what Read and Write return after serve stopped with err
 // and the session did not resume.
-func (c *conn) streamError(err error) error {
+//
+// Once a session is open, gcloud takes a close frame from the relay as the
+// end of the stream whatever its code, 1000 and 4010 alike: it logs the
+// code at info level and closes the local connection. Only 4004 differs,
+// because gcloud resumes after it. The tunnel does the same, so Read
+// returns io.EOF and the code goes to the debug log and to Write's error.
+// A 4004 that is not resumed, because resuming is off, is reported as the
+// credential problem it is.
+func (c *conn) streamErrors(err error) (readErr, writeErr error) {
 	var ce *websocket.CloseError
-	if errors.As(err, &ce) {
-		switch ce.Code {
-		case websocket.CloseNormalClosure:
-			return io.EOF
-		case websocket.CloseAbnormalClosure:
-		default:
-			return relayClosed(ce.Code, ce.Text, c.t)
+	if errors.As(err, &ce) && ce.Code != websocket.CloseAbnormalClosure {
+		if ce.Code == closeReauthRequired {
+			e := relayClosed(ce.Code, ce.Text, c.t)
+			return e, e
 		}
+		c.cl.logger.Debug("the IAP relay ended the tunnel", "target", c.t.String(), "code", ce.Code, "reason", ce.Text)
+		return io.EOF, fmt.Errorf("%w [%d: %s]", errRelayClosed, ce.Code, ce.Text)
 	}
-	return fmt.Errorf("the IAP tunnel to %s broke: %w", c.t, err)
+	e := fmt.Errorf("the IAP tunnel to %s broke: %w", c.t, err)
+	return e, e
 }
 
 // Read reads bytes the relay sent, waiting for some if there are none.
@@ -483,10 +492,7 @@ func (c *conn) writeError() error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if errors.Is(c.err, io.EOF) {
-		return errRelayClosed
-	}
-	return c.err
+	return c.werr
 }
 
 // Close sends what Write has buffered, if the relay is connected and takes

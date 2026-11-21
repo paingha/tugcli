@@ -6,12 +6,16 @@ on:
 
 permissions:
   contents: write
+  id-token: write # keyless Sigstore signing of the archive
 
 env:
   # While github.com/paingha/tugcli is private, add a repository secret
   # TUGCLI_TOKEN with read access to it; the module is then fetched with git.
   GOPRIVATE: github.com/paingha/tugcli
   TUGCLI_TOKEN: ${{ secrets.TUGCLI_TOKEN }}
+  # Who signs the archive: this workflow at this tag, as GitHub vouches for
+  # it to Sigstore. A plugin index records it so that tug can check it.
+  SIGNER_ISSUER: https://token.actions.githubusercontent.com
 
 jobs:
   release:
@@ -34,9 +38,39 @@ jobs:
       - run: go test ./...
       - run: go install github.com/paingha/tugcli/cmd/tug@latest
       - run: make package
-      - name: Publish the archive
+      - uses: sigstore/cosign-installer@v4
+      - name: Sign the archive with Sigstore
+        run: |
+          # Keyless: Fulcio certifies this workflow's GitHub identity and
+          # the signature is recorded in the Rekor transparency log.
+          for f in dist/*.tar.gz; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+      - name: Check the signature as tug will
+        run: |
+          for f in dist/*.tar.gz; do
+            cosign verify-blob --bundle "$f.sigstore.json" \
+              --certificate-identity "$GITHUB_SERVER_URL/$GITHUB_WORKFLOW_REF" \
+              --certificate-oidc-issuer "$SIGNER_ISSUER" "$f"
+          done
+      - name: Publish the archive and its signature
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --generate-notes
-          echo "Install with: tug plugin install <archive URL> --sha256 $(sha256sum dist/*.tar.gz | cut -d' ' -f1)"
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.tar.gz.sigstore.json --generate-notes
+          base="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
+          out="$RUNNER_TEMP/release.txt"
+          for f in dist/*.tar.gz; do
+            name=$(basename "$f")
+            {
+              echo "Install with:"
+              echo "  tug plugin install $base/$name --sha256 $(sha256sum "$f" | cut -d' ' -f1)"
+              echo "Add to a plugin index, with the identity that signed it:"
+              echo "  tug plugin index add index.yaml $name --url $base/$name \\"
+              echo "    --bundle $base/$name.sigstore.json \\"
+              echo "    --identity $GITHUB_SERVER_URL/$GITHUB_WORKFLOW_REF \\"
+              echo "    --issuer $SIGNER_ISSUER"
+            } >> "$out"
+          done
+          cat "$out"
+          { echo '```text'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

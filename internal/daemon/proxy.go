@@ -14,7 +14,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/guard"
+	"github.com/paingha/tugcli/internal/session"
 )
 
 // upstream is a reverse proxy to one cluster's API server.
@@ -60,12 +62,51 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("tug proxy: cannot reach %s: %v", sess.State.ClusterName, err))
 		return
 	}
+	if !guard.IsRead(r.Method, &target) {
+		if err := s.record(r, sess, target.Path); err != nil {
+			writeStatus(w, http.StatusInternalServerError, metav1.StatusReasonInternalError,
+				fmt.Sprintf("tug proxy: not forwarding %s, since it could not be recorded in the audit log: %v",
+					guard.Describe(r.Method, &target), err))
+			return
+		}
+	}
 	out := r.Clone(r.Context())
 	out.URL.Path, out.URL.RawPath = rest, ""
 	// The session token is for tugd only; the upstream gets the cluster's
 	// own credential from the transport.
 	out.Header.Del("Authorization")
 	up.proxy.ServeHTTP(w, out)
+}
+
+// maxClient bounds the User-Agent kept in an audit entry.
+const maxClient = 200
+
+// record notes a write the proxy is about to forward in the audit log: the
+// method, the API path and the client's User-Agent, never the query string,
+// the body or a credential.
+func (s *Server) record(r *http.Request, sess *session.Session, path string) error {
+	if s.cfg.Audit == nil {
+		return nil
+	}
+	allowed := audit.AllowedReadWrite
+	if sess.State.ReadOnly {
+		allowed = audit.AllowedUnlocked // the guard let it through
+	}
+	client := r.UserAgent()
+	if len(client) > maxClient {
+		client = client[:maxClient]
+	}
+	return s.cfg.Audit.Record(r.Context(), audit.Entry{
+		Time:      s.cfg.Now(),
+		Source:    audit.SourceProxy,
+		Cluster:   sess.State.ClusterName,
+		ClusterID: sess.State.ClusterID,
+		Session:   sess.State.ID,
+		Allowed:   allowed,
+		Method:    r.Method,
+		Path:      path,
+		Client:    client,
+	})
 }
 
 // splitSession splits "/s/<id>/rest" into its session ID and the API path.

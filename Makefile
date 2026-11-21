@@ -2,7 +2,9 @@ SHELL := /bin/bash
 
 MODULE   := github.com/paingha/tugcli
 BIN      := bin/tug
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Only tug's own tags (v1.2.3) name its version; sdk/python/v* tags are the
+# Python SDK's.
+VERSION  ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse HEAD 2>/dev/null)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w \
@@ -24,7 +26,11 @@ build: ## Build bin/tug
 example-plugin: ## Build the example provider plugin
 	go build -o examples/tug-provider-example/bin/tug-provider-example ./examples/tug-provider-example
 
-PLUGINS        := akamai coreweave crusoe digitalocean nebius rancher tailscale teleport vultr
+.PHONY: example-plugin-wasm
+example-plugin-wasm: ## Build the example provider plugin as WebAssembly, for every platform
+	GOOS=wasip1 GOARCH=wasm go build -trimpath -o examples/tug-provider-example/bin/tug-provider-example.wasm ./examples/tug-provider-example
+
+PLUGINS        := akamai civo coreweave crusoe digitalocean exoscale ibm ionos nebius omni openshift oracle ovhcloud rancher scaleway tailscale teleport vultr
 PLUGIN_HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
 PLUGIN_EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
 PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64 windows_arm64
@@ -81,6 +87,10 @@ fmt: ## Format code
 tidy: ## Tidy go.mod and fail if it changed
 	go mod tidy
 	git diff --exit-code go.mod go.sum
+
+.PHONY: sigstore-root
+sigstore-root: ## Refresh the Sigstore trust root built into tug; review the diff
+	go generate ./internal/sigstore
 
 .PHONY: e2e-kind
 e2e-kind: build ## Create a kind cluster and run the end-to-end script against it

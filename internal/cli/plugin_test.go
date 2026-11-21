@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -147,6 +148,77 @@ func TestProviderExecServesBuiltins(t *testing.T) {
 	}
 }
 
+// TestWASMPluginLifecycle packages, installs and uses the example plugin
+// built as WebAssembly, which runs on every platform inside tug, and runs
+// `tug plugin test` against it through a built tug.
+func TestWASMPluginLifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds tug and a WebAssembly module")
+	}
+	home := isolate(t)
+	work := t.TempDir()
+	dir := filepath.Join(work, "example")
+	module := filepath.Join(dir, "bin", "tug-provider-example.wasm")
+	build := exec.Command("go", "build", "-o", module, "../../examples/tug-provider-example")
+	build.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building the example for wasip1/wasm: %v\n%s", err, out)
+	}
+	manifest, err := os.ReadFile("../../examples/tug-provider-example/plugin.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plugin.yaml"), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := mustTug(t, "plugin", "package", dir, "-o", filepath.Join(work, "dist"))
+	if !strings.Contains(out, "platforms: wasip1/wasm\n") {
+		t.Fatalf("plugin package: %s", out)
+	}
+	r := tug(t, "plugin", "install", strings.Fields(out)[0], "--yes")
+	if r.code != 0 || !strings.Contains(r.stderr, "runs as:       WebAssembly") {
+		t.Fatalf("install: %+v", r)
+	}
+	if entries, err := os.ReadDir(filepath.Join(home, "cache", "wasm")); err != nil || len(entries) == 0 {
+		t.Fatalf("install did not compile the module into the cache: %v %v", entries, err)
+	}
+
+	t.Setenv("TUG_SECRET_API_TOKEN", "ex_wasm")
+	if out := mustTug(t, "import", "example", "--account", "demo", "--set", "clusters=dev=https://127.0.0.1:6443"); !strings.Contains(out, "example/demo: 1 clusters") {
+		t.Fatalf("import through the WebAssembly plugin: %s", out)
+	}
+	if ec := mustTug(t, "auth", "token", "--cluster", "dev"); !strings.Contains(ec, `"token":"ex_wasm"`) {
+		t.Fatalf("auth token through the WebAssembly plugin: %s", ec)
+	}
+	if r := tug(t, "plugin", "describe", "example"); r.code != 0 || !strings.Contains(r.stderr, "module:") {
+		t.Fatalf("plugin describe: %+v", r)
+	}
+	if r := tug(t, "provider-exec", "example", "bogus"); r.code != provider.ExitUsage || !strings.Contains(r.stdout, `"kind":"Error"`) {
+		t.Fatalf("provider-exec passes the module's own answer through: %+v", r)
+	}
+
+	bin := filepath.Join(work, "tug")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", bin, "../../cmd/tug").CombinedOutput(); err != nil {
+		t.Fatalf("building tug: %v\n%s", err, out)
+	}
+	test := exec.Command(bin, "plugin", "test", "example", "--set", "clusters=dev=https://127.0.0.1:6443", "-o", "json")
+	test.Env = os.Environ()
+	stdout, err := test.Output()
+	var report conformance.Report
+	if jerr := json.Unmarshal(stdout, &report); err != nil || jerr != nil || report.Failed() {
+		t.Fatalf("plugin test: %v %v\n%s", err, jerr, stdout)
+	}
+	if !slices.ContainsFunc(report.Results, func(x conformance.Result) bool {
+		return x.Name == "WebAssembly module imports only WASI and tug_http" && x.Status == conformance.Pass
+	}) {
+		t.Fatalf("plugin test did not check the module: %+v", report.Results)
+	}
+}
+
 const slowPluginScript = `#!/bin/sh
 cat >/dev/null
 case "$1" in
@@ -168,6 +240,7 @@ spec:
   platforms:
   - {os: GOOS, arch: GOARCH, bin: tug-provider-slow}
   hosts: [api.slow.example]
+  sandbox: {tools: [cat, sleep]}
   accountConfig:
     type: object
     properties:
@@ -249,6 +322,7 @@ spec:
   capabilities: [list, credential, rotate]
   platforms:
   - {os: GOOS, arch: GOARCH, bin: tug-provider-rot}
+  sandbox: {tools: [cat]}
 `
 
 func TestAuthRotate(t *testing.T) {

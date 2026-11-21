@@ -12,6 +12,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 
 	sdk "github.com/paingha/tugcli/pkg/provider"
@@ -22,6 +23,21 @@ const Skew = 60 * time.Second
 
 // Fetcher asks a cluster's provider for a fresh credential.
 type Fetcher func(ctx context.Context, clusterID string) (sdk.Credential, error)
+
+// ExecCluster is how to reach a cluster's API server. tug passes it to a
+// delegated exec plugin that sets provideClusterInfo, as kubectl passes a
+// kubeconfig's cluster, in the spec.cluster of KUBERNETES_EXEC_INFO.
+type ExecCluster struct {
+	Server                string
+	CAData                []byte
+	TLSServerName         string
+	InsecureSkipTLSVerify bool
+	ProxyURL              string
+}
+
+// ClusterLookup returns how to reach a cluster, for the delegated exec
+// plugins that ask. The importer answers from the catalog.
+type ClusterLookup func(clusterID string) (ExecCluster, error)
 
 // ErrLoginRequired is wrapped by OIDCTokens when nobody is signed in to the
 // issuer and it may not start a sign-in itself.
@@ -43,7 +59,10 @@ type Broker struct {
 	Now   func() time.Time
 	// RunExec runs a delegated exec plugin and returns its stdout. Tests
 	// replace it.
-	RunExec func(ctx context.Context, cfg sdk.ExecConfig) ([]byte, error)
+	RunExec func(ctx context.Context, cfg sdk.ExecConfig, cluster *ExecCluster) ([]byte, error)
+	// Clusters tells delegated exec plugins that set provideClusterInfo
+	// about their cluster. Without it they are refused.
+	Clusters ClusterLookup
 	// OIDC answers credentials of type oidc. Without it they are refused.
 	OIDC OIDCTokens
 }
@@ -208,11 +227,22 @@ func (b *Broker) delegated(ctx context.Context, clusterID string, cfg sdk.ExecCo
 			}
 		}
 	}
+	var cluster *ExecCluster
+	if cfg.ProvideClusterInfo {
+		if b.Clusters == nil {
+			return nil, fmt.Errorf("%s asks for cluster information, which this command cannot give it", cfg.Command)
+		}
+		cl, err := b.Clusters(clusterID)
+		if err != nil {
+			return nil, fmt.Errorf("looking up the cluster for %s: %w", cfg.Command, err)
+		}
+		cluster = &cl
+	}
 	run := b.RunExec
 	if run == nil {
 		run = RunExec
 	}
-	raw, err := run(ctx, cfg)
+	raw, err := run(ctx, cfg, cluster)
 	if err != nil {
 		return nil, err
 	}
@@ -234,23 +264,25 @@ func (b *Broker) delegated(ctx context.Context, clusterID string, cfg sdk.ExecCo
 }
 
 // RunExec runs a client-go exec credential plugin and returns its stdout. The
-// plugin inherits stdin and stderr so that it can prompt the user.
-func RunExec(ctx context.Context, cfg sdk.ExecConfig) ([]byte, error) {
+// plugin inherits stdin and stderr so that it can prompt the user. When cfg
+// sets ProvideClusterInfo, cluster says which cluster the plugin
+// authenticates to and must not be nil.
+func RunExec(ctx context.Context, cfg sdk.ExecConfig, cluster *ExecCluster) ([]byte, error) {
+	// kubectl gives a plugin stdin, and says so, unless its interactive mode
+	// is Never or kubectl has no terminal to give. kubectl has already
+	// decided that for tug, so the plugin gets the terminal when tug did.
+	interactive := cfg.InteractiveMode != "Never" && execInfoInteractive()
+	info, err := execInfo(cfg, cluster, interactive)
+	if err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 	cmd.Env = os.Environ()
 	for k, v := range cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	apiVersion := cfg.APIVersion
-	if apiVersion == "" {
-		apiVersion = clientauthv1.SchemeGroupVersion.String()
-	}
-	interactive := cfg.InteractiveMode != "Never" && execInfoInteractive()
-	info, _ := json.Marshal(map[string]any{
-		"apiVersion": apiVersion,
-		"kind":       "ExecCredential",
-		"spec":       map[string]any{"interactive": interactive},
-	})
+	// exec.Cmd keeps the last value of a variable, so this replaces the
+	// KUBERNETES_EXEC_INFO that kubectl gave tug.
 	cmd.Env = append(cmd.Env, "KUBERNETES_EXEC_INFO="+string(info))
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -265,6 +297,42 @@ func RunExec(ctx context.Context, cfg sdk.ExecConfig) ([]byte, error) {
 		return nil, fmt.Errorf("running %s: %w", cfg.Command, err)
 	}
 	return io.ReadAll(&stdout)
+}
+
+// execInfo returns the ExecCredential that kubectl would put in
+// KUBERNETES_EXEC_INFO for the plugin: in the plugin's API version, saying
+// whether it is interactive and, when it asks, which cluster it
+// authenticates to.
+func execInfo(cfg sdk.ExecConfig, cluster *ExecCluster, interactive bool) ([]byte, error) {
+	apiVersion := cfg.APIVersion
+	if apiVersion == "" {
+		apiVersion = clientauthv1.SchemeGroupVersion.String()
+	}
+	// v1beta1 has the same spec as v1, field for field, so the v1 type
+	// encodes both.
+	ec := clientauthv1.ExecCredential{
+		TypeMeta: metav1.TypeMeta{APIVersion: apiVersion, Kind: "ExecCredential"},
+		Spec:     clientauthv1.ExecCredentialSpec{Interactive: interactive},
+	}
+	if cfg.ProvideClusterInfo {
+		if cluster == nil {
+			return nil, fmt.Errorf("%s asks for cluster information, and none was given", cfg.Command)
+		}
+		ec.Spec.Cluster = &clientauthv1.Cluster{
+			Server:                   cluster.Server,
+			TLSServerName:            cluster.TLSServerName,
+			InsecureSkipTLSVerify:    cluster.InsecureSkipTLSVerify,
+			CertificateAuthorityData: cluster.CAData,
+			ProxyURL:                 cluster.ProxyURL,
+			// Without a config this encodes as null, as kubectl's does.
+			Config: runtime.RawExtension{Raw: cfg.ClusterConfig},
+		}
+	}
+	b, err := json.Marshal(ec)
+	if err != nil {
+		return nil, fmt.Errorf("encoding KUBERNETES_EXEC_INFO for %s: %w", cfg.Command, err)
+	}
+	return b, nil
 }
 
 // execInfoInteractive reports whether kubectl told us the session is
