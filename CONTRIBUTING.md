@@ -105,8 +105,8 @@ export TUG_HOME="$(mktemp -d)" TUG_KEYRING_BACKEND=file TUG_KEYRING_PASSPHRASE=d
    go mod tidy      # CI fails if this changes go.mod or go.sum
    ```
 
-   CI runs on Linux and Windows only. If you changed platform-specific code
-   (keychain, sessions, process handling), run `make test` on a Mac too.
+   CI runs the tests on Linux, macOS and Windows, so platform-specific code
+   (keychain, sessions, process handling) is checked on all three.
 5. **Update the docs** when a command, flag or output changes: the README
    where it shows them, and the pages under
    [docs/content/docs](docs/content/docs). Sample output in the docs is copied
