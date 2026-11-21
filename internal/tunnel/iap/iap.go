@@ -35,21 +35,29 @@ const DefaultInterface = "nic0"
 // its unencrypted PEM private key for certificate-based access. The tunnel
 // then goes through the mTLS relay, as gcloud's does when certificate-based
 // access is on, and presents the certificate.
+//
+// Universe is the universe domain of a Google Cloud universe other than
+// the public one, googleapis.com, whose relay is tunnel-cloudproxy.<domain>.
 type Config struct {
 	Project, Zone, Instance, Interface string // instance mode; Interface defaults to nic0
 	Region, Network, Group             string // destination group mode
 	CertFile, KeyFile                  string // client certificate for certificate-based access
+	Universe                           string // universe domain; empty is DefaultUniverse
 }
 
+// DefaultUniverse is the universe domain of the public Google Cloud.
+const DefaultUniverse = "googleapis.com"
+
 // urlSettings are the query parameters an iap:// URL may have.
-var urlSettings = []string{"project", "zone", "interface", "region", "network", "group", "cert", "key"}
+var urlSettings = []string{"project", "zone", "interface", "region", "network", "group", "cert", "key", "universe"}
 
 // ParseURL reads iap://<instance>?project=..&zone=.. or
 // iap://?project=..&region=..&network=..&group=..
 //
 // An instance URL may also set interface. Either kind may set cert and key
-// to the files of a client certificate and its key. The port is not part of
-// the URL: it comes with the address given to Dial.
+// to the files of a client certificate and its key, and universe to a
+// universe domain. The port is not part of the URL: it comes with the
+// address given to Dial.
 func ParseURL(u *url.URL) (Config, error) {
 	if u == nil {
 		return Config{}, errors.New("no iap:// URL")
@@ -82,6 +90,7 @@ func ParseURL(u *url.URL) (Config, error) {
 		Group:     q.Get("group"),
 		CertFile:  q.Get("cert"),
 		KeyFile:   q.Get("key"),
+		Universe:  q.Get("universe"),
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("reading the IAP URL %s: %w", u.Redacted(), err)
@@ -95,7 +104,7 @@ func (c Config) String() string {
 	for k, v := range map[string]string{
 		"project": c.Project, "zone": c.Zone, "interface": c.Interface,
 		"region": c.Region, "network": c.Network, "group": c.Group,
-		"cert": c.CertFile, "key": c.KeyFile,
+		"cert": c.CertFile, "key": c.KeyFile, "universe": c.Universe,
 	} {
 		if v != "" {
 			q.Set(k, v)
@@ -117,6 +126,8 @@ func (c Config) validate() error {
 		return errors.New("an IAP tunnel needs a project")
 	case (c.CertFile == "") != (c.KeyFile == ""):
 		return errors.New("an IAP tunnel with a client certificate needs both the certificate file (cert) and its key file (key)")
+	case c.Universe != "" && !isDomain(c.Universe):
+		return fmt.Errorf("the universe %q is not a domain name such as %s", c.Universe, DefaultUniverse)
 	case instance && group:
 		return errors.New("an IAP tunnel goes to an instance (with zone) or through a destination group (with region and network), not both")
 	case instance && c.Instance == "":
@@ -225,6 +236,26 @@ func (t target) notFoundHint() string {
 		return "check the project, region and destination group names"
 	}
 	return "check that the instance exists in that zone and project and is running"
+}
+
+// isDomain reports whether s is a lowercase domain name of two labels or
+// more, so that it can go into the relay's host name.
+func isDomain(s string) bool {
+	labels := strings.Split(s, ".")
+	if len(s) > 253 || len(labels) < 2 {
+		return false
+	}
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for _, r := range l {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // addr is a tunnel end as a net.Addr.

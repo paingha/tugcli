@@ -13,13 +13,19 @@ import (
 const mtlsRelayURL = "wss://mtls.tunnel.cloudproxy.app/v4"
 
 // relayFor returns the relay for cfg, as gcloud's _CreateWebSocketUrl
-// chooses it: the mTLS relay when the tunnel presents a client
-// certificate, and the default relay otherwise.
+// chooses it. Another universe's relay is tunnel-cloudproxy.<domain>, with
+// or without a client certificate. In the public universe it is the mTLS
+// relay when the tunnel presents a client certificate, and the default
+// relay otherwise.
 func relayFor(cfg Config) string {
-	if cfg.CertFile != "" {
+	switch {
+	case cfg.Universe != "" && cfg.Universe != DefaultUniverse:
+		return "wss://tunnel-cloudproxy." + cfg.Universe + "/v4"
+	case cfg.CertFile != "":
 		return mtlsRelayURL
+	default:
+		return DefaultRelayURL
 	}
-	return DefaultRelayURL
 }
 
 // clientCertificate returns a tls.Config GetClientCertificate that reads

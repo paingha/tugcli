@@ -18,6 +18,10 @@ import (
 func TestRelayFor(t *testing.T) {
 	withCert := instanceConfig
 	withCert.CertFile, withCert.KeyFile = "client.pem", "client-key.pem"
+	in := func(cfg Config, universe string) Config {
+		cfg.Universe = universe
+		return cfg
+	}
 	tests := []struct {
 		name string
 		cfg  Config
@@ -25,6 +29,11 @@ func TestRelayFor(t *testing.T) {
 	}{
 		{"default", instanceConfig, "wss://tunnel.cloudproxy.app/v4"},
 		{"client certificate", withCert, "wss://mtls.tunnel.cloudproxy.app/v4"},
+		{"public universe", in(instanceConfig, "googleapis.com"), "wss://tunnel.cloudproxy.app/v4"},
+		{"public universe with a certificate", in(withCert, "googleapis.com"), "wss://mtls.tunnel.cloudproxy.app/v4"},
+		{"other universe", in(instanceConfig, "universe.example"), "wss://tunnel-cloudproxy.universe.example/v4"},
+		// gcloud has no mTLS host outside the public universe.
+		{"other universe with a certificate", in(withCert, "universe.example"), "wss://tunnel-cloudproxy.universe.example/v4"},
 	}
 	for _, tt := range tests {
 		if got := relayFor(tt.cfg); got != tt.want {
@@ -80,6 +89,35 @@ func TestDialWithClientCertificate(t *testing.T) {
 	waitFor(t, "the tunnel to resume", func() bool { return len(get(r, func() []*http.Request { return r.requests })) > 1 })
 	if got := peerName(r.request(1)); got != "tug-renewed-client" {
 		t.Errorf("client certificate after resuming = %q, want tug-renewed-client", got)
+	}
+}
+
+func TestDialInOtherUniverse(t *testing.T) {
+	const host = "tunnel-cloudproxy.universe.example"
+	pki := newTestPKI(t)
+	r := newFakePKIRelay(t, pki, tls.VerifyClientCertIfGiven, host)
+	cfg := groupConfig
+	cfg.Universe = "universe.example"
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, cfg, "172.16.0.2:443", r.hostOptions()...)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	if got := get(r, func() []string { return r.dialed }); len(got) != 1 || got[0] != host+":443" {
+		t.Errorf("the tunnel dialled %v, want [%s:443]", got, host)
+	}
+	req := r.request(0)
+	if req.Host != host || req.TLS.ServerName != host || req.URL.Path != "/v4/connect" {
+		t.Errorf("Host, TLS server name, path = %s, %s, %s; want %s, %s, /v4/connect", req.Host, req.TLS.ServerName, req.URL.Path, host, host)
+	}
+	if _, err := c.Write([]byte("sovereign")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := readN(t, c, 9); string(got) != "sovereign" {
+		t.Errorf("read %q, want sovereign", got)
 	}
 }
 
