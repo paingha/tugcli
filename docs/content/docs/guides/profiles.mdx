@@ -1,0 +1,128 @@
+---
+title: Profiles
+description: Switch a terminal to a whole working environment at once, cluster, namespace, safety, aliases and port-forwards, from a file you can review.
+icon: Layers
+---
+
+A profile is a small YAML file that describes how you work on something: which
+cluster and namespace, whether it must stay read-only, a few short commands,
+and the port-forwards you always open. One command switches a terminal to all
+of it, and another starts the forwards.
+
+```console
+$ tug profile up payments
+Profile payments: connected to payments-prod, namespace shop, read-only (tug unlock 15m to allow writes)
+Forwarding localhost:5432 -> 5432 to sts/postgres (pod/postgres-0) as payments.db
+Forwarding localhost:8080 -> 8080 to api (pod/api-server-7d9f-x2x4z) as payments.api
+```
+
+## Write a profile
+
+```bash
+tug profile edit payments
+```
+
+That opens `$VISUAL` or `$EDITOR` on a commented template, filled in with this
+terminal's cluster and namespace. tug checks what you write before saving it;
+if it doesn't parse, it says why and offers to open it again, and until then
+the profile stays as it was. In a script, give the file on stdin instead:
+`tug profile edit payments < payments.yaml`.
+
+```yaml title="~/.config/tug/profiles/payments.yaml"
+cluster: payments-prod      # a name, prefix or fuzzy match, as for tug connect
+# labels: {region: eu}      # optional; narrows the choice first
+namespace: shop
+safety: read-only           # or auto, the default: the cluster's labels decide
+proxy: true                 # every client goes through tugd, not only tug
+
+aliases:                    # tug profile run <alias> [args...]
+  api-logs: logs api -f
+  psql: sh sts/postgres -- psql -U app
+
+forwards:                   # tug profile up, or tug pf profile up
+  - name: db
+    target: sts/postgres
+    ports: [5432]
+  - name: api
+    target: api
+    namespace: web          # default: the profile's namespace
+    ports: ["8080:http"]
+```
+
+Profiles live in `profiles/` in tug's [config folder](/docs/reference/files),
+one file each, named after the profile. They are plain files: keep them in a
+repository, review changes to them, copy them to a teammate.
+
+## Use one
+
+| Command | What it does |
+| --- | --- |
+| `tug profile use <name>` | Connect this terminal as the profile says. |
+| `tug profile up <name>` | The same, and start its port-forwards through tugd. |
+| `tug profile down <name>` | Stop its port-forwards. The terminal stays connected. |
+| `tug profile run <alias> [args...]` | Run one of this terminal's profile's aliases. |
+| `tug profile ls` | List profiles; `*` marks this terminal's. |
+| `tug profile show [name]` | Show a profile, by default this terminal's, and how its forwards are doing. |
+
+`tug status` shows the profile a terminal was connected with. Connecting some
+other way, with `tug connect` or a [pin](/docs/guides/pins), leaves the
+profile; leaving the pinned folder brings it back.
+
+## Safety
+
+A profile can make a session **stricter** than the cluster's labels, never
+looser:
+
+- `safety: auto`, the default, opens the cluster the way `tug connect` would:
+  [read-only](/docs/concepts/read-only) when its labels say so, such as
+  `env=prod`.
+- `safety: read-only` opens any cluster read-only.
+- There is no read-write setting. A profile that asks for one is refused when
+  you save it. On a production cluster, writes still ask first in a terminal,
+  or need `tug unlock` for a while, exactly as they would without the profile.
+
+Aliases are held to the same guard as the commands they stand for:
+`tug profile run bounce`, where `bounce` is `restart api`, still asks before
+restarting anything on a read-only session, and refuses in a script.
+
+Profiles are only ever chosen by name. A `.tug.yaml` pin cannot pick one, and
+trusting a pin with `tug pin allow` has nothing to do with profiles.
+
+## Port-forward groups
+
+A profile's forwards are a group that tugd runs together, each named
+`<profile>.<forward>`, so two profiles can each have a forward called `db`.
+They work like any [named forward](/docs/reference/commands/workloads#tug-pf):
+tugd keeps the same local ports and starts a forward again on a running pod
+when the old one goes away.
+
+| Command | What it does |
+| --- | --- |
+| `tug pf profile up <name>` | Start the profile's forwards that aren't running, without connecting the terminal. |
+| `tug pf profile down <name>` | Stop them, including ones since removed from the file. |
+| `tug pf profile ls [name]` | List a profile's forwards and how they are doing, or every profile's. |
+
+Before starting anything, tug checks every local port the forwards ask for:
+against each other, against tugd's other forwards and against other programs on
+your machine. If one is taken, nothing starts and tug says which port and who
+has it:
+
+```text
+tug: starting the forwards of profile payments: local port in use: payments.db wants 5432, which another program on this machine has: listen tcp 127.0.0.1:5432: bind: address already in use
+```
+
+Running `up` again is safe: forwards that are running are left alone, and only
+the rest start. A forward whose workload has no running pod is reported while
+the others keep going.
+
+`tug pf ls` shows every named forward with its profile, its state and how often
+it has restarted. A forward whose pod went away says when it tries again:
+
+```text
+NAME          PROFILE    CLUSTER          NAMESPACE   TARGET         PORTS       STATE                                          RESTARTS   SINCE
+payments.db   payments   payments-prod    shop        sts/postgres   5432:5432   reconnecting, retry in 4s: lost connection to pod   2          3m
+```
+
+tugd waits a second before the first retry and doubles the wait each time, up
+to 30 seconds. Forwards keep tugd running; stop them with `tug profile down`
+when you're done.
