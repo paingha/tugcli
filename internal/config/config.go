@@ -130,6 +130,16 @@ type PluginsConfig struct {
 	// Indexes are the signed plugin indexes that tug plugin search and
 	// tug plugin install <name> use, in order.
 	Indexes []PluginIndex `json:"indexes,omitempty"`
+	// RequireSignatures refuses to install a plugin by name when its index
+	// entry has no Sigstore signature. Archives installed from a file or
+	// URL given on the command line are not affected; tug warns that they
+	// are unsigned.
+	RequireSignatures bool `json:"requireSignatures,omitempty"`
+	// SigstoreTrustedRoot is a trusted_root.json to check plugin signatures
+	// against instead of the public-good Sigstore deployment's, for a
+	// private deployment or a machine that cannot reach Sigstore's TUF
+	// repository. A relative path is taken from the config directory.
+	SigstoreTrustedRoot string `json:"sigstoreTrustedRoot,omitempty"`
 }
 
 // PluginIndex is one signed plugin index.

@@ -156,6 +156,10 @@ func TestScaffoldGoFiles(t *testing.T) {
 		{"Makefile", "bin/$(HOST)/$(BIN)$(EXT)", "Windows builds need .exe to match plugin.yaml"},
 		{filepath.Join(".github", "workflows", "release.yml"), "does not match plugin.yaml", "the tag must match the manifest version"},
 		{filepath.Join(".github", "workflows", "release.yml"), "${{ secrets.TUGCLI_TOKEN }}", "the SDK can be fetched while its repository is private"},
+		{filepath.Join(".github", "workflows", "release.yml"), "id-token: write", "keyless signing needs the workflow's OIDC token"},
+		{filepath.Join(".github", "workflows", "release.yml"), `cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"`, "the archive is signed into a Sigstore bundle"},
+		{filepath.Join(".github", "workflows", "release.yml"), "dist/*.tar.gz.sigstore.json", "the bundle is published beside the archive"},
+		{filepath.Join(".github", "workflows", "release.yml"), "--identity $GITHUB_SERVER_URL/$GITHUB_WORKFLOW_REF", "the identity to put in an index is printed"},
 	}
 	for _, tt := range tests {
 		if !strings.Contains(read(tt.file), tt.want) {

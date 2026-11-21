@@ -1055,7 +1055,16 @@ with the sha256 in the notes. Users need both.
 
 The scaffold's `.github/workflows/release.yml` does this when you push a `v*`
 tag: it checks the tag against `metadata.version`, runs the tests, installs
-tug, runs `make package` and attaches the archive to a GitHub release. While
+tug, runs `make package`, signs the archive with Sigstore and attaches the
+archive and its signature to a GitHub release. The signing is keyless, as
+tug's own releases are: cosign gets a short-lived certificate from Sigstore's
+Fulcio for the workflow's GitHub identity, signs the archive, records the
+signature in the Rekor transparency log and writes all of it to
+`<archive>.sigstore.json`, a Sigstore bundle. There is no key to keep; the
+workflow needs only `permissions: id-token: write`. It then checks the bundle
+with `cosign verify-blob` against the identity it prints, and the run's
+summary shows the `tug plugin index add` command for the release (see
+[Publish to an index](#publish-to-an-index)). While
 tugcli is private, the runner needs a repository secret `TUGCLI_TOKEN` with
 read access to `paingha/tugcli`, and `go.mod` must require the SDK by version.
 It cannot follow a `replace` directive to a checkout on your machine, which is
@@ -1064,8 +1073,16 @@ hand:
 
 ```bash
 make test package
-gh release create v0.1.0 dist/tug-provider-acme_0.1.0.tar.gz --notes "sha256: $(shasum -a 256 dist/tug-provider-acme_0.1.0.tar.gz | cut -d' ' -f1)"
+cosign sign-blob --bundle dist/tug-provider-acme_0.1.0.tar.gz.sigstore.json dist/tug-provider-acme_0.1.0.tar.gz
+gh release create v0.1.0 dist/tug-provider-acme_0.1.0.tar.gz dist/tug-provider-acme_0.1.0.tar.gz.sigstore.json \
+  --notes "sha256: $(shasum -a 256 dist/tug-provider-acme_0.1.0.tar.gz | cut -d' ' -f1)"
 ```
+
+Signing by hand opens a browser to sign in, and the signer's identity is then
+your email address rather than a workflow. The signature is optional; skip
+the `cosign` line, and the bundle, to release unsigned. tug needs a Sigstore
+bundle, which cosign 3 writes by default (cosign 2 needs
+`--new-bundle-format`).
 
 The tag does not set the version: the archive name and the installed version
 come from `metadata.version`, and the workflow fails when the tag is not `v`
@@ -1097,6 +1114,11 @@ tug plugin install https://github.com/acme/tug-provider-acme/releases/download/v
    `$XDG_DATA_HOME/tug`, `~/.local/share/tug`, or `%LOCALAPPDATA%\tug` on
    Windows). Installing a version that is already there needs `--force`.
 
+An archive installed from a file or URL has no Sigstore signature for tug to
+check, so tug warns that it cannot tell who built it; the `--sha256` you pass
+is all that ties the download to the release. Installing by name from an
+index can check a signature too (see [Publish to an index](#publish-to-an-index)).
+
 tug checks the checksums again every time it loads an installed plugin, so a
 binary changed after installation is skipped, and `tug plugin ls` says why.
 
@@ -1111,16 +1133,69 @@ removes every installed version.
 
 A plugin index lets users install by name, `tug plugin install acme`, with
 everything checked: the index is signed with ed25519, it pins each
-archive's sha256, and each archive's manifest pins every binary's. Whoever
-runs an index adds released archives and signs it:
+archive's sha256, each archive's manifest pins every binary's, and an
+archive's Sigstore signature, when the index names one, ties the archive to
+the publisher's release workflow. The index's key says the index's owner
+reviewed the release; the Sigstore signature says who built it. Whoever runs
+an index adds released archives and signs it:
 
 ```bash
 tug plugin index keygen                      # once; prints the public key users configure
 tug plugin index add index.yaml dist/tug-provider-acme_0.1.0.tar.gz \
   --url https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz \
+  --bundle https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz.sigstore.json \
+  --identity https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0 \
+  --issuer https://token.actions.githubusercontent.com \
   --description "Acme Kubernetes clusters"
 tug plugin index sign index.yaml             # writes index.yaml.sig; set TUG_INDEX_KEY in CI
 ```
+
+`--bundle`, `--identity` and `--issuer` are optional, and go together. They
+record where the archive's Sigstore bundle is and who must have signed it:
+
+- `--bundle` is the https URL of the bundle, normally the archive's URL with
+  `.sigstore.json` added.
+- `--identity` is the identity in the signing certificate. For a GitHub
+  Actions workflow it is the workflow file's URL and the ref it ran for, as
+  above; for someone who signed by hand, their email address. Instead,
+  `--identity-regexp` takes a regular expression that must match the whole
+  identity, such as
+  `https://github\.com/acme/tug-provider-acme/\.github/workflows/release\.yml@refs/tags/v.*`
+  for any tag of one workflow. Spell out the repository and the workflow: a
+  pattern that admits any repository admits anyone.
+- `--issuer` is the OIDC issuer that vouched for the identity:
+  `https://token.actions.githubusercontent.com` for GitHub Actions, or the
+  email provider's, such as `https://accounts.google.com`, for a person.
+
+The scaffold's release workflow prints all three for each release, after
+checking them with `cosign verify-blob`. To check a release yourself before
+you add it:
+
+```bash
+cosign verify-blob tug-provider-acme_0.1.0.tar.gz \
+  --bundle tug-provider-acme_0.1.0.tar.gz.sigstore.json \
+  --certificate-identity https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The version's entry in `index.yaml` then reads:
+
+```yaml
+  - sha256: 98b07c5943ae2674b04199c8f1f33cd24fb7ed56b8c03d6f0f9951dcc99b2ee9
+    sigstore:
+      bundle: https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz.sigstore.json
+      identity: https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0
+      issuer: https://token.actions.githubusercontent.com
+    url: https://github.com/acme/tug-provider-acme/releases/download/v0.1.0/tug-provider-acme_0.1.0.tar.gz
+    version: 0.1.0
+```
+
+Adding a version again replaces its entry, signature included, so pass the
+signature flags each time.
+
+tug releases from before signatures read indexes strictly and refuse one
+with a `sigstore` field, so signing an index's entries asks its users to
+upgrade.
 
 Publish `index.yaml` and `index.yaml.sig` side by side over https. Users
 add the index to `config.yaml`:
@@ -1137,6 +1212,60 @@ and then `tug plugin search` and `tug plugin install <name>[@version]` use
 it. The signing key lives in tug's credential store; keep a copy somewhere
 safe, since an index signed with a lost key can only be replaced by a new
 key that every user configures again.
+
+When a user installs a signed version, tug downloads the bundle and, with
+[sigstore-go](https://github.com/sigstore/sigstore-go), checks before
+anything else that:
+
+1. the signing certificate chains to Sigstore's Fulcio certificate
+   authority, and carries signed timestamps from Sigstore's certificate
+   transparency log;
+2. the signature is in the Rekor transparency log, with a proof of
+   inclusion, from a time when the certificate was valid;
+3. the signature is over this archive;
+4. the certificate names the identity and issuer the index gives.
+
+Then come the archive's sha256 and every binary's, as before. tug shows the
+signer with the rest of the plugin before asking to install it:
+
+```text
+  signed by:     https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0 (issuer https://token.actions.githubusercontent.com)
+```
+
+If any check fails, or the bundle cannot be downloaded, nothing is installed.
+A version without `sigstore` installs on the index's signature and sha256
+alone, with a warning. To refuse those, set:
+
+```yaml
+plugins:
+  requireSignatures: true
+```
+
+tug then installs by name only versions with a signature. It still installs
+an archive you name as a file or URL (`tug plugin install <file|url>
+--sha256 <sum>`), with a warning: naming one is your own decision to trust
+it.
+
+tug checks signatures against the public-good Sigstore deployment, the one
+cosign signs with by default. Its trust root, which holds Fulcio's
+certificates and the keys of the Rekor and certificate transparency logs,
+comes from Sigstore's TUF repository at `tuf-repo-cdn.sigstore.dev`, checked
+from the TUF root built into sigstore-go. tug caches it under
+`sigstore/` in its cache directory (`$TUG_HOME/cache`, `$XDG_CACHE_HOME/tug`,
+`~/.cache/tug`, or `%LOCALAPPDATA%\cache\tug` on Windows) and asks the
+repository again at most once a day. When the repository cannot be reached,
+as behind a firewall that lets the index through but not `sigstore.dev`,
+tug uses the cache while its TUF metadata is current, and otherwise a copy of
+the trust root built into tug. A first run without access to TUF therefore
+works for signatures made with the keys that copy knows; a signature from a
+log Sigstore added after that tug was built needs one run that reaches TUF,
+or a newer tug. For a private Sigstore deployment, or machines that never
+reach TUF, point tug at a trust root file instead:
+
+```yaml
+plugins:
+  sigstoreTrustedRoot: /etc/tug/trusted_root.json   # a relative path is taken from the config directory
+```
 
 ## 11. Plugins without the SDK
 

@@ -25,5 +25,9 @@ in the packaged manifest. Users install it with:
 tug plugin install <url or file> --sha256 <archive sha256>
 ```
 
-Pushing a `v*` tag runs `.github/workflows/release.yml`, which does this and
-attaches the archive to a GitHub release.
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which does this,
+signs the archive keyless with Sigstore (cosign, with the workflow's GitHub
+identity) and attaches the archive and its `.sigstore.json` bundle to a
+GitHub release. The workflow's summary prints the `tug plugin index add`
+command that records the archive, its bundle and the signer's identity in a
+plugin index, so that `tug plugin install [[.Name]]` checks the signature.
