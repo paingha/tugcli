@@ -15,6 +15,7 @@ spec:
   - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-[[.Name]]}
   - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-[[.Name]]}
   - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-[[.Name]].exe}
+  - {os: windows, arch: arm64, bin: bin/windows_arm64/tug-provider-[[.Name]].exe}
   secrets:
   - {name: api_token, prompt: "[[.Name]] API token"}
   env: []       # host variables to pass through, for example AWS_PROFILE

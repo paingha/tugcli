@@ -1,0 +1,23 @@
+{
+  "title": "Providers",
+  "pages": [
+    "index",
+    "kubeconfig",
+    "local",
+    "aws",
+    "google",
+    "azure",
+    "capi",
+    "argocd",
+    "clusterprofile",
+    "akamai",
+    "coreweave",
+    "crusoe",
+    "digitalocean",
+    "nebius",
+    "rancher",
+    "tailscale",
+    "teleport",
+    "vultr"
+  ]
+}

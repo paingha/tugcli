@@ -1,0 +1,98 @@
+---
+title: Argo CD
+description: List the clusters an Argo CD install deploys to, with credentials from its cluster Secrets.
+icon: GitBranch
+---
+
+The `argocd` provider lists the clusters an [Argo CD](https://argo-cd.readthedocs.io/)
+install deploys to. It reads Argo CD's cluster Secrets (labelled
+`argocd.argoproj.io/secret-type: cluster`) on the cluster where Argo CD runs,
+and adds one cluster to your catalog for each.
+
+## An account is an Argo CD install
+
+Import the cluster Argo CD runs on first, then name it with `cluster`:
+
+```bash
+tug ls                                                          # find its name
+tug import argocd --account gitops --set cluster=platform
+tug import argocd --account gitops --set cluster=platform --set namespace=gitops   # Argo CD isn't in argocd
+```
+
+Without `--account`, the account is called `default`. Importing an account
+again replaces its settings, so pass them all each time.
+
+tug reads the Secrets with your credential for that cluster, and only reads,
+so you need permission to list Secrets in Argo CD's namespace. Each cluster is
+named after the Secret's `name` field, or the Secret itself. When its
+`namespaces` lists exactly one, that becomes the default namespace. Argo CD's
+own cluster, `https://kubernetes.default.svc`, is left out: it's the one you
+named.
+
+## Credentials
+
+Tokens and certificates in the Secrets are Argo CD's own, so with them you get
+the access Argo CD has. tug tries each Secret's methods in the order Argo CD
+does:
+
+| In the Secret's `config` | What tug does |
+| --- | --- |
+| `awsAuthConfig` | Runs `aws eks get-token` for its `clusterName` and `roleARN`, with your AWS credentials (the default, or `AWS_PROFILE`). The Secret's `profile` is not used. Needs the AWS CLI. |
+| `execProviderConfig` | Runs the Secret's command, but only if the account allows it (below). |
+| `bearerToken` | Uses the token, reading the Secret again every hour. |
+| `tlsClientConfig.certData` and `keyData` | Uses the client certificate, reading the Secret again every hour, or when the certificate expires if that's sooner. |
+| `username` and `password` | Nothing: tug doesn't support basic authentication. |
+
+## Commands from a cluster: `allowExec`
+
+<Callout type="warn" title="Off unless you turn it on">
+  An `execProviderConfig` names a command, and tug would run it on your
+  machine, as you, whenever kubectl needs a credential. Anyone who can write
+  Secrets in Argo CD's namespace chooses that command. So tug refuses to run
+  it unless the account sets `allowExec=true`.
+</Callout>
+
+Turn it on only if you trust everyone who can write Secrets in that
+namespace. The value must be exactly `true`. To turn it off, forget the
+account and import it again without the setting; importing on top isn't
+enough, because tug keeps the commands it has already stored.
+
+```bash
+tug import argocd --account gitops --set cluster=platform --set allowExec=true   # on
+tug forget argocd/gitops && tug import argocd --account gitops --set cluster=platform   # off again
+```
+
+`allowExec` doesn't cover `awsAuthConfig`: tug always runs the AWS CLI for
+that, and takes only the cluster name, role and region from the Secret.
+
+## Labels
+
+| Label | From |
+| --- | --- |
+| every label on the cluster Secret | except `argocd.argoproj.io/secret-type` |
+| `argocd-project` | the Secret's `project`, when it has one |
+
+Label a cluster Secret `env=prod` and tug opens that cluster
+[read-only](/docs/concepts/read-only). Without that label, tug guesses `env`
+from the cluster's name, so `prod-eu` opens read-only too.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `cluster` | The name or ID in the catalog of the cluster Argo CD runs on. Required. |
+| `namespace` | Argo CD's namespace. Defaults to `argocd`. |
+| `allowExec` | `true` lets `execProviderConfig` commands run on this machine. Off by default. |
+
+## Troubleshooting
+
+| Message | What to do |
+| --- | --- |
+| `gets its credential by running "…"` … only when the account allows it | See `allowExec` above. The cluster stays in `tug ls`, but kubectl can't sign in to it. |
+| `has a config that is not valid JSON` | One broken cluster Secret stops the whole listing. Fix its `config`. |
+| `Argo CD has no cluster Secret` … run `tug sync` | Argo CD no longer has that cluster. `tug sync` marks it stale. |
+| `aws not found: install the AWS CLI` | Install the AWS CLI, which `awsAuthConfig` clusters need. |
+| `asks for provideClusterInfo` | tug can't pass cluster information to exec plugins, so it can't sign in to that cluster. |
+| `uses basic authentication, which tug does not support` | Give Argo CD a token or client certificate for that cluster instead. |
+| `is not in the catalog` | Import the cluster Argo CD runs on first, for example with `tug import kubeconfig <file>`. |
+| `Unauthenticated` … check it with `tug doctor platform` | Your credential for the cluster Argo CD runs on was refused. `tug doctor` shows why. |

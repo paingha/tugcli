@@ -14,6 +14,7 @@ spec:
   - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-coreweave}
   - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-coreweave}
   - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-coreweave.exe}
+  - {os: windows, arch: arm64, bin: bin/windows_arm64/tug-provider-coreweave.exe}
   secrets:
   - {name: api_token, prompt: "CoreWeave API access token"}
   env: []

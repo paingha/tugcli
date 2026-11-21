@@ -1,0 +1,100 @@
+---
+title: Testing plugins
+description: Run tug's conformance suite against your plugin, from the command line or your own Go tests.
+icon: FlaskConical
+---
+
+tug ships a **conformance suite**: a set of checks that every provider must
+pass, built-in or plugin. It's the quickest way to know your plugin will
+behave well in tug.
+
+## Run it
+
+```bash
+tug plugin test acme
+```
+
+Checks that need real data use an imported account, or settings you pass
+directly, with secrets from the keychain or `TUG_SECRET_<NAME>`:
+
+```bash
+tug plugin test acme --account prod
+TUG_SECRET_API_TOKEN=demo_test tug plugin test acme --set clusters=dev=https://127.0.0.1:6443
+```
+
+Without them, those checks are skipped rather than failed.
+
+```text
+RESULT   CHECK                                  DETAIL
+pass     describe is valid                      acme 0.1.0 (acme Kubernetes clusters) speaks [provider/v1alpha1]
+pass     unknown operations are rejected        exit 2, InvalidConfig
+pass     an empty list request is rejected      exit 1, InvalidConfig
+pass     list returns valid clusters            1 clusters
+pass     list is stable across calls            same 1 ids
+pass     credential is valid and unexpired      cluster dev: token, no expiry
+pass     invalid secrets give Unauthenticated   exit 1, Unauthenticated
+skip     accounts is valid                      the plugin does not declare accounts
+pass     SIGTERM stops the plugin promptly      exited within 2s
+pass     stdout carries only one JSON object    7 calls
+skip     serve answers like one-shot mode       plugin does not declare serve
+
+9 passed, 2 skipped, 0 failed
+```
+
+Each check is `pass`, `skip` or `fail`, and the command exits with status 1
+if any check fails.
+
+`-o json` gives the results in a form CI can read.
+
+## What it checks
+
+- `describe` answers with a valid description whose name matches the manifest.
+- Unknown operations and empty requests get proper errors.
+- `list` returns valid clusters, with the same IDs every time.
+- Credentials are valid for their type and not already expired.
+- Invalid secrets give `Unauthenticated`, so tug knows to ask for new ones.
+- `accounts`, when declared, returns valid accounts.
+- The plugin stops promptly when tug sends SIGTERM.
+- stdout carries exactly one JSON object per call, and nothing else.
+- `serve`, when declared, answers exactly as one-shot mode does.
+
+## Test the built-ins too
+
+The same suite runs against built-in providers, which is handy when you
+suspect a problem with your own setup:
+
+```bash
+tug plugin test kubeconfig --account default
+```
+
+## In your Go tests
+
+The suite is a public package, so you can run it from `go test` with no tug
+binary installed. The Go template's `make conformance` does this for you.
+
+```go title="main_test.go"
+import (
+	"context"
+	"testing"
+
+	"github.com/paingha/tugcli/pkg/conformance"
+	"github.com/paingha/tugcli/pkg/provider"
+)
+
+func TestConformance(t *testing.T) {
+	bin := buildPlugin(t) // go build into t.TempDir()
+	report := conformance.Run(context.Background(),
+		conformance.Target{Command: bin},
+		conformance.Options{
+			Name:    "acme",
+			Account: provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443"}},
+			Secrets: map[string]string{"api_token": "demo_test"},
+			DeclaredSecrets: []provider.SecretSpec{{Name: "api_token"}},
+		})
+	for _, r := range report.Results {
+		if r.Status == conformance.Fail {
+			t.Errorf("%s: %s", r.Name, r.Detail)
+		}
+	}
+}
+```

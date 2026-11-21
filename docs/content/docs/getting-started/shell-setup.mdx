@@ -1,0 +1,117 @@
+---
+title: Set up your shell
+description: Add one line to your shell's startup file so every terminal gets its own tug session.
+icon: SquareTerminal
+---
+
+tug remembers a cluster **per terminal window**. To do that, it needs a tiny
+helper, called a *hook*, that runs inside your shell. You add it once and
+forget about it.
+
+## Add the hook
+
+Pick your shell and add the line to the end of its startup file. If you use a
+prompt theme (Oh My Zsh, Starship, Powerlevel10k and so on), put tug's line
+**after** it.
+
+<Tabs items={['zsh', 'bash', 'fish', 'PowerShell']}>
+  <Tab value="zsh">
+    ```bash title="~/.zshrc"
+    eval "$(tug init zsh)"
+    ```
+  </Tab>
+  <Tab value="bash">
+    ```bash title="~/.bashrc"
+    eval "$(tug init bash)"
+    ```
+  </Tab>
+  <Tab value="fish">
+    ```bash title="~/.config/fish/config.fish"
+    tug init fish | source
+    ```
+  </Tab>
+  <Tab value="PowerShell">
+    ```powershell title="$PROFILE"
+    Invoke-Expression (& tug init powershell | Out-String)
+    ```
+  </Tab>
+</Tabs>
+
+Then **open a new terminal** (or run `exec $SHELL`) so the hook starts.
+
+## Check it worked
+
+```console
+$ tug status
+Not connected. Run `tug connect`.
+```
+
+That message means the hook is running and this terminal has a session that
+isn't connected to a cluster yet. If you see this instead:
+
+```console
+$ tug status
+tug: no tug session in this terminal; add `eval "$(tug init zsh)"` (or bash, fish, powershell) to your shell's rc file, or run `tug shell`
+```
+
+the hook isn't loaded. Check that the line is in the right file and that you
+opened a new terminal. [`tug doctor`](/docs/guides/doctor) can also tell you.
+
+## What the hook does
+
+You don't need to know this to use tug, but it helps to know there's no magic.
+When a terminal starts, the hook:
+
+1. **Creates a session** for this terminal: a small private folder that holds
+   the terminal's cluster and namespace.
+2. **Sets `KUBECONFIG`** for this terminal only, pointing at a kubeconfig file
+   inside the session. kubectl, helm and k9s read it, so they follow
+   `tug connect` without any extra setup.
+3. **Adds the cluster to your prompt**, coloured by mode (see below).
+4. **Cleans up** the session when the terminal closes.
+
+Your `~/.kube/config` is never touched. If you disconnect, the hook puts back
+whatever `KUBECONFIG` you had before.
+
+## Your new prompt
+
+Once you connect, the start of your prompt shows the cluster and namespace,
+coloured so you can tell at a glance whether changes are allowed:
+
+<PromptModes />
+
+### Keep your own prompt
+
+If you'd rather tug left your prompt alone, set `TUG_PROMPT_DISABLE=1`
+**before** the hook line. The text is still available in the `$TUG_PROMPT`
+shell variable (`$global:TugPrompt` in PowerShell) if you want to place it
+yourself:
+
+```bash title="~/.zshrc"
+export TUG_PROMPT_DISABLE=1
+eval "$(tug init zsh)"
+PROMPT='${TUG_PROMPT}%~ %# '
+```
+
+<Callout title="Starship, Powerlevel10k and friends">
+  Prompt themes that show the current Kubernetes context will show tug's
+  cluster too, because the session kubeconfig names its context after the
+  cluster. You can use their Kubernetes segment and turn tug's off.
+</Callout>
+
+## No hook? Use `tug shell`
+
+Some shells or environments can't load the hook. `tug shell` starts a new
+copy of your shell with its own session instead. Type `exit` to leave it.
+
+```bash
+tug shell                 # a subshell with an empty session
+tug shell staging         # a subshell already connected to staging
+tug shell prod -n api     # connected to prod, in the api namespace
+```
+
+## New tabs and splits
+
+A new terminal that starts **from** a tug terminal (a tmux split, or a shell
+you start inside another) begins connected to the same cluster as its parent.
+After that, the two are independent: switching one doesn't move the other.

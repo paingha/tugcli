@@ -1,0 +1,84 @@
+---
+title: Cluster API
+description: List the workload clusters on a Cluster API management cluster, with credentials from the kubeconfig Secret Cluster API keeps for each.
+icon: Network
+---
+
+The `capi` provider finds clusters made with
+[Cluster API](https://cluster-api.sigs.k8s.io/). It reads the `Cluster`
+objects on a management cluster, and takes each workload cluster's credential
+from the `<cluster>-kubeconfig` Secret that Cluster API writes next to it. No
+cloud account or CLI is involved.
+
+## An account is a management cluster
+
+The management cluster must already be in your catalog, imported like any
+other cluster. Name it with the `cluster` setting, using its name from
+`tug ls`:
+
+```bash
+tug ls                                                  # find the management cluster's name
+tug import capi --account mgmt-eu --set cluster=mgmt-eu
+tug import capi --account team-a --set cluster=mgmt-eu --set namespace=team-a   # one namespace only
+```
+
+Give each management cluster its own `--account`. Without one, the account is
+called `default`. Importing an account again replaces its settings, so pass
+them all each time.
+
+tug reads the management cluster with your credential for it, and only reads:
+the connection it uses refuses writes. You need permission there to list
+`clusters.cluster.x-k8s.io` and to read the `<cluster>-kubeconfig` Secrets.
+
+## Which clusters it finds
+
+Every `Cluster` that has a control plane endpoint and a kubeconfig Secret.
+A cluster still being provisioned has neither, so it's left out until a
+`tug sync` after its control plane is up. tug reads Cluster API `v1beta1`, or
+`v1beta2` where that's all the management cluster serves.
+
+## Credentials
+
+tug uses the token or client certificate in the Secret's kubeconfig, so you
+get the access that kubeconfig grants. It keeps the credential in your
+keychain and reads the Secret again from time to time, so rotated credentials
+are picked up:
+
+| In the Secret | Read again |
+| --- | --- |
+| A token, as providers for managed Kubernetes (CAPA for EKS, say) write | every 5 minutes |
+| A client certificate and key | every hour, or when the certificate expires if that's sooner |
+
+That kubeconfig was written for the management cluster's controllers, not for
+your machine, so tug won't run a command it names (`exec`), read files it
+points to, or use basic authentication or an `auth-provider`.
+
+## Labels
+
+Each cluster gets every label on its `Cluster` object, plus tug's own
+`provider` and `account`. Clusters built from a ClusterClass also show their
+Kubernetes version, from `spec.topology.version`.
+
+Label a `Cluster` `env=prod` (or `env=production`) and tug opens it
+[read-only](/docs/concepts/read-only). Without that label, tug guesses `env`
+from the cluster's name, so `payments-prod` opens read-only too.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `cluster` | The management cluster's name or ID in the catalog. Required. |
+| `namespace` | Read `Cluster` objects in this namespace only. Defaults to every namespace. |
+
+## Troubleshooting
+
+| Message | What to do |
+| --- | --- |
+| `has no cluster setting naming its management cluster` | Add `--set cluster=<name>`, with a name from `tug ls`. |
+| `mgmt-eu is not in the catalog` | Import the management cluster first, for example with `tug import kubeconfig <file>`. |
+| `does not serve the cluster.x-k8s.io API` | The `cluster` setting names a cluster without Cluster API. |
+| `Unauthenticated` … check it with `tug doctor mgmt-eu` | Your credential for the management cluster was refused. `tug doctor` shows why. |
+| `gets its credential through itself` | The management cluster's own credential would be read from itself. Point `cluster` at a copy imported from another source, such as its kubeconfig file. |
+| `has no Secret … yet` … run `tug sync` once its control plane is up | The cluster is still being provisioned. |
+| `tug does not run commands read from a management cluster` | The Secret's kubeconfig uses an `exec` plugin, which tug won't run. Import that cluster another way. |
+| `refers to files on another machine; tug needs embedded data` | The kubeconfig points to certificate or token files. tug needs them written into the kubeconfig. |

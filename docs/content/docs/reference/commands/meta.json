@@ -1,0 +1,6 @@
+{
+  "title": "Commands",
+  "icon": "SquareTerminal",
+  "defaultOpen": true,
+  "pages": ["index", "connect", "workloads", "catalog", "safety", "plugin", "other"]
+}

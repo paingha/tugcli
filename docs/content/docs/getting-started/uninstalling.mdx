@@ -1,0 +1,72 @@
+---
+title: Uninstalling
+description: Remove tug and everything it stored, in four steps.
+icon: Trash
+---
+
+tug is easy to remove and leaves your own kubeconfig files untouched. To take
+it off your machine completely:
+
+<Steps>
+<Step>
+
+### Forget your imported sources
+
+This deletes the credentials tug stored in your keychain, one source at a time.
+List your sources with `tug ls -o json` (look at `provider` and `account`), then:
+
+```bash
+tug forget kubeconfig/default
+tug forget aws/work
+```
+
+`tug forget` says what it removed:
+
+```text
+Removed aws/work and 4 clusters
+```
+
+</Step>
+<Step>
+
+### Stop the background proxy
+
+If you used `tug connect --proxy`:
+
+```bash
+tug daemon stop
+```
+
+</Step>
+<Step>
+
+### Remove the hook line
+
+Delete the `tug init` line from `~/.zshrc`, `~/.bashrc`,
+`~/.config/fish/config.fish` or your PowerShell `$PROFILE`, and the
+`tug completion` line if you added one. Open a new terminal.
+
+</Step>
+<Step>
+
+### Delete the program and its folders
+
+Delete the `tug` binary, then tug's folders. On macOS and Linux these are,
+by default:
+
+```bash
+rm -rf ~/.config/tug ~/.local/share/tug ~/.cache/tug
+```
+
+On Windows they are `%AppData%\tug`, `%LocalAppData%\tug` and
+`%LocalAppData%\cache\tug`. See
+[Files and folders](/docs/reference/files) if you changed where tug keeps things.
+
+</Step>
+</Steps>
+
+<Callout title="Nothing else to clean up">
+  tug never edits `~/.kube/config` or other kubeconfig files, so there is
+  nothing to restore there. Session folders are temporary and disappear with
+  your terminals.
+</Callout>

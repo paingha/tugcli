@@ -1,0 +1,77 @@
+---
+title: All commands
+description: Every tug command at a glance, grouped the way tug --help groups them.
+icon: List
+---
+
+Run `tug --help`, or `tug <command> --help`, for the same information in your
+terminal. Any command not listed here is passed to
+[kubectl](/docs/concepts/kubectl).
+
+## Connect
+
+| Command | What it does |
+| --- | --- |
+| [`tug connect`](/docs/reference/commands/connect#tug-connect) | Point this terminal at a cluster. Alias: `c`. |
+| [`tug disconnect`](/docs/reference/commands/connect#tug-disconnect) | Stop pointing this terminal at a cluster. |
+| [`tug status`](/docs/reference/commands/connect#tug-status) | Show this terminal's cluster, namespace and mode. Alias: `current`. |
+| [`tug tunnel`](/docs/reference/commands/connect#tug-tunnel) | Reach private clusters through SSH, a proxy, AWS SSM or Google IAP. |
+| [`tug ns`](/docs/reference/commands/connect#tug-ns) | Switch this session's namespace. |
+| [`tug pin`](/docs/reference/commands/connect#tug-pin) | Pin a directory to a cluster with `.tug.yaml`. |
+| [`tug shell`](/docs/reference/commands/connect#tug-shell) | Start a subshell with its own session. |
+| [`tug init`](/docs/reference/commands/connect#tug-init) | Print the shell hook. |
+| [`tug ui`](/docs/reference/commands/connect#tug-ui) | Open k9s on this session's cluster. |
+| [`tug doctor`](/docs/reference/commands/connect#tug-doctor) | Explain why a cluster can't be reached. |
+
+## Work in the cluster
+
+| Command | What it does |
+| --- | --- |
+| [`tug logs`](/docs/reference/commands/workloads#tug-logs) | Tail logs from every pod of a workload. |
+| [`tug sh`](/docs/reference/commands/workloads#tug-sh) | Open a shell in a pod, or run a command; a debug container for images without a shell. |
+| [`tug pf`](/docs/reference/commands/workloads#tug-pf) | Port-forward to a workload by short name, or in the background with `--name`. |
+| [`tug restart`](/docs/reference/commands/workloads#tug-restart) | Rolling-restart a workload. |
+| [`tug scale`](/docs/reference/commands/workloads#tug-scale) | Set a workload's replicas. |
+| [`tug rollback`](/docs/reference/commands/workloads#tug-rollback) | Roll a deployment back. |
+| [`tug top`](/docs/reference/commands/workloads#tug-top) | CPU and memory of a workload's pods. |
+| [`tug why`](/docs/reference/commands/workloads#tug-why) | Explain why a workload isn't ready, and what to do next. |
+| [`tug tree`](/docs/reference/commands/workloads#tug-tree) | Show what a workload is made of, with the health of each part. |
+
+## Discover
+
+| Command | What it does |
+| --- | --- |
+| [`tug import`](/docs/reference/commands/catalog#tug-import) | Find accounts and import their clusters. |
+| [`tug sync`](/docs/reference/commands/catalog#tug-sync) | Refresh every imported source. |
+| [`tug ls`](/docs/reference/commands/catalog#tug-ls) | List clusters. Aliases: `clusters`, `list`. |
+| [`tug label`](/docs/reference/commands/catalog#tug-label) | Set or remove your labels on a cluster. |
+| [`tug forget`](/docs/reference/commands/catalog#tug-forget) | Remove a source, its clusters and their credentials. |
+| [`tug plugin`](/docs/reference/commands/plugin) | Install (by name from an index, or from an archive), write, test and publish provider plugins. |
+
+## Safety
+
+| Command | What it does |
+| --- | --- |
+| [`tug unlock`](/docs/reference/commands/safety#tug-unlock) | Allow writes on a read-only session for a while. |
+| [`tug lock`](/docs/reference/commands/safety#tug-lock) | Make it read-only again now. |
+
+## Other
+
+| Command | What it does |
+| --- | --- |
+| [`tug auth login`](/docs/reference/commands/other#tug-auth-login) | Sign in to a cluster's OpenID Connect issuer. |
+| [`tug auth logout`](/docs/reference/commands/other#tug-auth-logout) | Forget that sign-in. |
+| [`tug auth rotate`](/docs/reference/commands/other#tug-auth-rotate) | Replace a cluster's credential, revoking the old one. |
+| [`tug auth token`](/docs/reference/commands/other#tug-auth-token) | The credential helper kubectl calls. |
+| [`tug daemon`](/docs/reference/commands/other#tug-daemon) | Manage tugd, the local API proxy. |
+| [`tug version`](/docs/reference/commands/other#tug-version) | Print tug's version. |
+| [`tug completion`](/docs/reference/commands/other#tug-completion) | Generate tab completion for your shell. |
+
+## Global flags
+
+These work with every command:
+
+| Flag | Meaning |
+| --- | --- |
+| `--debug` | Log debugging detail to stderr. |
+| `-h`, `--help` | Help for any command. |

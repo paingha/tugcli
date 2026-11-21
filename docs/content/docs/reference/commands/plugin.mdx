@@ -1,0 +1,131 @@
+---
+title: Plugin commands
+description: tug plugin ls, describe, install, link, unlink, remove, new, package and test.
+---
+
+`tug plugin` (alias `tug plugins`) manages [provider plugins](/docs/plugins).
+
+## tug plugin ls
+
+List providers, built in and plugins. Alias: `list`.
+
+```bash
+tug plugin ls
+```
+
+## tug plugin describe
+
+Run a plugin's `describe` operation and show its manifest.
+
+```bash
+tug plugin describe <name>
+```
+
+## tug plugin search
+
+Search the signed plugin indexes in `plugins.indexes` by name, description or
+publisher. With no query, list everything. See [Plugin indexes](/docs/plugins/indexes).
+
+```bash
+tug plugin search [query] [-o table|json|yaml|name]
+```
+
+## tug plugin install
+
+Install a plugin by name from a signed index, or from a `.tar.gz` or `.zip`
+archive, after checking its checksums. Shows the publisher, secrets,
+environment and network hosts first, and asks to confirm.
+
+```bash
+tug plugin install <name[@version]|file|url> [flags]
+```
+
+```bash
+tug plugin install acme                 # newest version from the first index that has it
+tug plugin install acme@0.1.0
+tug plugin install ./tug-provider-acme_0.1.0.tar.gz
+tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz --sha256 9f2c…
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--sha256 <hash>` | Expected SHA-256 of the archive. Required for URLs; an index supplies it for names. |
+| `-y`, `--yes` | Install without asking. |
+| `--force` | Replace the same version if it's installed. |
+
+## tug plugin link
+
+Use a plugin folder you're developing. No checksums; marked `dev plugin`.
+
+```bash
+tug plugin link <dir>
+```
+
+## tug plugin unlink
+
+Stop using a linked plugin.
+
+```bash
+tug plugin unlink <name>
+```
+
+## tug plugin remove
+
+Remove every installed version of a plugin. Aliases: `rm`, `uninstall`.
+
+```bash
+tug plugin remove <name>
+```
+
+## tug plugin new
+
+Start a new plugin with the SDK, tests and a release workflow.
+
+```bash
+tug plugin new <name> [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--lang <go\|python>` | Language. Default: `go`. |
+| `--module <path>` | Go module path. Default: `example.com/tug-provider-<name>`. |
+| `--dir <dir>` | Folder to create. Default: `./tug-provider-<name>`. |
+
+## tug plugin package
+
+Write an installable archive, recording each binary's SHA-256 in its manifest.
+
+```bash
+tug plugin package [dir] [-o dist]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-o`, `--output <dir>` | Folder to write the archive to. Default: `dist`. |
+
+## tug plugin test
+
+Run the [conformance suite](/docs/plugins/testing) against a plugin or a
+built-in provider.
+
+```bash
+tug plugin test <name> [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--account <id>` | Imported account to test against. |
+| `--set key=value` | Account setting. Repeatable. |
+| `-o`, `--output <format>` | `table` or `json`. |
+
+## tug plugin index
+
+Build and sign a plugin index, for those who publish one. See
+[Publishing an index](/docs/plugins/indexes#publishing-an-index).
+
+| Command | Meaning |
+| --- | --- |
+| `tug plugin index keygen [--name <key>] [--force]` | Make an ed25519 signing key, kept in the credential store, and print its public key. |
+| `tug plugin index add <index.yaml> <archive> --url <https URL> [--description <text>]` | Record a packaged archive in an index file, creating the file if needed. |
+| `tug plugin index sign <index.yaml> [--name <key>]` | Sign the index, writing `<index.yaml>.sig`. `TUG_INDEX_KEY` supplies the key in CI. |
+| `tug plugin index verify <index.yaml> --public-key <key>` | Check an index against its signature and public key. |

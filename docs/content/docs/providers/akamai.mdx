@@ -1,0 +1,118 @@
+---
+title: Akamai LKE
+description: List Linode Kubernetes Engine clusters with an Akamai Cloud token, and check control-plane access lists.
+icon: Server
+---
+
+The `akamai` plugin lists clusters on Akamai Cloud's Linode Kubernetes Engine
+(LKE). It's a first-party [plugin](/docs/plugins), so you add it before
+importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-akamai_<version>.tar.gz`, with a build for every platform, and
+lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-akamai_*' --pattern checksums.txt
+    tug plugin install tug-provider-akamai_*.tar.gz \
+      --sha256 "$(grep tug-provider-akamai_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install straight from the release page's link, with the SHA-256 from
+    its `checksums.txt`:
+
+    ```bash
+    tug plugin install https://github.com/paingha/tugcli/releases/download/<tag>/tug-provider-akamai_0.1.0.tar.gz \
+      --sha256 <sha256>
+    ```
+
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                  # builds the plugins for this machine
+    tug plugin package plugins/akamai -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-akamai_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/akamai` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (its secret, and that it only talks
+to `api.linode.com`) and asks before installing.
+
+## Create a token
+
+In Akamai Cloud Manager, create a **personal access token** with
+**Kubernetes: Read/Write**. LKE only hands out kubeconfigs to tokens with write
+access, even though tug only reads them.
+
+## Import
+
+```console
+$ tug import akamai --account work
+Akamai Cloud personal access token (Kubernetes read/write) (akamai/work): ••••••••
+✓ akamai/work: 3 clusters, 3 new, 3 credentials moved to keychain
+```
+
+tug asks for the token once and keeps it in your keychain. The plugin only
+ever talks to `api.linode.com`.
+
+## Credentials
+
+LKE gives each cluster a kubeconfig with a long-lived token. The plugin reads
+it when listing clusters and tug moves the token to your keychain. Newly
+created clusters can take two to five minutes before their kubeconfig is
+ready; run `tug sync` again after that.
+
+## Rotating a cluster's token
+
+LKE can regenerate a cluster's kubeconfig token, revoking the old one. tug
+does this with [`tug auth rotate`](/docs/guides/rotating):
+
+```bash
+tug auth rotate lke-prod
+```
+
+LKE takes a few seconds to issue the new kubeconfig, and the plugin waits for
+it. If it isn't ready in time, the old token is already gone: run `tug sync`
+a minute later to fetch the new one.
+
+## Labels
+
+| Label | When |
+| --- | --- |
+| `ha` | `true` for clusters with a high-availability control plane |
+| `gpu` | `true` when a node pool has GPUs |
+| your LKE tags | tags written `key:value` or `key=value` become labels |
+
+Tag a cluster `env:prod` in Cloud Manager and tug opens it read-only.
+
+## Control-plane access lists
+
+LKE can restrict which IP addresses may reach a cluster's API server. If a
+cluster won't answer, ask `tug doctor` to check the list for your public IP:
+
+```bash
+tug doctor lke-prod --egress-ip 198.51.100.9
+```
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `apiURL` | Another API endpoint (https). You won't normally need it. |

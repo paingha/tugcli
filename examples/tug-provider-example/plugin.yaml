@@ -15,6 +15,7 @@ spec:
   - {os: linux, arch: amd64, bin: bin/tug-provider-example}
   - {os: linux, arch: arm64, bin: bin/tug-provider-example}
   - {os: windows, arch: amd64, bin: bin/tug-provider-example.exe}
+  - {os: windows, arch: arm64, bin: bin/tug-provider-example.exe}
   secrets:
   - {name: api_token, prompt: "Example API token"}
   env: []

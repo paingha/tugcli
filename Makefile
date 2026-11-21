@@ -27,7 +27,10 @@ example-plugin: ## Build the example provider plugin
 PLUGINS        := akamai coreweave crusoe digitalocean nebius rancher tailscale teleport vultr
 PLUGIN_HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
 PLUGIN_EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
-PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64
+PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64 windows_arm64
+# Where plugins-dist writes the archives. Releases use build/plugins, since
+# GoReleaser empties dist/ before it starts.
+PLUGINS_OUT    ?= dist/plugins
 
 .PHONY: plugins
 plugins: ## Build the first-party plugins for this machine
@@ -36,13 +39,14 @@ plugins: ## Build the first-party plugins for this machine
 	done
 
 .PHONY: plugins-dist
-plugins-dist: build ## Build the plugins for every platform and archive them in dist/plugins
+plugins-dist: build ## Build the plugins for every platform and archive them in $(PLUGINS_OUT)
+	@rm -rf $(PLUGINS_OUT)
 	@for p in $(PLUGINS); do \
 		for t in $(PLUGIN_TARGETS); do \
 			os=$${t%_*}; arch=$${t#*_}; ext=; [ $$os = windows ] && ext=.exe; \
 			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -o plugins/$$p/bin/$$t/tug-provider-$$p$$ext ./plugins/$$p/cmd/tug-provider-$$p || exit 1; \
 		done; \
-		$(BIN) plugin package plugins/$$p -o dist/plugins || exit 1; \
+		$(BIN) plugin package plugins/$$p -o $(PLUGINS_OUT) || exit 1; \
 	done
 
 .PHONY: test

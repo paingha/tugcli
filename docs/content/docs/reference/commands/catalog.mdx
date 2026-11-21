@@ -1,0 +1,81 @@
+---
+title: Catalog commands
+description: import, sync, ls, label and forget.
+---
+
+## tug import
+
+Find accounts on this machine and import their clusters. See
+[Importing clusters](/docs/guides/importing).
+
+```bash
+tug import [provider] [kubeconfig files...] [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--account <id>` | Account to import. |
+| `--set key=value` | Account setting. Repeatable. |
+| `-y`, `--yes` | Import everything found without asking. |
+
+```bash
+tug import                          # scan every provider
+tug import kubeconfig ./lke.yaml    # import a downloaded kubeconfig
+tug import aws --account work --set regions=eu-west-1
+```
+
+Secrets a provider declares are asked for once and kept in the keychain. In
+scripts, set `TUG_SECRET_<NAME>` (for example `TUG_SECRET_API_TOKEN`).
+
+## tug sync
+
+Refresh every imported source. New clusters are added; clusters gone upstream
+are marked stale. Exits 1 if any source failed.
+
+```bash
+tug sync
+```
+
+## tug ls
+
+List clusters in the catalog. Aliases: `tug clusters`, `tug list`. The cluster
+this terminal is connected to is marked `*`.
+
+```bash
+tug ls [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-l`, `--selector <labels>` | Filter by labels, such as `env=prod,gpu=true`. |
+| `-o`, `--output <format>` | `table`, `json`, `yaml` or `name`. |
+
+Table columns: `NAME`, `PROVIDER`, `ACCOUNT`, `REGION`, `VERSION`, `ENV`,
+`LABELS`, `STATUS`. JSON fields: `name`, `id`, `provider`, `account`,
+`region`, `version`, `server`, `labels`, `stale`, `lastSeen`.
+
+## tug label
+
+Set or remove your own labels on a cluster. Needs the exact cluster name.
+Your labels win over the provider's and survive `tug sync`.
+
+```bash
+tug label <cluster> key=value... | key-...
+```
+
+```bash
+tug label staging-us env=staging team=payments
+tug label staging-us team-
+```
+
+## tug forget
+
+Remove an imported source, its clusters and their stored credentials.
+
+```bash
+tug forget <provider>/<account>
+```
+
+```bash
+tug forget aws/work
+```

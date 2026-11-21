@@ -1,0 +1,21 @@
+{
+  "title": "Guide",
+  "pages": [
+    "index",
+    "---Start here---",
+    "...getting-started",
+    "---How tug thinks---",
+    "...concepts",
+    "---Everyday tasks---",
+    "...guides",
+    "---Providers---",
+    "...providers",
+    "---Plugins---",
+    "...plugins",
+    "---Reference---",
+    "...reference",
+    "---Community---",
+    "faq",
+    "contributing"
+  ]
+}

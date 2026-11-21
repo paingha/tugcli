@@ -1,0 +1,108 @@
+---
+title: Rancher
+description: List the clusters a Rancher server manages with an API token, and reach them through Rancher's proxy.
+icon: Tractor
+---
+
+The `rancher` plugin lists the clusters that a Rancher server manages, and
+reaches each one through Rancher's authenticating proxy at
+`<url>/k8s/clusters/<id>`. It's a first-party [plugin](/docs/plugins), so you
+add it before importing.
+
+## Add the plugin
+
+Each tug release on GitHub includes the plugin as
+`tug-provider-rancher_<version>.tar.gz`, with a build for every platform, and
+lists its SHA-256 in the release's signed `checksums.txt`.
+
+<Tabs items={['From a tug release', 'Build it yourself']}>
+  <Tab value="From a tug release">
+    With the [GitHub CLI](https://cli.github.com/), download the archive and
+    the checksums from the latest release, then install:
+
+    ```bash
+    gh release download --repo paingha/tugcli --pattern 'tug-provider-rancher_*' --pattern checksums.txt
+    tug plugin install tug-provider-rancher_*.tar.gz \
+      --sha256 "$(grep tug-provider-rancher_ checksums.txt | cut -d' ' -f1)"
+    ```
+
+    Or install from the release page's link, with the SHA-256 from its
+    `checksums.txt`: `tug plugin install <archive URL> --sha256 <sha256>`.
+    To check `checksums.txt` itself, verify its signature as shown in
+    [Installation](/docs/getting-started/installation).
+  </Tab>
+  <Tab value="Build it yourself">
+    For a release without plugin archives (older ones didn't have them), or to
+    try unreleased changes, build it from tug's repository:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git && cd tugcli
+    make plugins                                   # builds the plugins for this machine
+    tug plugin package plugins/rancher -o dist     # an archive that records the build's checksum
+    tug plugin install dist/tug-provider-rancher_0.1.0.tar.gz
+    ```
+
+    Once it's installed, you can delete the clone. Working on the plugin
+    itself? `tug plugin link plugins/rancher` uses the folder directly.
+  </Tab>
+</Tabs>
+
+Either way, tug shows what the plugin gets (its secret, and that it only talks
+to the Rancher server you name) and asks before installing.
+
+## Create an API key
+
+In Rancher, open your avatar > **Account & API Keys** and create an API key
+with **no scope** (a key scoped to one cluster reaches only that one). Rancher
+shows its **bearer token**, `token-xxxxx:…`, only once, when it creates the
+key. That's what tug needs: the access key and secret key joined by a colon.
+
+## Import
+
+Every account needs `url`, the address of your Rancher server:
+
+```console
+$ tug import rancher --account corp --set url=https://rancher.example.com
+Rancher API bearer token (token-xxxxx:...) (rancher/corp): ••••••••
+✓ rancher/corp: 4 clusters, 4 new
+```
+
+tug asks for the token once and keeps it in your keychain.
+
+## Credentials
+
+Rancher creates a new kubeconfig token each time it generates a kubeconfig, so
+the plugin asks for one only when tug needs a credential, never while listing.
+tug keeps it in your keychain until it expires, as Rancher reports it, or for
+12 hours when the plugin can't read the expiry. If your server's certificate
+isn't publicly trusted, the plugin reads its CA from Rancher's `cacerts`
+setting, as Rancher's own kubeconfigs do.
+
+## Labels
+
+| Label | When |
+| --- | --- |
+| your cluster labels | labels with plain keys, such as `env` and `team`; keys with a prefix or dots, such as `provider.cattle.io`, are Rancher's own and left out |
+
+Label a cluster `env=prod` in Rancher and tug opens it
+[read-only](/docs/concepts/read-only). Without one, tug guesses `env` from the
+cluster's name.
+
+## Settings
+
+| Setting | Meaning |
+| --- | --- |
+| `url` | The Rancher server, such as `https://rancher.example.com`. Required, and must use https. |
+| `apiURL` | Another address for API calls only (https). Defaults to `url`. You won't normally need it. |
+
+## Troubleshooting
+
+| Hint | What to do |
+| --- | --- |
+| `import the account again with --set url=…` | The account has no `url`. |
+| `use the API key's bearer token` | You gave one half of the key. `tug forget rancher/<account>`, then import again with the whole token. |
+| `the API token is invalid, expired or disabled` | Create a new key, forget the account and import again. |
+| `is the address of a Rancher server` | `url` points somewhere else. Import again with the right `url`. |
+| `needs a role on the cluster, such as Cluster Member` | Ask a Rancher admin for access to the cluster. |
+| `set kubeconfig-generate-token to true` | The server's kubeconfigs run the rancher CLI instead of holding a token. Ask an admin to change the setting. |
+| `the cluster is gone from Rancher` | Run `tug sync`. |

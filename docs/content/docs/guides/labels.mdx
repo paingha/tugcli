@@ -1,0 +1,86 @@
+---
+title: Labels and filtering
+description: Tag clusters with your own labels, then list and connect by label.
+icon: Tags
+---
+
+Labels are `key=value` tags on clusters. Providers add some for you, and you
+can add your own. They're handy once you have more than a few clusters.
+
+## See a cluster's labels
+
+`tug ls` shows `env` in its own column and the rest under **LABELS**. For
+everything, use JSON:
+
+```bash
+tug ls -o json
+```
+
+## Add, change and remove labels
+
+```bash
+tug label staging-us team=payments tier=2     # add or change
+tug label staging-us team-                    # remove your "team" label
+```
+
+- `tug label` needs the cluster's **exact** name (as shown by `tug ls`).
+- Your labels **win** over a provider's label with the same key, and they
+  survive `tug sync`.
+- Removing your label (`key-`) brings back the provider's value, if it had one.
+
+## Mark a cluster as production
+
+If tug didn't spot that a cluster is production, label it, and it opens
+[read-only](/docs/concepts/read-only) from the next `tug connect`:
+
+```bash
+tug label payments-live env=prod
+```
+
+<Callout type="warn">
+  Write exactly `prod`. tug tidies `env` values that come from providers (so
+  `production` becomes `prod`), but uses yours exactly as you write them.
+</Callout>
+
+It works the other way too. If tug guessed wrong, say a cluster called
+`prod-like-sandbox`, override it:
+
+```bash
+tug label prod-like-sandbox env=dev
+```
+
+## Filter by label
+
+`-l` (or `--selector`) takes comma-separated `key=value` pairs. A cluster
+must match all of them.
+
+```bash
+tug ls -l env=prod
+tug ls -l env=prod,team=payments
+tug ls -l gpu=true -o name        # just the names, one per line
+```
+
+## Connect by label
+
+`tug connect` and `tug shell` accept `key=value` arguments. They narrow the
+choice first; then tug matches the name, or shows a list if more than one is
+left:
+
+```bash
+tug connect team=payments                 # choose among the payments team's clusters
+tug connect team=payments env=staging     # often just one
+tug connect gpu=true us                   # GPU clusters whose name matches "us"
+```
+
+## Labels tug and the providers set
+
+| Label | Set by | Example |
+| --- | --- | --- |
+| `provider`, `account` | tug | `aws`, `work` |
+| `region` | tug, when known | `eu-west-1` |
+| `env` | provider tag, else guessed from the name | `prod`, `staging`, `dev`, `test` |
+| `gpu` | GKE (GPU node pools) | `true` |
+| `aws-account-id` | EKS | `123456789012` |
+| `gcp-project` | GKE | `acme-ml` |
+| `local`, `distro` | local provider | `true`, `kind` |
+| anything else | EKS tags, GKE resource labels, plugins | `team=payments` |

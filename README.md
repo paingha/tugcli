@@ -64,7 +64,7 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 | `azure` (AKS) | built-in | the subscriptions your Azure sign-in sees (`az login`, environment, workload or managed identity); none, silently, when nothing is set up | a short-lived Entra token for Entra-integrated clusters, else the user credential of a local-account cluster |
 | `capi` (Cluster API) | built-in | a management cluster in the catalog: `--set cluster=<name>` | from each cluster's `<name>-kubeconfig` Secret, read again before it expires |
 | `argocd` | built-in | an Argo CD install in the catalog: `--set cluster=<name>`, optional `namespace` | Argo CD's cluster Secrets: tokens, certificates, `aws eks get-token`; commands named by `execProviderConfig` run only with `--set allowExec=true` |
-| `clusterprofile` | built-in | a SIG Multicluster hub in the catalog: `--set cluster=<name>,providerFile=<path>` | the exec plugin your providers file names for each ClusterProfile's access provider |
+| `clusterprofile` | built-in | a SIG Multicluster hub in the catalog: `--set cluster=<name> --set providerFile=<path>` | the exec plugin your providers file names for each ClusterProfile's access provider |
 | `digitalocean` (DOKS) | plugin, [plugins/digitalocean](plugins/digitalocean) | personal access token with `kubernetes:read` and `kubernetes:access_cluster` | a short-lived token from the credentials API |
 | `vultr` (VKE) | plugin, [plugins/vultr](plugins/vultr) | API key | the cluster's client certificate |
 | `rancher` | plugin, [plugins/rancher](plugins/rancher) | `--set url=<Rancher server>` and an API token | a kubeconfig token generated per cluster |
@@ -77,11 +77,16 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 tug import local --account kind           # every kind cluster, even ones no kubeconfig mentions
 tug import aws --account work --set regions=eu-west-1
 tug import google --account my-project
-make plugins && tug plugin link plugins/akamai
+gh release download --repo paingha/tugcli --pattern 'tug-provider-akamai_*' --pattern checksums.txt
+tug plugin install tug-provider-akamai_*.tar.gz --sha256 "$(grep tug-provider-akamai_ checksums.txt | cut -d' ' -f1)"
 tug import akamai --account work          # asks for the token once, keeps it in the keychain
 tug import azure                          # every subscription your az login sees
 tug import capi --account mgmt --set cluster=mgmt-eu
 ```
+
+Each release includes the first-party plugins as archives with a build for
+every platform they support, listed in the signed `checksums.txt`.
+`make plugins-dist` builds the same archives from a checkout.
 
 Every kubeconfig tug writes authenticates with `tug auth token`, so no secret is
 written to disk. For clusters that trust an OpenID Connect issuer, tug signs in
@@ -124,7 +129,7 @@ to the cluster routes kubectl, helm and k9s through tugd, which keeps the
 tunnel open.
 
 ```bash
-tug tunnel set eks-private ssm://i-0123456789abcdef0?region=eu-west-1
+tug tunnel set eks-private 'ssm://i-0123456789abcdef0?region=eu-west-1'
 tug tunnel set lab ssh://admin@bastion.example.com
 tug tunnel set corp socks5://127.0.0.1:1080
 tug tunnel test eks-private     # open it and reach the API server through it
@@ -273,3 +278,13 @@ Code follows [Effective Go](https://go.dev/doc/effective_go),
 [Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md).
 [AGENTS.md](AGENTS.md) holds the Go and CLI standards for this repository,
 for people and for AI coding agents.
+
+## Contributing
+
+Bug reports, docs fixes, plugins and pull requests are welcome.
+[CONTRIBUTING.md](CONTRIBUTING.md) explains how to report a problem, set up a
+development copy and get a change merged.
+
+## License
+
+tug is released under the [MIT License](LICENSE).

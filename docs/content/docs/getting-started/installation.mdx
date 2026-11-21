@@ -1,0 +1,140 @@
+---
+title: Installation
+description: Put the tug command on your machine. It takes about a minute.
+icon: Download
+---
+
+tug is a single program with no runtime to install. It works on **macOS**,
+**Linux** and **Windows**, on both Intel/AMD (`amd64`) and ARM (`arm64`)
+processors.
+
+## What you need
+
+| Tool | Needed? | Why |
+| --- | --- | --- |
+| A terminal with zsh, bash, fish or PowerShell | Yes | tug gives each terminal its own cluster through a small shell hook. |
+| [kubectl](https://kubernetes.io/docs/tasks/tools/) | Strongly recommended | tug passes any command it doesn't have to kubectl. Its own commands (`logs`, `sh`, `pf` and so on) work without it. |
+| [k9s](https://k9scli.io) | Optional | Only for `tug ui`. |
+| Go 1.26 or newer | Only for `go install` or building from source | |
+
+## Install
+
+<Callout type="info" title="While tug's repository is private">
+  `go install` and `git clone` need access to `github.com/paingha/tugcli`. For
+  `go install`, also tell Go not to use the public module proxy:
+  `export GOPRIVATE=github.com/paingha/tugcli`.
+</Callout>
+
+<Tabs items={['go install', 'Download a release', 'Build from source']}>
+  <Tab value="go install">
+    If you have Go installed, this is the quickest way:
+
+    ```bash
+    go install github.com/paingha/tugcli/cmd/tug@latest
+    ```
+
+    Go puts `tug` in `$(go env GOPATH)/bin`, which is usually `~/go/bin`. Make
+    sure that folder is on your `PATH`:
+
+    ```bash
+    export PATH="$PATH:$(go env GOPATH)/bin"
+    ```
+  </Tab>
+  <Tab value="Download a release">
+    Each tagged release on the
+    [GitHub releases page](https://github.com/paingha/tugcli/releases) has an
+    archive for every platform, named like `tug_<version>_<os>_<arch>.tar.gz`
+    (`.zip` on Windows).
+
+    1. Download the archive for your platform.
+    2. Unpack it and move `tug` (or `tug.exe`) to a folder on your `PATH`, such
+       as `/usr/local/bin` or `~/.local/bin`.
+
+    ```bash
+    tar -xzf tug_*_darwin_arm64.tar.gz
+    mv tug ~/.local/bin/
+    ```
+
+    <Accordions>
+      <Accordion title="Check the download is genuine (optional)">
+        Every release has a `checksums.txt` file, signed with
+        [Sigstore cosign](https://docs.sigstore.dev/) using keyless signing.
+        To check an archive:
+
+        ```bash
+        cosign verify-blob \
+          --certificate checksums.txt.pem \
+          --signature checksums.txt.sig \
+          --certificate-identity-regexp 'https://github.com/paingha/tugcli/' \
+          --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          checksums.txt
+        sha256sum --ignore-missing -c checksums.txt
+        ```
+
+        Releases also include a software bill of materials (SBOM) for each archive.
+        The first-party plugin archives (`tug-provider-akamai_*`,
+        `tug-provider-coreweave_*`) are listed in the same signed
+        `checksums.txt`.
+      </Accordion>
+    </Accordions>
+  </Tab>
+  <Tab value="Build from source">
+    Clone the repository and build:
+
+    ```bash
+    git clone https://github.com/paingha/tugcli.git
+    cd tugcli
+    make build          # writes bin/tug
+    ```
+
+    Then copy `bin/tug` to a folder on your `PATH`.
+  </Tab>
+</Tabs>
+
+<Callout type="info" title="Homebrew, Scoop and krew">
+  Packages for Homebrew, Scoop and the kubectl plugin index (krew) are planned,
+  but not available yet.
+</Callout>
+
+## Check it works
+
+```console
+$ tug version
+tug 0.1.0 (3f9a2c1d8e4b, go1.26.2, darwin/arm64)
+```
+
+You'll see your own version, commit and platform. If your shell says
+`command not found`, the folder holding `tug` isn't on your `PATH` yet.
+
+## Turn on tab completion (optional)
+
+tug can complete commands, flags and even cluster names when you press
+<kbd>Tab</kbd>. Add one line to your shell's startup file:
+
+<Tabs items={['zsh', 'bash', 'fish', 'PowerShell']}>
+  <Tab value="zsh">
+    ```bash title="~/.zshrc"
+    source <(tug completion zsh)
+    ```
+  </Tab>
+  <Tab value="bash">
+    ```bash title="~/.bashrc"
+    source <(tug completion bash)
+    ```
+  </Tab>
+  <Tab value="fish">
+    ```bash title="~/.config/fish/config.fish"
+    tug completion fish | source
+    ```
+  </Tab>
+  <Tab value="PowerShell">
+    ```powershell title="$PROFILE"
+    tug completion powershell | Out-String | Invoke-Expression
+    ```
+  </Tab>
+</Tabs>
+
+## Next step
+
+tug is installed, but your terminal doesn't know about sessions yet.
+[Set up your shell](/docs/getting-started/shell-setup) next. It's one line.

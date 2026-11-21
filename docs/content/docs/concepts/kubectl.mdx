@@ -1,0 +1,80 @@
+---
+title: tug and kubectl
+description: tug doesn't replace kubectl. Here's how the two work together.
+icon: Workflow
+---
+
+tug is a companion to kubectl, not a replacement. It gets kubectl, and every
+other Kubernetes tool, pointed at the right cluster with the right credentials,
+then adds a handful of shortcuts for everyday jobs.
+
+## Your tools follow the session
+
+Once a terminal is connected, kubectl, helm, k9s, Terraform's Kubernetes
+provider and anything else that reads `KUBECONFIG` use that terminal's
+cluster and namespace. There's nothing to configure.
+
+```bash
+tug connect staging
+kubectl get pods        # staging-us, default namespace
+helm list               # same cluster
+k9s                     # same cluster (or: tug ui)
+```
+
+## Anything tug doesn't know runs as kubectl
+
+If you type a command tug doesn't have, it hands the whole thing to kubectl,
+using this terminal's session. The exit code is kubectl's own.
+
+```bash
+tug get pods -A
+tug describe deploy api-server
+tug apply -f deploy.yaml     # on a read-only session, tug asks first
+```
+
+This is handy on a read-only session: changes made through `tug` are guarded,
+while `kubectl` run directly is only guarded with
+[`--proxy`](/docs/guides/proxy).
+
+When the terminal isn't connected, `tug <command>` behaves like plain kubectl
+with your usual config.
+
+## Names tug uses for itself
+
+A few of tug's commands share a name with a kubectl command. For these, tug's
+version runs. Use `kubectl` directly when you want kubectl's.
+
+| You type | tug runs | For kubectl's version |
+| --- | --- | --- |
+| `tug logs` | tug's multi-pod logs | `kubectl logs` |
+| `tug top` | CPU and memory for one workload's pods | `kubectl top` |
+| `tug scale` | scale by short name | `kubectl scale` |
+| `tug label` | labels on a **cluster in tug's catalog** | `kubectl label` |
+| `tug auth` | tug's credential helpers | `kubectl auth` |
+| `tug plugin` | tug's provider plugins | `kubectl plugin` |
+| `tug version`, `tug completion`, `tug help` | tug's own | `kubectl version` and so on |
+
+## Using a different kubectl
+
+tug runs the first `kubectl` on your `PATH`. To use another (say a specific
+version, or `kubecolor`), set it in [`config.yaml`](/docs/reference/configuration)
+or with an environment variable:
+
+```bash
+export TUG_KUBECTL=/opt/kubectl-1.32/kubectl
+```
+
+## k9s
+
+`tug ui` opens [k9s](https://k9scli.io) on this terminal's cluster:
+
+```bash
+tug ui
+```
+
+You need k9s installed; tug tells you where to get it if it isn't.
+
+<Callout type="info">
+  k9s talks to the cluster directly, so tug's read-only guard covers it only
+  when you connected with `--proxy`.
+</Callout>

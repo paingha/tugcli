@@ -1,0 +1,106 @@
+---
+title: Questions and answers
+description: Short answers to the things people ask most about tug.
+icon: MessageCircleQuestionMark
+---
+
+<Accordions>
+  <Accordion title="Does tug change my ~/.kube/config?">
+    No, never. tug only reads kubeconfig files. Each terminal gets its own
+    kubeconfig in a private session folder, and `KUBECONFIG` is set for that
+    terminal only. Close the terminal or run `tug disconnect` and everything is
+    as it was.
+  </Accordion>
+  <Accordion title="Can I still use kubectl, helm and k9s?">
+    Yes. They follow your terminal's session automatically. tug also passes any
+    command it doesn't know to kubectl, so `tug get pods` works too. See
+    [tug and kubectl](/docs/concepts/kubectl).
+  </Accordion>
+  <Accordion title="Why did a cluster open read-only?">
+    It has the label `env=prod`. That comes from the provider (an
+    `Environment=production` tag, say) or from its name, if it contains a word
+    such as `prod`, `production` or `live`. Run `tug unlock 15m` to make changes
+    for a while, or `tug label <cluster> env=dev` if tug guessed wrong.
+  </Accordion>
+  <Accordion title="kubectl deleted something on a read-only cluster. Why didn't tug stop it?">
+    Without `--proxy`, the guard covers tug's commands and kubectl commands run
+    *through* tug (`tug delete …`), but not `kubectl` run directly. Connect with
+    `tug connect <cluster> --proxy` to guard every tool. See
+    [Guard every tool with tugd](/docs/guides/proxy).
+  </Accordion>
+  <Accordion title="Where are my tokens stored?">
+    In your operating system's keychain (Keychain on macOS, Credential Manager
+    on Windows, Secret Service on Linux), under the service name `tug`. On
+    machines without one, use the encrypted file store. See
+    [Credentials](/docs/concepts/credentials).
+  </Accordion>
+  <Accordion title="My cluster uses single sign-on. How do I log in?">
+    If the cluster trusts an OpenID Connect issuer (Okta, Azure AD, Dex and so
+    on), tug signs you in through your browser the first time kubectl needs a
+    token, or ahead of time with `tug auth login`. Over SSH, it shows a code to
+    enter on another device. See [Signing in](/docs/guides/sign-in).
+  </Accordion>
+  <Accordion title="A token may have leaked. What do I do?">
+    For providers that support it (Akamai LKE today), run
+    `tug auth rotate <cluster>`: the provider issues a new credential and
+    revokes the old one. For an OpenID Connect sign-in, run `tug auth logout`
+    and end the session in your identity provider too. See
+    [Rotating a credential](/docs/guides/rotating).
+  </Accordion>
+  <Accordion title="My cluster is behind a bastion, a VPN or a private endpoint.">
+    Give it a tunnel: an SSH jump host, a proxy, AWS Systems Manager or Google
+    Cloud IAP. tug remembers it with the cluster and opens it whenever you
+    connect. See [Reaching private clusters](/docs/guides/tunnels).
+  </Accordion>
+  <Accordion title="My image has no shell. How do I look inside?">
+    `tug sh` offers to add an ephemeral debug container that shares the app's
+    processes, with the app's files under `/proc/1/root`. See
+    [Images without a shell](/docs/guides/workloads#images-without-a-shell).
+  </Accordion>
+  <Accordion title="Can a project folder pick its own cluster?">
+    Yes. `tug pin set <cluster> -n <namespace>` writes a `.tug.yaml`, and any
+    terminal that moves into the folder connects to it. See
+    [Directory pins](/docs/guides/pins).
+  </Accordion>
+  <Accordion title="Can I delete a kubeconfig file after importing it?">
+    Yes. Any token or key inside it is already in your keychain. Keep the file
+    only if you want `tug sync` to notice changes to it.
+  </Accordion>
+  <Accordion title="My terminal says there's no tug session.">
+    The shell hook isn't loaded. Add the `tug init` line for your shell to its
+    startup file and open a new terminal. See
+    [Set up your shell](/docs/getting-started/shell-setup), or run `tug doctor`.
+  </Accordion>
+  <Accordion title="I have two clusters with the same name.">
+    tug keeps names unique by adding the account: `prod` and `prod@work`.
+    `tug ls` shows the names to use.
+  </Accordion>
+  <Accordion title="A cluster shows as stale.">
+    Its provider stopped listing it at the last `tug sync`. If it was deleted,
+    remove its source with `tug forget`, or leave it be. If it's still there,
+    check the source's error with `tug doctor` and sync again.
+  </Accordion>
+  <Accordion title="How do I use tug in CI?">
+    Set `TUG_HOME` to a temporary folder, use `TUG_KEYRING_BACKEND=file` with a
+    passphrase, pass secrets as `TUG_SECRET_<NAME>`, and add `--yes` where tug
+    would ask. See [Scripts and CI](/docs/guides/scripting).
+  </Accordion>
+  <Accordion title="Does tug work on Windows?">
+    Yes, with PowerShell. Add `Invoke-Expression (& tug init powershell | Out-String)`
+    to your `$PROFILE`. Secrets go into Windows Credential Manager.
+  </Accordion>
+  <Accordion title="How do I remove tug completely?">
+    Follow [Uninstalling](/docs/getting-started/uninstalling): forget your
+    sources, stop tugd, remove the hook line and delete tug's folders.
+  </Accordion>
+  <Accordion title="Can I read these docs from my AI assistant?">
+    Yes. The whole guide is available as plain text at
+    [/llms-full.txt](/llms-full.txt), and every page has a “Copy Markdown”
+    button at the top.
+  </Accordion>
+</Accordions>
+
+## Still stuck?
+
+Run `tug doctor -o json` and open an issue on
+[GitHub](https://github.com/paingha/tugcli/issues) with the output.
