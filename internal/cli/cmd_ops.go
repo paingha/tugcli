@@ -11,7 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -87,23 +86,6 @@ func (a *app) resolveTarget(ctx context.Context, env *opsEnv, arg string) (resol
 		return resolve.Target{}, err
 	}
 	return matches[i], nil
-}
-
-// targetPod picks the pod to act on: the first ready one.
-func (a *app) targetPod(ctx context.Context, env *opsEnv, t resolve.Target) (*corev1.Pod, error) {
-	pods, err := resolve.Pods(ctx, env.cs, t)
-	if err != nil {
-		return nil, err
-	}
-	for i := range pods {
-		if pods[i].Status.Phase == corev1.PodRunning {
-			return &pods[i], nil
-		}
-	}
-	if len(pods) == 0 {
-		return nil, fmt.Errorf("%s has no pods", t)
-	}
-	return nil, fmt.Errorf("%s has no running pod (first is %s, %s)", t, pods[0].Name, pods[0].Status.Phase)
 }
 
 // ensureWritable asks once, before any request, whether to write on a
@@ -248,7 +230,7 @@ until the pod is replaced, and adding one is a write.`,
 			if err != nil {
 				return err
 			}
-			pod, err := a.targetPod(ctx, env, t)
+			pod, err := resolve.RunningPod(ctx, env.cs, t)
 			if err != nil {
 				return err
 			}
@@ -433,7 +415,7 @@ deploy/ls or deploy/stop.`,
 			if err != nil {
 				return err
 			}
-			pod, err := a.targetPod(ctx, env, t)
+			pod, err := resolve.RunningPod(ctx, env.cs, t)
 			if err != nil {
 				return err
 			}

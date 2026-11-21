@@ -171,7 +171,7 @@ func (a *app) daemonForward(ctx context.Context, f daemon.Forward, pinned []stri
 	if err != nil {
 		return err
 	}
-	pod, err := a.targetPod(ctx, env, t)
+	pod, err := resolve.RunningPod(ctx, env.cs, t)
 	if err != nil {
 		return err
 	}
