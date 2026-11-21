@@ -1,0 +1,129 @@
+---
+title: APIs, CRDs and upgrades
+description: Find what a cluster serves, read a CRD's schema, and get ready for a Kubernetes upgrade.
+icon: Layers
+---
+
+Every cluster serves a slightly different API: its Kubernetes release decides
+which built-in versions exist, and each operator you install adds custom
+resources with versions of their own. `tug api` and `tug crd` show what is
+there, what is going away and how two clusters differ. They only **read**.
+
+## What does this cluster serve?
+
+`tug api resources` lists every resource type, and takes a query that matches
+names, short names, kinds, groups and categories:
+
+```console
+$ tug api resources cert
+NAME                         SHORTNAMES   GROUP                VERSIONS   SCOPE        KIND                        CATEGORIES
+certificates                 cert,certs   cert-manager.io      v1         Namespaced   Certificate                 cert-manager
+certificaterequests          cr,crs       cert-manager.io      v1         Namespaced   CertificateRequest          cert-manager
+certificatesigningrequests   csr          certificates.k8s.io  v1         Cluster      CertificateSigningRequest   -
+```
+
+`VERSIONS` lists every version that serves the type, the one clients use by
+default first. Narrow the list with `--group`, `--verb` and `--scope`, and use
+`-o name` in scripts. `tug api versions` lists the group-versions themselves,
+with the release that removes any that are going away.
+
+## Reading a custom resource definition
+
+`tug crd explain` shows what a definition says about its versions:
+
+```console
+$ tug crd explain widget
+Name:             widgets.example.com
+Kind:             Widget (list WidgetList)
+Group:            example.com
+Scope:            Namespaced
+Names:            widgets, widget, wd
+Categories:       -
+Conversion:       Webhook widgets/widget-webhook:443/convert, ConversionReview v1
+Stored versions:  v1beta1, v1 (objects may still be stored at v1beta1; rewrite them before dropping it)
+Conditions:       Established=True
+
+VERSION   SERVED   STORAGE   DEPRECATED   SUBRESOURCES
+v1        yes      yes       -            status
+v1beta1   yes      -         yes          -
+deprecated v1beta1: example.com/v1beta1 Widget is deprecated; use example.com/v1
+```
+
+`Stored versions` matters on upgrades. The API server writes new objects at
+the storage version, but objects written before the storage version changed
+stay as they were until something rewrites them. An operator upgrade that
+drops `v1beta1` while objects are still stored at it fails, so rewrite them
+first (a no-op update of each object does it) and then remove the old version
+from the definition's `status.storedVersions`.
+
+`tug crd schema` shows the fields, with their types, which are required, and
+the first sentence of each description:
+
+```console
+$ tug crd schema widget --depth 2
+Widget example.com/v1: Widget is a thing that does something.
+
+FIELD        TYPE                REQUIRED   DESCRIPTION
+apiVersion   string
+kind         string
+metadata     object
+spec         object                         Spec is what the widget should be.
+  labels     map[string]string
+  parts      []object                       Parts the widget is made of.
+  size       string              yes        Size of the widget. One of: small, large. Default: small.
+```
+
+`--field spec.size` shows one field in full, with its whole description,
+allowed values and default, and `--version` reads another version's schema.
+
+## Before a Kubernetes upgrade
+
+`tug api deprecations` lists the API versions the cluster still serves that a
+later Kubernetes release stops serving, from the upstream
+[Deprecated API Migration Guide](https://kubernetes.io/docs/reference/using-api/deprecation-guide/),
+and the custom resource versions their definitions deprecate or still hold
+objects at:
+
+```console
+$ tug api deprecations
+API VERSION           KIND                      REMOVED IN   USE INSTEAD                   OBJECTS   NOTE
+autoscaling/v2beta2   HorizontalPodAutoscaler   1.26         autoscaling/v2 (since 1.23)   1
+policy/v1beta1        PodDisruptionBudget       1.25         policy/v1 (since 1.21)        0
+```
+
+`OBJECTS` counts the objects last written at that version, from their
+`managedFields` and kubectl's last-applied annotation. A count above 0 means a
+manifest, chart or controller still writes the old version and will break when
+the release that removes it arrives; find it and move it to the version under
+`USE INSTEAD`. A count of 0 means no object was last written at the old
+version; a client that only reads at it, such as a controller that lists
+through it, would still break, so check your controllers' versions too.
+
+`tug api server-version` says where the cluster's release is in its upstream
+support window. Run both across a fleet with `--cluster-selector`:
+
+```bash
+tug api server-version --cluster-selector env=prod
+tug api deprecations --cluster-selector env=prod
+```
+
+<Callout type="info">
+tug keeps the upstream removals and each release's end of life in a table
+built into it, with the day it was last checked; `-o json` includes that day.
+Managed services such as EKS, GKE and AKS may support a release for longer
+than upstream does.
+</Callout>
+
+## Comparing two clusters
+
+`tug api diff` lists every resource type two catalog clusters serve
+differently: types only one serves, different versions, or a custom resource
+stored at a different version. Use it before promoting manifests from staging
+to production, or after an upgrade to see what changed:
+
+```bash
+tug api diff payments-staging payments-prod
+```
+
+Neither cluster needs to be the session's; tug reads both through a read-only
+guard.

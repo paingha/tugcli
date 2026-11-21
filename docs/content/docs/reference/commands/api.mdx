@@ -1,0 +1,153 @@
+---
+title: API and CRD commands
+description: api resources, versions, deprecations, server-version and diff; crd explain and schema.
+---
+
+These commands read what the session's cluster serves. They only read, and
+every one except `tug api diff` also runs on many clusters at once with
+`--cluster-selector`, each line prefixed with its cluster. See
+[APIs, CRDs and upgrades](/docs/guides/apis) for a walk-through.
+
+kubectl's own `api-resources` and `api-versions` still run through tug as
+[kubectl commands](/docs/concepts/kubectl).
+
+## tug api resources
+
+Search the resource types the cluster serves, with their group, every version
+that serves them (the preferred one first), scope, kind, short names and
+categories; `-o json` or `-o yaml` adds their verbs. A query matches names,
+short names, kinds, groups and categories, ignoring case: exact matches come
+first, then those that start with it, then those that contain it. Discovery is
+read afresh, so a CRD installed a moment ago shows up.
+
+```bash
+tug api resources [query] [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--group <group>` | Only this API group; `core` for the core group. |
+| `--verb <verb>` | Only resource types that support this verb, such as `list`. Repeatable. |
+| `--scope namespaced\|cluster` | Only namespaced or cluster-scoped resource types. |
+| `-o`, `--output` | `table`, `json`, `yaml` or `name` (`deployments.apps`, one a line). |
+
+```bash
+tug api resources cert
+tug api resources --group core --verb list
+tug api resources --scope cluster -o name
+```
+
+## tug api versions
+
+List every API group-version the cluster serves, as `kubectl api-versions`
+does, with which version of each group clients use by default, how many
+resource types it serves, and the upstream release that stops serving it.
+
+```bash
+tug api versions [-o table|json|yaml|name]
+```
+
+## tug api deprecations
+
+List the API versions the cluster still serves that upstream Kubernetes stops
+serving in some release, with what to use instead, and the custom resource
+versions their definitions mark deprecated or that objects may still be stored
+at in etcd because they were never migrated to the storage version.
+
+`OBJECTS` counts the objects last written at each version, by their
+`managedFields` or kubectl's last-applied annotation: the manifests and
+clients still to update. It reads objects' metadata only.
+
+```bash
+tug api deprecations [-o table|json|yaml]
+```
+
+```console
+$ tug api deprecations
+API VERSION           KIND                      REMOVED IN   USE INSTEAD                   OBJECTS   NOTE
+autoscaling/v2beta2   HorizontalPodAutoscaler   1.26         autoscaling/v2 (since 1.23)   1
+example.com/v1beta1   Widget                    -            example.com/v1                2         deprecated by its definition; objects may still be stored at it
+policy/v1beta1        PodDisruptionBudget       1.25         policy/v1 (since 1.21)        0
+policy/v1beta1        PodSecurityPolicy         1.25         -                             0         no replacement API; use Pod Security Admission or an admission webhook
+```
+
+## tug api server-version
+
+Show the cluster's Kubernetes version and where its minor release is in the
+upstream support window: supported, in maintenance (its last two months,
+critical fixes only) or past its end of life, how many releases it is behind
+the newest, and what to upgrade to.
+
+```bash
+tug api server-version [-o table|json|yaml]
+```
+
+```console
+$ tug api server-version --cluster-selector env=prod
+payments-eu | v1.34.12-eks-a1b2c3: end of life since 2026-10-27; upgrade to 1.35 or later; 3 releases behind 1.37
+payments-us | v1.36.5: supported upstream until 2027-06-28; 1 release behind 1.37
+```
+
+## tug api diff
+
+Compare what two catalog clusters serve: each resource type that one serves
+and the other does not, that they serve at different versions, or whose custom
+resource definition stores objects at a different version. Clusters are named
+as for `tug connect`, and need no session.
+
+```bash
+tug api diff <clusterA> <clusterB> [-o table|json|yaml]
+```
+
+```console
+$ tug api diff payments-staging payments-prod
+payments-staging runs v1.35.1, payments-prod runs v1.34.12
+
+RESOURCE                       KIND          PAYMENTS-STAGING   PAYMENTS-PROD
+certificates.cert-manager.io   Certificate   v1 (stores v1)     -
+widgets.example.com            Widget        v1 (stores v1)     v1,v1beta1 (stores v1beta1)
+```
+
+## tug crd explain
+
+Show a custom resource definition: its kind and names, scope, conversion
+strategy and webhook, stored versions (with a warning when objects may still
+be stored at an old one), conditions, each version and whether it is served,
+stored or deprecated, and the printer columns of the version clients use.
+
+Name the CRD as kubectl names its resource, by kind, plural, singular or short
+name, with a group to be precise, or by the definition's own name. A fuzzy
+name works too, and a picker opens on ties.
+
+```bash
+tug crd explain <crd> [-o table|json|yaml]
+```
+
+```bash
+tug crd explain certificate
+tug crd explain kustomizations.kustomize.toolkit.fluxcd.io -o yaml
+```
+
+## tug crd schema
+
+Show a custom resource's schema from its definition's `openAPIV3Schema`, one
+field a line, indented under its parent, with its type, whether it is required
+and the first sentence of its description. Fields of a list's items and of a
+map's values are shown under the list or map.
+
+```bash
+tug crd schema <crd> [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--field <path>` | Only this field, in full (its whole description, allowed values and default), and what is below it, such as `spec.issuerRef`. |
+| `--version <version>` | The version's schema to show. Default: the version clients use. |
+| `--depth <n>` | How many levels of fields to show. Default: all. |
+| `-o`, `--output` | `table`, `json` or `yaml`; the structured forms list each field with its full path. |
+
+```bash
+tug crd schema certificate
+tug crd schema certificate --field spec.issuerRef
+tug crd schema widgets.example.com --version v1beta1 --depth 2
+```
