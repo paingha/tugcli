@@ -40,6 +40,7 @@ tug logs api -f                 # deploy/api-server: every pod, coloured prefixe
 tug sh api                      # shell into a pod (bash, else sh; a debug container for distroless images)
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
+tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -326,9 +327,8 @@ make lint      # golangci-lint
 make e2e-kind  # build, create a kind cluster, run scripts/e2e-kind.sh
 ```
 
-CI runs the tests on Linux and Windows. macOS is not in CI to save Actions
-minutes, so run `make test` on a Mac before pushing changes that touch
-platform-specific code (keychain, sessions, process handling).
+CI runs the tests on Linux, macOS and Windows, and the end-to-end kind test
+on Linux.
 
 Tests never touch your keychain: they set `TUG_HOME` to a temporary directory
 and use the encrypted file store (`TUG_KEYRING_BACKEND=file`,

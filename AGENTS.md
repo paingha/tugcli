@@ -26,8 +26,9 @@ which package holds each piece.
 Before calling a change done, run `make lint test`. If golangci-lint is not
 installed, run `go vet ./...` and `make test`, and say that lint was not run.
 After changing imports or go.mod, run `go mod tidy`; CI fails when it would
-change anything. CI runs on Linux and Windows only, so run `make test` on a Mac
-for changes to platform-specific code (keychain, sessions, process handling).
+change anything. CI runs the tests on Linux, macOS and Windows, so
+platform-specific code (keychain, sessions, process handling) is checked on
+all three.
 
 ## Layout and boundaries
 

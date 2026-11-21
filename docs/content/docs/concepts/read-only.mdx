@@ -79,6 +79,12 @@ prod-eu is read-only. Run `kubectl delete pod debug` anyway? [y/N]
 
 Commands with `--dry-run` only read, so they run without asking.
 
+Running a command in a container counts as a change even though Kubernetes
+sends it as a read: `exec` and `attach` on a pod, and the same through a node's
+kubelet (`nodes/<name>/proxy/exec/...`, `run`, `attach` and `checkpoint`). So
+does a request whose path has empty, `.` or `..` parts, which no Kubernetes
+client sends.
+
 **Without a terminal** (in a script or CI job) there is nobody to ask, so tug
 refuses. Scripts that need to change a read-only cluster should
 `tug unlock` first, on purpose.

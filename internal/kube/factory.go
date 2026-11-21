@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -103,8 +104,7 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 	case len(r.CertPEM) > 0:
 		cfg.CertData, cfg.KeyData = r.CertPEM, r.KeyPEM
 	default:
-		ts := &brokerTokenSource{broker: f.Broker, clusterID: cl.ID, first: r}
-		cfg.Wrap(transport.TokenSourceWrapTransport(ts))
+		cfg.Wrap(transport.TokenSourceWrapTransport(newBrokerTokenSource(f.Broker, cl.ID, r)))
 	}
 	f.wrapGuard(cfg)
 	return cfg, nil
@@ -139,6 +139,13 @@ func (f *Factory) Discovery(ctx context.Context) (discovery.CachedDiscoveryInter
 	if err != nil {
 		return nil, err
 	}
+	return f.DiscoveryFor(cfg)
+}
+
+// DiscoveryFor returns a discovery client cached on disk per cluster that
+// uses a config RESTConfig already returned, so that the credential is not
+// resolved a second time.
+func (f *Factory) DiscoveryFor(cfg *rest.Config) (discovery.CachedDiscoveryInterface, error) {
 	dir := filepath.Join(f.CacheDir, "discovery", safeName(f.Cluster.ID))
 	return disk.NewCachedDiscoveryClientForConfig(cfg, dir, filepath.Join(f.CacheDir, "http"), discoveryTTL)
 }
@@ -181,20 +188,27 @@ func execProvider(r *credentials.Resolved) *clientcmdapi.ExecConfig {
 	return ec
 }
 
-// brokerTokenSource hands client-go tokens from the broker, refreshing them
-// when they expire. client-go wraps it in a caching source that serialises
-// calls to Token.
+// brokerTokenSource hands client-go tokens from the broker, which refreshes
+// them when they expire. client-go calls Token for every request and does
+// not serialise the calls, so concurrent requests call it at once.
 type brokerTokenSource struct {
 	broker    *credentials.Broker
 	clusterID string
-	first     *credentials.Resolved
+	// first is the credential RESTConfig already resolved, handed to
+	// exactly one caller.
+	first atomic.Pointer[credentials.Resolved]
 }
 
 var _ oauth2.TokenSource = (*brokerTokenSource)(nil)
 
+func newBrokerTokenSource(b *credentials.Broker, clusterID string, first *credentials.Resolved) *brokerTokenSource {
+	s := &brokerTokenSource{broker: b, clusterID: clusterID}
+	s.first.Store(first)
+	return s
+}
+
 func (s *brokerTokenSource) Token() (*oauth2.Token, error) {
-	r := s.first
-	s.first = nil
+	r := s.first.Swap(nil)
 	if r == nil {
 		var err error
 		r, err = s.broker.Resolve(context.Background(), s.clusterID, false)

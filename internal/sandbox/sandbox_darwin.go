@@ -49,6 +49,18 @@ func addSystem(r *rules) {
 		}
 		r.Programs = append(r.Programs, shell)
 	}
+	// A program inside a framework, such as Homebrew's or python.org's
+	// python3 in Python.framework/Versions/3.x/bin, loads code from the
+	// rest of the framework and runs again as the app bundled in its
+	// Resources so that macOS treats it as an application.
+	for _, p := range slices.Clone(r.Programs) {
+		version, launchers := frameworkOf(p)
+		if version == "" {
+			continue
+		}
+		r.Libraries = append(r.Libraries, version)
+		r.ProgramDirs = append(r.ProgramDirs, launchers...)
+	}
 	// Programs in /usr/bin such as python3 and git are shims that run the
 	// real one from the developer tools that xcode-select chose, after
 	// caching where it is in the user's temporary directory.
@@ -64,6 +76,27 @@ func addSystem(r *rules) {
 			r.WritePrefixes = append(r.WritePrefixes, filepath.Join(tmp, "xcrun_db"))
 		}
 	}
+}
+
+// frameworkOf returns, for a program inside a framework version such as
+// .../Python.framework/Versions/3.15/bin/python3.15, the version's directory
+// and the directories of the app launchers in its Resources, such as
+// .../Versions/3.15/Resources/Python.app/Contents/MacOS. It returns "" for
+// any other program.
+func frameworkOf(program string) (version string, launchers []string) {
+	const marker = ".framework/Versions/"
+	i := strings.Index(program, marker)
+	if i < 0 {
+		return "", nil
+	}
+	rest := program[i+len(marker):]
+	v, _, ok := strings.Cut(rest, "/")
+	if !ok || v == "" {
+		return "", nil
+	}
+	version = program[:i+len(marker)+len(v)]
+	launchers, _ = filepath.Glob(filepath.Join(version, "Resources", "*.app", "Contents", "MacOS"))
+	return version, launchers
 }
 
 // developerDir returns the developer tools directory xcode-select chose.

@@ -148,6 +148,51 @@ It works for deployments, statefulsets, daemonsets, jobs and pods
 "Nothing wrong found." Use `-o json` or `-o yaml` to feed the findings to
 another tool.
 
+### Custom resources and other kinds
+
+Name any other kind as kubectl does, by its plural, singular or short name,
+with its group when two APIs share a name: `certificate/web-tls`,
+`db/orders`, `kustomization.kustomize.toolkit.fluxcd.io/apps`. For an
+operator's resource, the useful question is why its desired state hasn't
+converged, so `tug why` reads:
+
+- its status conditions. `Ready=False`, `Stalled=True` and the like are
+  errors, and so are conditions such as Cluster API's `ControlPlaneReady=False`
+  or a node's `MemoryPressure=True`;
+- whether its controller has caught up with its latest change
+  (`status.observedGeneration` behind `metadata.generation`);
+- everything it owns, found through ownerReferences, with the usual diagnosis
+  for each workload it owns and the conditions of everything else;
+- recent warning events about all of it.
+
+```console
+$ tug why db/orders
+database/orders in shop is not ready: BackupFailing: the latest backup failed (owns 2, 1 not ready)
+
+CONDITION   STATUS   REASON          SINCE
+Ready       False    BackupFailing   10m
+
+error    database/orders: BackupFailing
+         Ready is False: the latest backup failed
+         next: see its status and events:
+               tug describe databases.db.example.com/orders -n shop
+
+error    backup/orders-nightly: UploadFailed
+         Ready is False: bucket "orders-backups" not found
+         next: see why:
+               tug why backups.db.example.com/orders-nightly -n shop
+
+Recent warning events:
+LAST SEEN   OBJECT            REASON         MESSAGE
+2m (x3)     database/orders   BackupFailed   backup orders-nightly failed
+```
+
+A cronjob is judged by its newest job, so an old failure kept in its history
+doesn't count against it. A cluster-scoped resource, such as a Crossplane
+composite, is searched across the whole cluster for what it owns, which can
+take a few seconds on a large one. When tug may not list a resource, it says
+which, since anything of that kind would be missing.
+
 ## What is it made of?
 
 `tug tree` shows a workload and everything around it, with the health of each
@@ -171,6 +216,17 @@ deploy/checkout                  ✓ 2/2 ready
 
 `✓` is ready, `✗` is not, and `?` means tug can't tell. Secrets show only their
 key names, never their values.
+
+Any other kind shows everything it owns, each with the health its status
+conditions give it, and each workload it owns as above. `·` marks an object
+that reports no health of its own, such as a Secret, which tug never reads:
+
+```console
+$ tug tree db/orders
+database/orders                ✗ BackupFailing: the latest backup failed
+├── backup/orders-nightly      ✗ UploadFailed: bucket "orders-backups" not found
+└── secret/orders-credentials  ·
+```
 
 ## Restart, scale and roll back
 

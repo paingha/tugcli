@@ -66,6 +66,9 @@ func (a *app) resolveTarget(ctx context.Context, env *opsEnv, arg string) (resol
 	if err != nil {
 		return resolve.Target{}, err
 	}
+	if err := q.RequireWorkload(); err != nil {
+		return resolve.Target{}, err
+	}
 	candidates, err := resolve.Workloads(ctx, env.cs, env.namespace, q.Kind)
 	if err != nil {
 		return resolve.Target{}, fmt.Errorf("listing workloads in %s: %w", env.namespace, err)

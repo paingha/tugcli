@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -24,17 +25,28 @@ func newWhyCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:         "why <target>",
 		Annotations: acrossClusters(acrossInProcess),
-		Short:       "Explain why a workload or pod is not ready, and what to do next",
+		Short:       "Explain why a workload, pod or any other object is not ready, and what to do next",
 		Long: `Explain why a deployment, statefulset, daemonset, job or pod is not ready: its
 rollout; its pods' phases and conditions; containers that crash (with the last
 exit code), cannot pull their image, run out of memory or miss a ConfigMap or
 Secret; failing readiness and liveness probes; pods no node can take, and why;
 volume claims stuck in Pending; and recent Warning events. Each finding has a
-severity and a next step. why only reads. It exits 1 when the workload is not
-healthy, as doctor does when a check fails, so scripts can wait on it.`,
+severity and a next step.
+
+Any other kind works too, named as kubectl names it: a custom resource such as
+certificate/web-tls or kustomization.kustomize.toolkit.fluxcd.io/apps, a
+cronjob or a node. why reads its status conditions, checks that its controller
+has caught up with its latest change, and looks at everything it owns through
+ownerReferences, with the diagnosis above for each workload it owns, and at
+recent Warning events about all of it.
+
+why only reads, and never reads a Secret's data. It exits 1 when the target is
+not healthy, as doctor does when a check fails, so scripts can wait on it.`,
 		Example: `  tug why api
   tug why sts/db -n data
-  tug why job/migrate -o json`,
+  tug why job/migrate -o json
+  tug why certificate/web-tls          # a custom resource and what it owns
+  tug why cronjob/nightly-backup       # judged by its newest job`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := render.ParseFormat(o.output)
@@ -49,11 +61,15 @@ healthy, as doctor does when a check fails, so scripts can wait on it.`,
 			if err != nil {
 				return err
 			}
-			t, err := a.resolveTarget(ctx, env, args[0])
+			clients, mapper, err := a.objectClients(env)
 			if err != nil {
 				return err
 			}
-			d, err := ops.Why(ctx, env.cs, t, ops.WhyOptions{
+			o, err := a.resolveObject(ctx, env, clients, mapper, args[0])
+			if err != nil {
+				return err
+			}
+			d, err := ops.WhyObject(ctx, clients, o, ops.WhyOptions{
 				Now:               a.now,
 				ExplicitNamespace: env.namespace != env.session.State.Namespace,
 			})
@@ -83,7 +99,26 @@ func (a *app) printWhy(d *ops.Diagnosis) error {
 	if d.Healthy {
 		state = c.Green("healthy")
 	}
-	fmt.Fprintf(w, "%s in %s is %s: %s\n", c.Bold(d.Target), d.Namespace, state, d.Summary)
+	where := ""
+	if d.Namespace != "" {
+		where = " in " + d.Namespace
+	}
+	fmt.Fprintf(w, "%s%s is %s: %s\n", c.Bold(d.Target), where, state, d.Summary)
+
+	if len(d.Conditions) > 0 {
+		fmt.Fprintln(w)
+		rows := make([][]string, 0, len(d.Conditions))
+		for _, cond := range d.Conditions {
+			since := "-"
+			if !cond.LastTransition.IsZero() {
+				since = duration.HumanDuration(a.now().Sub(cond.LastTransition))
+			}
+			rows = append(rows, []string{cond.Type, cond.Status, cmp.Or(cond.Reason, "-"), since})
+		}
+		if err := render.Table(w, []string{"CONDITION", "STATUS", "REASON", "SINCE"}, rows); err != nil {
+			return err
+		}
+	}
 
 	if len(d.Pods) > 0 {
 		fmt.Fprintln(w)

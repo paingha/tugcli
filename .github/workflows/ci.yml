@@ -26,9 +26,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is tested locally (make test) to save Actions minutes, which
-        # private repositories pay 10x for on macOS runners.
-        os: [ubuntu-latest, windows-latest]
+        # macOS covers the keychain, session and process code that differs
+        # from Linux; runners are free now that the repository is public.
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5

@@ -29,6 +29,26 @@ func TestIsRead(t *testing.T) {
 		{"DELETE", "/api/v1/namespaces/default/pods/api-0", false},
 		{"PATCH", "/apis/apps/v1/namespaces/default/deployments/api/scale", false},
 		{"POST", "/api/v1/namespaces", false},
+
+		// The kubelet's exec and attach are WebSocket GETs through the API
+		// server's node proxy; they run code, so they are writes.
+		{"GET", "/api/v1/nodes/n1/proxy/exec/default/api-0/app?command=sh&input=1", false},
+		{"GET", "/api/v1/nodes/n1:10250/proxy/attach/default/api-0/app", false},
+		{"GET", "/api/v1/nodes/n1/proxy/Exec/default/api-0/app", false},
+		{"POST", "/api/v1/nodes/n1/proxy/run/default/api-0/app", false},
+		{"POST", "/api/v1/nodes/n1/proxy/checkpoint/default/api-0/app", false},
+		{"GET", "/api/v1/nodes/n1/proxy/stats/summary", true},
+		{"GET", "/api/v1/nodes/n1/proxy/containerLogs/default/api-0/app", true},
+		{"GET", "/api/v1/nodes/n1", true},
+
+		// Paths a client would not send are not reads, whatever the
+		// server would make of them.
+		{"GET", "/api/v1/namespaces/default/pods/api-0/exec//", false},
+		{"GET", "/api/v1/namespaces/default/pods/api-0/exec/.", false},
+		{"GET", "/api/v1/namespaces/default/pods/api-0/exec/../log", false},
+		{"GET", "/api/v1/nodes/n1/proxy//exec/default/api-0/app", false},
+		{"GET", "/", true},
+		{"GET", "/api/", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.url, func(t *testing.T) {
