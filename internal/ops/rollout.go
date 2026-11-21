@@ -22,9 +22,33 @@ const (
 	podTemplateHashLabel  = "pod-template-hash"
 )
 
+// CheckRestart returns the error Restart gives for a target it cannot
+// restart, so a caller can say so before asking anything.
+func CheckRestart(t resolve.Target) error {
+	switch t.Kind {
+	case resolve.KindDeployment, resolve.KindStatefulSet, resolve.KindDaemonSet:
+		return nil
+	default:
+		return fmt.Errorf("cannot restart %s; restart its deployment, statefulset or daemonset", t)
+	}
+}
+
+// CheckScale returns the error Scale gives for a target it cannot scale.
+func CheckScale(t resolve.Target) error {
+	switch t.Kind {
+	case resolve.KindDeployment, resolve.KindStatefulSet:
+		return nil
+	default:
+		return fmt.Errorf("cannot scale %s; only deployments and statefulsets scale", t)
+	}
+}
+
 // Restart triggers a rolling restart, as `kubectl rollout restart` does, by
 // stamping the pod template.
 func Restart(ctx context.Context, cs kubernetes.Interface, t resolve.Target, now time.Time) error {
+	if err := CheckRestart(t); err != nil {
+		return err
+	}
 	patch, err := json.Marshal(map[string]any{
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartedAtAnnotation: now.UTC().Format(time.RFC3339)},
@@ -41,14 +65,15 @@ func Restart(ctx context.Context, cs kubernetes.Interface, t resolve.Target, now
 		_, err = cs.AppsV1().StatefulSets(t.Namespace).Patch(ctx, t.Name, types.StrategicMergePatchType, patch, opts)
 	case resolve.KindDaemonSet:
 		_, err = cs.AppsV1().DaemonSets(t.Namespace).Patch(ctx, t.Name, types.StrategicMergePatchType, patch, opts)
-	default:
-		return fmt.Errorf("cannot restart %s; restart its deployment, statefulset or daemonset", t)
 	}
 	return err
 }
 
 // Scale sets the replica count of a deployment or statefulset.
 func Scale(ctx context.Context, cs kubernetes.Interface, t resolve.Target, replicas int32) error {
+	if err := CheckScale(t); err != nil {
+		return err
+	}
 	if replicas < 0 {
 		return fmt.Errorf("replicas must be zero or more, got %d", replicas)
 	}
@@ -60,8 +85,6 @@ func Scale(ctx context.Context, cs kubernetes.Interface, t resolve.Target, repli
 		_, err = cs.AppsV1().Deployments(t.Namespace).Patch(ctx, t.Name, types.MergePatchType, patch, opts)
 	case resolve.KindStatefulSet:
 		_, err = cs.AppsV1().StatefulSets(t.Namespace).Patch(ctx, t.Name, types.MergePatchType, patch, opts)
-	default:
-		return fmt.Errorf("cannot scale %s; only deployments and statefulsets scale", t)
 	}
 	return err
 }

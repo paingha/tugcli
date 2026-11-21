@@ -1,0 +1,156 @@
+name: Publish Python SDK
+
+# Publishes sdk/python to PyPI as tug-provider when a tag such as
+# sdk/python/v0.1.0 is pushed, and attaches the built files to a GitHub
+# release for the tag. PyPI trusts this workflow through OpenID Connect
+# (trusted publishing), so no token is stored; sdk/python/README.md says what
+# to configure on PyPI and GitHub first.
+on:
+  push:
+    tags: ["sdk/python/v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-python-sdk
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.x"
+      - name: Check the tag against the package version
+        id: version
+        working-directory: sdk/python
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The version pyproject.toml declares: its own, or the attribute it
+          # names as the dynamic version (tug_provider.__version__).
+          version=$(python - <<'EOF'
+          import ast, pathlib, tomllib
+          config = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          if "version" in config["project"]:
+              print(config["project"]["version"])
+          else:
+              module, _, name = config["tool"]["setuptools"]["dynamic"]["version"]["attr"].rpartition(".")
+              base = pathlib.Path(*module.split("."))
+              source = base / "__init__.py" if base.is_dir() else base.with_suffix(".py")
+              for node in ast.parse(source.read_text()).body:
+                  if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == name for t in node.targets):
+                      print(ast.literal_eval(node.value))
+          EOF
+          )
+          if [ -z "$version" ]; then
+            echo "::error::pyproject.toml gives no version"
+            exit 1
+          fi
+          if [ "$TAG" != "sdk/python/v$version" ]; then
+            echo "::error::tag $TAG does not match version $version in pyproject.toml; tag sdk/python/v$version instead"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Python the SDK supports and the newest. The runner is
+        # pinned because Python 3.9 has no build for later Ubuntu releases.
+        python: ["3.9", "3.x"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: make python-sdk-test PYTHON=python
+
+  build:
+    needs: [check, test]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.x"
+      - name: Build the sdist and wheel
+        working-directory: sdk/python
+        run: |
+          python -m pip install build==1.6.1
+          python -m build
+      - name: Check the built files
+        working-directory: sdk/python
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          ls -l dist
+          shopt -s nullglob
+          sdists=(dist/*-"$VERSION".tar.gz)
+          wheels=(dist/*-"$VERSION"-py3-none-any.whl)
+          if [ "${#sdists[@]}" -ne 1 ] || [ "${#wheels[@]}" -ne 1 ] || [ "$(find dist -type f | wc -l)" -ne 2 ]; then
+            echo "::error::dist should hold one sdist and one pure-Python wheel of version $VERSION"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: sdk/python/dist/
+          if-no-files-found: error
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/tug-provider/${{ needs.check.outputs.version }}/
+    permissions:
+      id-token: write # trusted publishing: PyPI accepts this job's OIDC token
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  release:
+    needs: [check, publish]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          # Not marked latest, so that tug's own releases stay the latest.
+          flags=(--latest=false)
+          case "$VERSION" in
+            *a[0-9]* | *b[0-9]* | *rc[0-9]* | *.dev[0-9]*) flags+=(--prerelease) ;;
+          esac
+          gh release create "$TAG" dist/* "${flags[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "tug-provider $VERSION (Python SDK)" \
+            --notes "The Python SDK for tug provider plugins, on PyPI as [tug-provider $VERSION](https://pypi.org/project/tug-provider/$VERSION/): \`python3 -m pip install tug-provider==$VERSION\`. The files below are the sdist and wheel published there."

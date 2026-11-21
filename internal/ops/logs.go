@@ -1,7 +1,7 @@
-// Package ops does the work behind tug's daily commands: logs, exec and
-// debug containers, port-forward, rollouts, and explaining a workload: why
-// it is not ready and what it is made of. It has no presentation, so the CLI
-// and a later TUI share it.
+// Package ops does the work behind tug's daily commands: listing workloads
+// with their state, logs, exec and debug containers, port-forward, rollouts,
+// and explaining a workload: why it is not ready and what it is made of. It
+// has no presentation, so the CLI and the TUI share it.
 package ops
 
 import (

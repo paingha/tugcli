@@ -169,10 +169,11 @@ func (a *app) doctorCluster(cfg *doctor.Config, cat *catalog.Catalog, cl *catalo
 		Tunnels:   a.tunnels(),
 	}
 	cfg.RESTConfig = f.RESTConfig
-	if cl.Tunnel != "" {
-		cfg.Tunnel = tunnel.Redacted(cl.Tunnel)
+	if tun := cl.EffectiveTunnel(); tun != "" {
+		cfg.Tunnel = tunnel.Redacted(tun)
+		cfg.TunnelEndpoint = tunnel.ReplacesEndpoint(tun)
 		cfg.Dial = func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return a.tunnels().Dial(ctx, cl.Tunnel, addr)
+			return a.tunnels().Dial(ctx, tun, addr)
 		}
 	}
 

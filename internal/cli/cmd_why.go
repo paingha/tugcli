@@ -22,14 +22,16 @@ type whyOptions struct {
 func newWhyCmd(a *app) *cobra.Command {
 	var o whyOptions
 	cmd := &cobra.Command{
-		Use:   "why <target>",
-		Short: "Explain why a workload or pod is not ready, and what to do next",
+		Use:         "why <target>",
+		Annotations: acrossClusters(acrossInProcess),
+		Short:       "Explain why a workload or pod is not ready, and what to do next",
 		Long: `Explain why a deployment, statefulset, daemonset, job or pod is not ready: its
 rollout; its pods' phases and conditions; containers that crash (with the last
 exit code), cannot pull their image, run out of memory or miss a ConfigMap or
 Secret; failing readiness and liveness probes; pods no node can take, and why;
 volume claims stuck in Pending; and recent Warning events. Each finding has a
-severity and a next step. why only reads.`,
+severity and a next step. why only reads. It exits 1 when the workload is not
+healthy, as doctor does when a check fails, so scripts can wait on it.`,
 		Example: `  tug why api
   tug why sts/db -n data
   tug why job/migrate -o json`,
@@ -59,9 +61,14 @@ severity and a next step. why only reads.`,
 				return err
 			}
 			if format != render.FormatTable {
-				return render.Structured(a.stdout, format, d)
+				err = render.Structured(a.stdout, format, d)
+			} else {
+				err = a.printWhy(d)
 			}
-			return a.printWhy(d)
+			if err == nil && !d.Healthy {
+				return &exitError{code: 1}
+			}
+			return err
 		},
 	}
 	cmd.Flags().StringVarP(&o.namespace, "namespace", "n", "", "namespace (default: the session's)")

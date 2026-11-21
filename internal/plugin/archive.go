@@ -95,7 +95,11 @@ func Package(dir, outDir string) (*PackageResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := addTarFile(tw, p.Bin, data, 0o755); err != nil {
+		mode := int64(0o755)
+		if p.IsWASM() {
+			mode = 0o644 // tug reads a module; nothing executes the file
+		}
+		if err := addTarFile(tw, p.Bin, data, mode); err != nil {
 			return nil, err
 		}
 	}
@@ -228,7 +232,7 @@ func (d Dirs) Stage(archive, wantSHA256 string) (*Staged, error) {
 		s.Discard()
 		return nil, err
 	}
-	p, err := Load(root, false)
+	p, err := d.load(root, false)
 	if err == nil {
 		err = p.Manifest.CheckTugVersion(d.TugVersion)
 	}
@@ -260,7 +264,7 @@ func (d Dirs) Commit(s *Staged, force bool) (*Plugin, error) {
 	if err := os.Rename(s.Plugin.Dir, dest); err != nil {
 		return nil, err
 	}
-	return Load(dest, false)
+	return d.load(dest, false)
 }
 
 // Remove deletes every installed version of a plugin and returns them.

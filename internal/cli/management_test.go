@@ -39,21 +39,25 @@ var argoClusterSecret, _ = json.Marshal(map[string]any{
 })
 
 // memberProfile is a ClusterProfile on a cluster inventory hub, offering
-// one access provider.
+// one access provider. Its exec extension names the cluster, as the
+// cluster inventory's secretreader plugin expects.
 const memberProfile = `{"apiVersion":"multicluster.x-k8s.io/v1alpha2","kind":"ClusterProfile",
 	"metadata":{"name":"member-1","namespace":"fleet","labels":{"env":"dev"}},
 	"spec":{"displayName":"member-1","clusterManager":{"name":"fleet-manager"}},
 	"status":{"version":{"kubernetes":"v1.34.1"},"accessProviders":[
-		{"name":"token-plugin","cluster":{"server":"https://member-1.example.com"}}]}}`
+		{"name":"token-plugin","cluster":{"server":"https://member-1.example.com","extensions":[
+			{"name":"client.authentication.k8s.io/exec","extension":{"clusterName":"member-1"}}]}}]}}`
 
 // writeProvidersFile writes a ClusterProfile providers file that maps the
-// token-plugin access provider to command.
+// token-plugin access provider to command, which asks for cluster
+// information.
 func writeProvidersFile(t *testing.T, command string) string {
 	t.Helper()
 	b, err := json.Marshal(map[string]any{"providers": []any{map[string]any{
 		"name": "token-plugin",
 		"execConfig": map[string]any{
 			"apiVersion": "client.authentication.k8s.io/v1", "command": command, "interactiveMode": "Never",
+			"provideClusterInfo": true,
 		},
 	}}})
 	if err != nil {
@@ -179,7 +183,16 @@ func TestImportFromManagementCluster(t *testing.T) {
 	plugin := "tug-test-token-plugin"
 	if runtime.GOOS != "windows" {
 		plugin = filepath.Join(t.TempDir(), "token-plugin")
-		script := "#!/bin/sh\necho '{\"apiVersion\":\"client.authentication.k8s.io/v1\",\"kind\":\"ExecCredential\",\"status\":{\"token\":\"from-the-plugin\"}}'\n"
+		// Like the secretreader plugin, it answers only when it is told
+		// which cluster it is for.
+		script := `#!/bin/sh
+case "$KUBERNETES_EXEC_INFO" in
+*'"server":"https://member-1.example.com"'*'"config":{"clusterName":"member-1"}'*)
+	echo '{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","status":{"token":"from-the-plugin"}}' ;;
+*)
+	echo "no cluster information in KUBERNETES_EXEC_INFO: $KUBERNETES_EXEC_INFO" >&2; exit 1 ;;
+esac
+`
 		if err := os.WriteFile(plugin, []byte(script), 0o700); err != nil {
 			t.Fatal(err)
 		}

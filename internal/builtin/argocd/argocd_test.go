@@ -149,7 +149,9 @@ func newFake(t *testing.T, namespace string) (*fakeAPI, *Provider) {
 		}, nil),
 		clusterSecret("cluster-gke", "https://34.1.2.3", map[string]any{
 			"execProviderConfig": map[string]any{"command": "argocd-k8s-auth", "args": []string{"gcp"}, "env": map[string]string{"GOOGLE_PROJECT": "acme"},
-				"apiVersion": "client.authentication.k8s.io/v1beta1", "installHint": "install argocd-k8s-auth"},
+				"apiVersion": "client.authentication.k8s.io/v1beta1", "installHint": "install argocd-k8s-auth",
+				// Without provideClusterInfo, client-go would not pass it.
+				"config": map[string]any{"clusterName": "gke"}},
 		}, map[string]string{"namespaces": "a,b"}),
 		clusterSecret("cluster-cert", "https://cert.example.com:6443", map[string]any{
 			"tlsClientConfig": map[string]any{"insecure": true, "certData": certPEM, "keyData": keyPEM},
@@ -157,7 +159,7 @@ func newFake(t *testing.T, namespace string) (*fakeAPI, *Provider) {
 		}, nil),
 		clusterSecret("cluster-basic", "https://basic.example.com", map[string]any{"username": "admin", "password": "hunter2"}, nil),
 		clusterSecret("cluster-info", "https://info.example.com", map[string]any{
-			"execProviderConfig": map[string]any{"command": "plugin", "provideClusterInfo": true},
+			"execProviderConfig": map[string]any{"command": "plugin", "provideClusterInfo": true, "config": map[string]any{"clusterName": "info"}},
 		}, nil),
 		clusterSecret("in-cluster", "https://kubernetes.default.svc", map[string]any{}, map[string]string{"name": "in-cluster"}),
 		clusterSecret("no-server", "", map[string]any{}, nil),
@@ -213,7 +215,7 @@ func TestList(t *testing.T) {
 		t.Fatalf("cluster-cert = %+v", cert)
 	}
 	if byID["cluster-basic"].Credential != nil || byID["cluster-info"].Credential != nil {
-		t.Fatal("clusters with unsupported credentials carry one inline")
+		t.Fatal("clusters with unsupported credentials, or commands the account does not allow, carry one inline")
 	}
 }
 
@@ -265,8 +267,21 @@ func TestCredential(t *testing.T) {
 	trusting.Config[ConfigAllowExec] = "true"
 	c, err = p.Credential(context.Background(), provider.CredentialRequest{Account: trusting, ClusterID: "cluster-gke"})
 	if err != nil || c.Type != provider.CredentialDelegate || c.Exec.Command != "argocd-k8s-auth" || !slices.Equal(c.Exec.Args, []string{"gcp"}) ||
-		c.Exec.Env["GOOGLE_PROJECT"] != "acme" || c.Exec.InstallHint != "install argocd-k8s-auth" {
-		t.Fatalf("Credential(cluster-gke) = %+v, %v", c, err)
+		c.Exec.Env["GOOGLE_PROJECT"] != "acme" || c.Exec.InstallHint != "install argocd-k8s-auth" || c.Exec.ProvideClusterInfo || c.Exec.ClusterConfig != nil {
+		t.Fatalf("Credential(cluster-gke) = %+v, %v; want no cluster information", c, err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	// provideClusterInfo is passed on, with the config, so tug tells the
+	// command about the cluster.
+	c, err = p.Credential(context.Background(), provider.CredentialRequest{Account: trusting, ClusterID: "cluster-info"})
+	if err != nil || c.Type != provider.CredentialDelegate || c.Exec.Command != "plugin" || !c.Exec.ProvideClusterInfo ||
+		string(c.Exec.ClusterConfig) != `{"clusterName":"info"}` {
+		t.Fatalf("Credential(cluster-info) = %+v %+v, %v; want plugin with cluster information and its config", c, c.Exec, err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
 	}
 
 	c, err = get("cluster-cert")
@@ -283,7 +298,7 @@ func TestCredential(t *testing.T) {
 		msg  string
 	}{
 		{"cluster-basic", provider.Unimplemented, "basic authentication"},
-		{"cluster-info", provider.Unimplemented, "provideClusterInfo"},
+		{"cluster-info", provider.PermissionDenied, `running "plugin"`},
 		{"no-server", provider.NotFound, "no credentials"},
 		{"repo-private", provider.NotFound, "not an Argo CD cluster Secret"},
 		{"gone", provider.NotFound, "no cluster Secret argocd/gone"},

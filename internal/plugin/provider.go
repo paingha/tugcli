@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"io"
 	"slices"
 
 	"github.com/paingha/tugcli/internal/registry"
@@ -17,6 +18,9 @@ type Plugin struct {
 	// Dev is true for linked and $TUG_PLUGIN_PATH plugins, which are not
 	// checksummed.
 	Dev bool
+	// WASM is true when Bin is the plugin's WebAssembly build, which tug
+	// runs itself rather than as a process.
+	WASM bool
 }
 
 // Name is the provider name.
@@ -41,6 +45,12 @@ func (p *Provider) Close() error { return p.runner.Close() }
 // Plugin returns the plugin behind the provider.
 func (p *Provider) Plugin() *Plugin { return p.plugin }
 
+// Exec runs the plugin with these arguments and streams, as its own process
+// would; see Runner.Exec.
+func (p *Provider) Exec(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	return p.runner.Exec(ctx, args, stdin, stdout, stderr)
+}
+
 // Info comes from the manifest, so listing providers starts no processes.
 func (p *Provider) Info() provider.Info {
 	m := p.plugin.Manifest
@@ -58,7 +68,7 @@ func (p *Provider) Describe(ctx context.Context) (provider.Description, error) {
 	if err != nil {
 		return provider.Description{}, err
 	}
-	return provider.DecodeDescribe(out)
+	return decode(p, out, provider.DecodeDescribe)
 }
 
 // Accounts implements registry.Provider.
@@ -70,7 +80,7 @@ func (p *Provider) Accounts(ctx context.Context) ([]provider.Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	return provider.DecodeAccounts(out)
+	return decode(p, out, provider.DecodeAccounts)
 }
 
 // List implements registry.Provider.
@@ -80,7 +90,7 @@ func (p *Provider) List(ctx context.Context, req provider.ListRequest) ([]provid
 	if err != nil {
 		return nil, err
 	}
-	return provider.DecodeList(out)
+	return decode(p, out, provider.DecodeList)
 }
 
 // CheckAccess runs the plugin's checkAccess operation, which explains whether
@@ -94,7 +104,7 @@ func (p *Provider) CheckAccess(ctx context.Context, req provider.AccessRequest) 
 	if err != nil {
 		return nil, err
 	}
-	return provider.DecodeCheckAccess(out)
+	return decode(p, out, provider.DecodeCheckAccess)
 }
 
 // Credential implements registry.Provider.
@@ -104,7 +114,7 @@ func (p *Provider) Credential(ctx context.Context, req provider.CredentialReques
 	if err != nil {
 		return provider.Credential{}, err
 	}
-	return provider.DecodeCredential(out)
+	return decode(p, out, provider.DecodeCredential)
 }
 
 // Rotate runs the plugin's rotate operation, which replaces a cluster's
@@ -118,7 +128,7 @@ func (p *Provider) Rotate(ctx context.Context, req provider.CredentialRequest) (
 	if err != nil {
 		return provider.Credential{}, err
 	}
-	return provider.DecodeCredential(out)
+	return decode(p, out, provider.DecodeCredential)
 }
 
 func (p *Provider) call(ctx context.Context, op string, payload any) ([]byte, error) {
@@ -127,6 +137,14 @@ func (p *Provider) call(ctx context.Context, op string, payload any) ([]byte, er
 		return nil, err
 	}
 	return p.runner.Call(ctx, op, req)
+}
+
+// decode reads a plugin's response with dec. An error the plugin answered
+// with gets the sandbox hint when it reads like the sandbox refused
+// something.
+func decode[T any](p *Provider, out []byte, dec func([]byte) (T, error)) (T, error) {
+	v, err := dec(out)
+	return v, p.runner.explain(err)
 }
 
 // declared drops any secret the manifest does not declare, so a plugin only

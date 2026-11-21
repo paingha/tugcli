@@ -3,12 +3,14 @@
 package passthrough
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 )
 
 // kubectl global flags that take a separate value.
@@ -83,11 +85,20 @@ func isDryRun(args []string) bool {
 	return false
 }
 
-// Command returns the kubectl command to run with the session's kubeconfig.
-func Command(kubectl string, args []string, kubeconfig string) (*exec.Cmd, error) {
+// LookPath finds kubectl, or says how to make it available.
+func LookPath(kubectl string) (string, error) {
 	path, err := exec.LookPath(kubectl)
 	if err != nil {
-		return nil, fmt.Errorf("kubectl not found (%w); install it or set kubectl in config.yaml", err)
+		return "", fmt.Errorf("kubectl not found (%w); install it or set kubectl in config.yaml", err)
+	}
+	return path, nil
+}
+
+// Command returns the kubectl command to run with the session's kubeconfig.
+func Command(kubectl string, args []string, kubeconfig string) (*exec.Cmd, error) {
+	path, err := LookPath(kubectl)
+	if err != nil {
+		return nil, err
 	}
 	cmd := exec.Command(path, args...)
 	cmd.Env = os.Environ()
@@ -95,6 +106,32 @@ func Command(kubectl string, args []string, kubeconfig string) (*exec.Cmd, error
 		cmd.Env = append(cmd.Env, "KUBECONFIG="+kubeconfig)
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return cmd, nil
+}
+
+// stopGrace is how long kubectl has to stop after it is interrupted before
+// it is killed.
+const stopGrace = 5 * time.Second
+
+// CommandContext returns kubectl with a kubeconfig for a run that ends with
+// ctx: cancelling ctx interrupts kubectl, as Ctrl-C would, and kills it if it
+// has not stopped within a few seconds. It has no stdin, and the caller sets
+// its stdout and stderr.
+func CommandContext(ctx context.Context, kubectl string, args []string, kubeconfig string) (*exec.Cmd, error) {
+	path, err := LookPath(kubectl)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+	cmd.Cancel = func() error {
+		// Windows cannot deliver an interrupt to another process.
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = stopGrace
 	return cmd, nil
 }
 

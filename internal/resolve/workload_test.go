@@ -147,6 +147,29 @@ func TestPodsReadyFirstThenNewest(t *testing.T) {
 	}
 }
 
+func TestRunningPod(t *testing.T) {
+	ctx := context.Background()
+	pending := pod("worker-5c6d-aaaaa", "worker", "ReplicaSet", false, time.Minute)
+	pending.Status.Phase = corev1.PodPending
+	cs := fake.NewSimpleClientset(append(objects(), pending)...)
+	all, _ := Workloads(ctx, cs, "web", "")
+	byName := map[string]Target{}
+	for _, t := range all {
+		byName[t.String()] = t
+	}
+
+	p, err := RunningPod(ctx, cs, byName["deploy/api-server"])
+	if err != nil || p.Name != "api-server-7d9f-ccccc" {
+		t.Errorf("RunningPod(deploy/api-server) = %v, %v, want the newest ready pod", p, err)
+	}
+	if _, err := RunningPod(ctx, cs, byName["deploy/worker"]); err == nil || err.Error() != "deploy/worker has no running pod (first is worker-5c6d-aaaaa, Pending)" {
+		t.Errorf("RunningPod(deploy/worker) error = %v, want no running pod", err)
+	}
+	if _, err := RunningPod(ctx, cs, byName["sts/db"]); err == nil || err.Error() != "sts/db has no pods" {
+		t.Errorf("RunningPod(sts/db) error = %v, want no pods", err)
+	}
+}
+
 func TestParseQuery(t *testing.T) {
 	for _, bad := range []string{"", "svc/api", "deploy/"} {
 		if _, err := ParseQuery(bad); err == nil {

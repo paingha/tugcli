@@ -677,6 +677,26 @@ func TestFetcherErrors(t *testing.T) {
 	}
 }
 
+func TestClusterLookup(t *testing.T) {
+	cat := &catalog.Catalog{Clusters: []catalog.Cluster{{
+		ID: "fake/work/c-1", Name: "a", Server: "https://a.example:6443", PrivateServer: "https://10.0.0.1:6443",
+		CAData: []byte("CA"), TLSServerName: "a.internal", InsecureSkipTLSVerify: true, ProxyURL: "socks5://127.0.0.1:1080",
+		Tunnel: "ssh://bastion",
+	}}}
+	lookup := ClusterLookup(cat)
+	got, err := lookup("fake/work/c-1")
+	want := credentials.ExecCluster{
+		Server: "https://a.example:6443", CAData: []byte("CA"), TLSServerName: "a.internal",
+		InsecureSkipTLSVerify: true, ProxyURL: "socks5://127.0.0.1:1080",
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("ClusterLookup(cat)(fake/work/c-1) = %+v, %v; want %+v", got, err, want)
+	}
+	if _, err := lookup("fake/work/gone"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("ClusterLookup(cat)(fake/work/gone) error = %v, want catalog.ErrNotFound", err)
+	}
+}
+
 // rotatingProvider is a fakeProvider that can rotate credentials.
 type rotatingProvider struct {
 	*fakeProvider
@@ -785,5 +805,32 @@ func TestRotateUnsupported(t *testing.T) {
 				t.Errorf("Rotate = %v, want Unimplemented", err)
 			}
 		})
+	}
+}
+
+func TestImportKeepsOnlyUsableTunnels(t *testing.T) {
+	const password = "s3cr3t-proxy-password"
+	p := newFake("fake")
+	p.clusters = []provider.Cluster{
+		{ID: "c-1", Name: "edge", Endpoints: provider.Endpoints{Public: "https://edge"}, Tunnel: "tsh://teleport.example.com:443/root/edge"},
+		{ID: "c-2", Name: "lab", Endpoints: provider.Endpoints{Public: "https://lab"}, Tunnel: "http://user:" + password + "@proxy.example.com:3128"},
+	}
+	svc, _, _ := newService(t, p)
+	cat := &catalog.Catalog{}
+	res := svc.Import(context.Background(), cat, catalog.Source{Provider: "fake", Account: "work"})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "lab: ignoring the tunnel fake lists for it") || strings.Contains(res.Err.Error(), password) {
+		t.Fatalf("Import error = %v, want the tunnel with a password named, without the password", res.Err)
+	}
+	if res.Clusters != 2 {
+		t.Fatalf("Import counted %d clusters, want both", res.Clusters)
+	}
+	for name, want := range map[string]string{"edge": "tsh://teleport.example.com:443/root/edge", "lab": ""} {
+		cl, err := cat.Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cl.ProviderTunnel != want || cl.Tunnel != "" {
+			t.Errorf("%s tunnels = %q from the provider, %q from the user; want %q and none", name, cl.ProviderTunnel, cl.Tunnel, want)
+		}
 	}
 }

@@ -1,10 +1,22 @@
 package provider
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 )
+
+// withClusterInfo returns a delegate credential that asks for cluster
+// information, with config as its cluster config when it is not "".
+func withClusterInfo(provide bool, config string) Credential {
+	c := Delegate("cp-creds")
+	c.Exec.ProvideClusterInfo = provide
+	if config != "" {
+		c.Exec.ClusterConfig = json.RawMessage(config)
+	}
+	return c
+}
 
 func TestCredentialValidate(t *testing.T) {
 	tests := []struct {
@@ -23,6 +35,11 @@ func TestCredentialValidate(t *testing.T) {
 		{"delegate", Delegate("aws", "eks", "get-token"), ""},
 		{"delegate without exec", Credential{Type: CredentialDelegate}, "exec.command"},
 		{"delegate without command", Delegate(""), "exec.command"},
+		{"delegate with cluster info", withClusterInfo(true, ""), ""},
+		{"delegate with cluster info and config", withClusterInfo(true, `{"audience":"06e3fbd18de8"}`), ""},
+		{"delegate with a null cluster config", withClusterInfo(false, "null"), ""},
+		{"delegate with cluster config only", withClusterInfo(false, `{"audience":"06e3fbd18de8"}`), "without exec.provideClusterInfo"},
+		{"delegate with a cluster config that is not JSON", withClusterInfo(true, `{"audience"`), "not JSON"},
 		{"unknown type", Credential{Type: "password"}, `"password"`},
 		{"no type", Credential{Token: "t"}, "unknown credential type"},
 	}
@@ -74,5 +91,29 @@ func TestConstructorsNormaliseExpiry(t *testing.T) {
 	c := ClientCert([]byte("C"), []byte("K"), local)
 	if c.ExpiresAt == nil || c.ExpiresAt.Location() != time.UTC || !c.ExpiresAt.Equal(local) {
 		t.Fatalf("ClientCert expiry = %v, want %v in UTC", c.ExpiresAt, local)
+	}
+}
+
+func TestExecConfigClusterInfoOnTheWire(t *testing.T) {
+	in := withClusterInfo(true, `{"clusterName":"member-1"}`)
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"type":"delegate","exec":{"command":"cp-creds","provideClusterInfo":true,"clusterConfig":{"clusterName":"member-1"}}}`
+	if string(b) != want {
+		t.Fatalf("json.Marshal(delegate) = %s, want %s", b, want)
+	}
+	var out Credential
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.Exec.ProvideClusterInfo || string(out.Exec.ClusterConfig) != `{"clusterName":"member-1"}` {
+		t.Fatalf("json.Unmarshal(%s).Exec = %+v, want provideClusterInfo and the cluster config", b, out.Exec)
+	}
+
+	// Without the new fields the credential encodes as it always has.
+	if b, _ := json.Marshal(Delegate("aws")); string(b) != `{"type":"delegate","exec":{"command":"aws"}}` {
+		t.Fatalf("json.Marshal(Delegate(aws)) = %s, want no cluster info fields", b)
 	}
 }

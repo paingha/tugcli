@@ -12,7 +12,7 @@ import (
 	"github.com/paingha/tugcli/internal/tunnel/iap"
 )
 
-func init() { builders["iap"] = newIAP }
+func init() { builders["iap"] = dialOnly(newIAP) }
 
 // newIAP reads iap://<instance>?project=..&zone=.. or
 // iap://?project=..&region=..&network=..&group=.. and opens one IAP TCP

@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// HTTPClient returns a client for calls to a provider's API. A native plugin
+// gets http.DefaultTransport. A plugin compiled to WebAssembly (GOOS=wasip1)
+// gets a transport that sends each request through tug's host functions,
+// which allow only https to the hosts in the manifest's spec.network; the
+// SDK also installs that transport as http.DefaultTransport there, so
+// http.DefaultClient works too. Send each request with the operation's
+// context so that a cancelled or timed-out operation stops its requests.
+func HTTPClient() *http.Client { return &http.Client{Transport: platformTransport()} }
+
 // StatusError converts an HTTP error status from a provider's API into an
 // *Error with the matching code: 401 is Unauthenticated, 403
 // PermissionDenied, 404 NotFound, 429 RateLimited (with the Retry-After

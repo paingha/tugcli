@@ -60,6 +60,16 @@ func TestList(t *testing.T) {
 	}
 }
 
+func TestListWithATunnel(t *testing.T) {
+	const tunnel = "ssh://admin@bastion.example.com"
+	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://10.0.0.1:6443", "tunnel": tunnel}}
+	out, _ := call(t, provider.OpList, provider.ListRequest{Account: acct, Secrets: goodToken})
+	clusters, err := provider.DecodeList(out)
+	if err != nil || len(clusters) != 1 || clusters[0].Tunnel != tunnel {
+		t.Fatalf("list = %+v, %v; want dev reached through %s", clusters, err, tunnel)
+	}
+}
+
 func TestListErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -96,6 +106,21 @@ func TestCredential(t *testing.T) {
 	}
 	if c.Type != provider.CredentialToken || c.Token != "ex_demo" || c.ExpiresAt != nil {
 		t.Fatalf("credential = %+v, want a non-expiring token ex_demo", c)
+	}
+}
+
+func TestCredentialFromAuthCommand(t *testing.T) {
+	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": demo.Config["clusters"], "authCommand": "example-auth"}}
+	out, code := call(t, provider.OpCredential, provider.CredentialRequest{Account: acct, ClusterID: "prod", Secrets: goodToken})
+	c, err := provider.DecodeCredential(out)
+	if err != nil || code != provider.ExitOK {
+		t.Fatalf("credential = %+v, exit %d, %v", c, code, err)
+	}
+	if c.Type != provider.CredentialDelegate || c.Exec.Command != "example-auth" || !reflect.DeepEqual(c.Exec.Args, []string{"token"}) {
+		t.Fatalf("credential = %+v, want a delegate to example-auth token", c)
+	}
+	if !c.Exec.ProvideClusterInfo || string(c.Exec.ClusterConfig) != `{"cluster":"prod"}` {
+		t.Fatalf("credential exec = %+v, want cluster information with the cluster config {\"cluster\":\"prod\"}", c.Exec)
 	}
 }
 

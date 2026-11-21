@@ -319,6 +319,25 @@ func TestHTTPEndpointUsesPort80(t *testing.T) {
 	}
 }
 
+func TestTunnelWithItsOwnEndpoint(t *testing.T) {
+	f := newFakeAPI(t)
+	cfg := f.config(t)
+	// The stored CA is the Teleport proxy's, which the tunnel's local proxy
+	// does not use, and the stored credential is not what signs in.
+	cfg.Cluster.CAData = otherCA(t)
+	cfg.Tunnel = "tsh://teleport.example.com:443/root/dev"
+	cfg.TunnelEndpoint = true
+	cfg.Credential = func(context.Context) (*credentials.Resolved, error) {
+		return nil, errors.New("the stored credential should not be checked")
+	}
+	r := Run(context.Background(), cfg)
+	got := byName(r)
+	if r.Failed() || got["TLS"].Status != Skip || got["credentials"].Status != Skip || got["API server"].Status != OK {
+		logReport(t, r)
+		t.Fatal("want the TLS and credential checks left to the API check, and no failures")
+	}
+}
+
 func TestStalledReviewsDoNotHang(t *testing.T) {
 	f := newFakeAPI(t)
 	f.reviewDelay = 1500 * time.Millisecond // answers only after the 200ms request timeout

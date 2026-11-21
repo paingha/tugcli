@@ -13,6 +13,7 @@ import (
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/registry"
+	"github.com/paingha/tugcli/internal/tunnel"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -67,6 +68,7 @@ func (s *Service) Import(ctx context.Context, cat *catalog.Catalog, src catalog.
 		s.recordError(cat, src, err)
 		return res
 	}
+	tunnelErr := dropUnusableTunnels(src.Provider, listed)
 	now := s.now()
 	res.Merge = cat.Merge(src, listed, now)
 	res.Clusters = len(listed)
@@ -87,10 +89,28 @@ func (s *Service) Import(ctx context.Context, cat *catalog.Catalog, src catalog.
 		stored.LastError = ""
 		res.Source = *stored
 	}
+	res.Err = tunnelErr
 	if len(credErrs) > 0 {
-		res.Err = fmt.Errorf("storing credentials in %s: %w", s.Store.Name(), errors.Join(credErrs...))
+		res.Err = errors.Join(res.Err, fmt.Errorf("storing credentials in %s: %w", s.Store.Name(), errors.Join(credErrs...)))
 	}
 	return res
+}
+
+// dropUnusableTunnels removes the tunnels in a listing that tug cannot open
+// or keep in its catalog, such as one with a password, and says which.
+func dropUnusableTunnels(providerName string, listed []provider.Cluster) error {
+	var errs []error
+	for i := range listed {
+		spec := listed[i].Tunnel
+		if spec == "" {
+			continue
+		}
+		if _, err := tunnel.Check(spec); err != nil {
+			listed[i].Tunnel = ""
+			errs = append(errs, fmt.Errorf("%s: ignoring the tunnel %s lists for it: %w", listed[i].Name, providerName, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Service) recordError(cat *catalog.Catalog, src catalog.Source, err error) {
@@ -179,6 +199,25 @@ func (s *Service) Fetcher(cat *catalog.Catalog) credentials.Fetcher {
 			return provider.Credential{}, err
 		}
 		return p.Credential(ctx, req)
+	}
+}
+
+// ClusterLookup returns a credentials.ClusterLookup that tells delegated
+// exec plugins about a catalog cluster: what a session kubeconfig would
+// tell kubectl about it.
+func ClusterLookup(cat *catalog.Catalog) credentials.ClusterLookup {
+	return func(clusterID string) (credentials.ExecCluster, error) {
+		cl, err := cat.Get(clusterID)
+		if err != nil {
+			return credentials.ExecCluster{}, err
+		}
+		return credentials.ExecCluster{
+			Server:                cl.Server,
+			CAData:                cl.CAData,
+			TLSServerName:         cl.TLSServerName,
+			InsecureSkipTLSVerify: cl.InsecureSkipTLSVerify,
+			ProxyURL:              cl.ProxyURL,
+		}, nil
 	}
 }
 

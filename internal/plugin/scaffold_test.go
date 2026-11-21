@@ -78,16 +78,34 @@ func TestScaffoldGoBuildsTestsAndConforms(t *testing.T) {
 	}
 	conform(t, conformance.Target{Command: bin}, "my-cloud")
 
+	// `make wasm` builds the WebAssembly platform the manifest lists, and
+	// that build conforms too, run by the host.
+	makefile, _ := os.ReadFile(filepath.Join(dir, "Makefile"))
+	if !strings.Contains(string(makefile), "GOOS=wasip1 GOARCH=wasm go build -trimpath -o bin/wasm/plugin.wasm .") {
+		t.Fatalf("the Makefile has no wasm target:\n%s", makefile)
+	}
+	wasmBuild := exec.Command("go", "build", "-trimpath", "-o", filepath.Join("bin", "wasm", "plugin.wasm"), ".")
+	wasmBuild.Dir = dir
+	wasmBuild.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOOS="+WASMOS, "GOARCH="+WASMArch)
+	if out, err := wasmBuild.CombinedOutput(); err != nil {
+		t.Fatalf("make wasm: %v\n%s", err, out)
+	}
+	wasm, err := Load(dir, true, PreferWASM(true))
+	if err != nil || !wasm.WASM || wasm.Bin != filepath.Join(dir, "bin", "wasm", "plugin.wasm") {
+		t.Fatalf("Load preferring WebAssembly = %+v, %v", wasm, err)
+	}
+	conform(t, wasmTarget(t, wasm), "my-cloud")
+
 	// The scaffold packages and installs.
 	res, err := Package(dir, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Only this machine's binary was built; every other platform the
-	// scaffold declares is left out.
-	wantMissing := len(p.Manifest.Spec.Platforms) - 1
-	if len(res.Manifest.Spec.Platforms) != 1 || len(res.Missing) != wantMissing {
-		t.Fatalf("Package(scaffold) = %d platforms, %d missing; want 1, %d missing",
+	// This machine's binary and the WebAssembly build were built; every
+	// other platform the scaffold declares is left out.
+	wantMissing := len(p.Manifest.Spec.Platforms) - 2
+	if len(res.Manifest.Spec.Platforms) != 2 || len(res.Missing) != wantMissing {
+		t.Fatalf("Package(scaffold) = %d platforms, %d missing; want 2, %d missing",
 			len(res.Manifest.Spec.Platforms), len(res.Missing), wantMissing)
 	}
 	staged, err := NewDirs(t.TempDir()).Stage(res.Path, res.SHA256)
@@ -160,6 +178,10 @@ func TestScaffoldGoFiles(t *testing.T) {
 		{"Makefile", "bin/$(HOST)/$(BIN)$(EXT)", "Windows builds need .exe to match plugin.yaml"},
 		{filepath.Join(".github", "workflows", "release.yml"), "does not match plugin.yaml", "the tag must match the manifest version"},
 		{filepath.Join(".github", "workflows", "release.yml"), "${{ secrets.TUGCLI_TOKEN }}", "the SDK can be fetched while its repository is private"},
+		{filepath.Join(".github", "workflows", "release.yml"), "id-token: write", "keyless signing needs the workflow's OIDC token"},
+		{filepath.Join(".github", "workflows", "release.yml"), `cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"`, "the archive is signed into a Sigstore bundle"},
+		{filepath.Join(".github", "workflows", "release.yml"), "dist/*.tar.gz.sigstore.json", "the bundle is published beside the archive"},
+		{filepath.Join(".github", "workflows", "release.yml"), "--identity $GITHUB_SERVER_URL/$GITHUB_WORKFLOW_REF", "the identity to put in an index is printed"},
 	}
 	for _, tt := range tests {
 		if !strings.Contains(read(tt.file), tt.want) {

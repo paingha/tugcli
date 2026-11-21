@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/paingha/tugcli/internal/config"
+	"github.com/paingha/tugcli/internal/sigstore"
 )
 
 // Index API version and kind.
@@ -31,12 +32,17 @@ const (
 	indexTTL = time.Hour
 	// maxIndexBytes bounds a downloaded index or signature.
 	maxIndexBytes = 8 << 20
+	// maxBundleBytes bounds a downloaded Sigstore bundle, which is a few
+	// KiB.
+	maxBundleBytes = 1 << 20
 )
 
 // Index is a list of reviewed plugins and where to get them. It is signed
 // with ed25519 as a whole, and each version pins its archive's sha256, so a
 // plugin installed from it is checked from the index key down to every
-// binary.
+// binary. A version may also name a Sigstore signature over its archive and
+// who must have made it, which ties the archive to the publisher's own
+// release workflow as well as to the index.
 type Index struct {
 	APIVersion string        `json:"apiVersion"`
 	Kind       string        `json:"kind"`
@@ -58,6 +64,43 @@ type IndexVersion struct {
 	URL           string `json:"url"`
 	SHA256        string `json:"sha256"`
 	MinTugVersion string `json:"minTugVersion,omitempty"`
+	// Sigstore, when set, is the archive's Sigstore signature, which
+	// tug plugin install checks before the sha256.
+	Sigstore *IndexSigstore `json:"sigstore,omitempty"`
+}
+
+// IndexSigstore says where a version's Sigstore bundle is and who must have
+// signed the archive.
+type IndexSigstore struct {
+	// Bundle is the https URL of the Sigstore bundle, as cosign sign-blob
+	// --bundle writes it.
+	Bundle string `json:"bundle"`
+	// Identity is the signing certificate's identity. For a GitHub Actions
+	// workflow it is the workflow's URL and ref:
+	// https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.1.0.
+	Identity string `json:"identity,omitempty"`
+	// IdentityRegexp matches the whole identity instead of Identity.
+	IdentityRegexp string `json:"identityRegexp,omitempty"`
+	// Issuer is the OIDC issuer that vouched for the identity, such as
+	// https://token.actions.githubusercontent.com for GitHub Actions.
+	Issuer string `json:"issuer"`
+}
+
+// Signer is the identity the bundle's certificate must name.
+func (s *IndexSigstore) Signer() sigstore.Identity {
+	return sigstore.Identity{Subject: s.Identity, SubjectRegexp: s.IdentityRegexp, Issuer: s.Issuer}
+}
+
+// Validate checks that the bundle URL is https and the signer is complete.
+func (s *IndexSigstore) Validate() error {
+	var errs []error
+	if !secureURL(s.Bundle) {
+		errs = append(errs, errors.New("an https url for the Sigstore bundle is needed"))
+	}
+	if err := s.Signer().Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 // Latest returns the highest version, or false when there is none.
@@ -95,14 +138,24 @@ func (ix *Index) Validate() error {
 		}
 		seen[p.Name] = true
 		for _, v := range p.Versions {
-			u, err := url.Parse(v.URL)
-			secure := err == nil && (u.Scheme == "https" || u.Scheme == "http" && isLoopback(u.Hostname()))
-			if v.Version == "" || !secure || len(v.SHA256) != 64 {
+			if v.Version == "" || !secureURL(v.URL) || len(v.SHA256) != 64 {
 				errs = append(errs, fmt.Errorf("plugin %s version %q needs a version, an https url and a sha256", p.Name, v.Version))
+			}
+			if v.Sigstore != nil {
+				if err := v.Sigstore.Validate(); err != nil {
+					errs = append(errs, fmt.Errorf("plugin %s version %q sigstore: %w", p.Name, v.Version, err))
+				}
 			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// secureURL reports whether rawURL is https, or plain http to a loopback
+// address for local testing.
+func secureURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && u.Host != "" && (u.Scheme == "https" || u.Scheme == "http" && isLoopback(u.Hostname()))
 }
 
 // ParseIndex reads an index after checking its signature against key.
@@ -160,40 +213,51 @@ func SignIndex(data []byte, privateKey string) ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(sig) + "\n"), nil
 }
 
-// AddToIndex records a packaged archive, published at url, in the index
-// file at path, creating the file when it is missing. It reads the
-// archive's manifest and hashes it, so the entry matches what install
-// will check.
-func AddToIndex(path, archive, archiveURL, description string) (*IndexPlugin, error) {
+// IndexAddition is what AddToIndex records about an archive besides what it
+// reads from the archive itself.
+type IndexAddition struct {
+	// URL is where the archive is published.
+	URL string
+	// Description, when set, replaces the plugin's description.
+	Description string
+	// Sigstore, when set, names the archive's Sigstore bundle and signer.
+	Sigstore *IndexSigstore
+}
+
+// AddToIndex records a packaged archive in the index file at path, creating
+// the file when it is missing, and returns the plugin and the version it
+// added. It reads the archive's manifest and hashes it, so the entry
+// matches what install will check.
+func AddToIndex(path, archive string, add IndexAddition) (*IndexPlugin, IndexVersion, error) {
 	ix := &Index{APIVersion: IndexAPIVersion, Kind: IndexKind}
 	if b, err := os.ReadFile(path); err == nil {
 		if err := yaml.UnmarshalStrict(b, ix); err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, IndexVersion{}, fmt.Errorf("%s: %w", path, err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	sum, err := fileSHA256(archive)
 	if err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	tmp, err := os.MkdirTemp("", "tug-index-")
 	if err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	defer os.RemoveAll(tmp)
 	if err := extract(archive, tmp); err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	root, err := pluginRoot(tmp)
 	if err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	m, err := LoadManifest(root)
 	if err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
-	v := IndexVersion{Version: m.Metadata.Version, URL: archiveURL, SHA256: sum, MinTugVersion: m.Spec.MinTugVersion}
+	v := IndexVersion{Version: m.Metadata.Version, URL: add.URL, SHA256: sum, MinTugVersion: m.Spec.MinTugVersion, Sigstore: add.Sigstore}
 	i := slices.IndexFunc(ix.Plugins, func(p IndexPlugin) bool { return p.Name == m.Metadata.Name })
 	if i < 0 {
 		ix.Plugins = append(ix.Plugins, IndexPlugin{Name: m.Metadata.Name})
@@ -201,8 +265,8 @@ func AddToIndex(path, archive, archiveURL, description string) (*IndexPlugin, er
 	}
 	p := &ix.Plugins[i]
 	p.Publisher, p.Homepage = m.Metadata.Publisher, m.Metadata.Homepage
-	if description != "" {
-		p.Description = description
+	if add.Description != "" {
+		p.Description = add.Description
 	}
 	if j := slices.IndexFunc(p.Versions, func(x IndexVersion) bool { return x.Version == v.Version }); j >= 0 {
 		p.Versions[j] = v
@@ -211,18 +275,18 @@ func AddToIndex(path, archive, archiveURL, description string) (*IndexPlugin, er
 	}
 	slices.SortFunc(ix.Plugins, func(a, b IndexPlugin) int { return strings.Compare(a.Name, b.Name) })
 	if err := ix.Validate(); err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	b, err := yaml.Marshal(ix)
 	if err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	// The index is published, so it is readable like other release files.
 	if err := config.WriteFileAtomic(path, b, 0o644); err != nil {
-		return nil, err
+		return nil, IndexVersion{}, err
 	}
 	added := ix.Plugins[slices.IndexFunc(ix.Plugins, func(p IndexPlugin) bool { return p.Name == m.Metadata.Name })]
-	return &added, nil
+	return &added, v, nil
 }
 
 // IndexSource is one configured index: where it is and the key it must be
@@ -278,18 +342,25 @@ func (c *IndexCache) Load(ctx context.Context, src IndexSource) (*Index, error) 
 }
 
 func (c *IndexCache) get(ctx context.Context, rawURL string) ([]byte, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
-		return nil, fmt.Errorf("refusing %s: indexes are downloaded over https only", rawURL)
+	return fetchSmall(ctx, c.HTTP, rawURL, "indexes", maxIndexBytes)
+}
+
+// FetchBundle downloads a Sigstore bundle over HTTPS. Plain HTTP is accepted
+// only for loopback hosts, for local testing.
+func FetchBundle(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchSmall(ctx, nil, rawURL, "Sigstore bundles", maxBundleBytes)
+}
+
+// fetchSmall downloads a file of at most limit bytes into memory. what names
+// such files in the error for a URL that is not https.
+func fetchSmall(ctx context.Context, client *http.Client, rawURL, what string, limit int) ([]byte, error) {
+	if !secureURL(rawURL) {
+		return nil, fmt.Errorf("refusing %s: %s are downloaded over https only", rawURL, what)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
@@ -301,12 +372,12 @@ func (c *IndexCache) get(ctx context.Context, rawURL string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("downloading %s: %s", rawURL, resp.Status)
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, maxIndexBytes+1))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > maxIndexBytes {
-		return nil, fmt.Errorf("%s is larger than %d MiB", rawURL, maxIndexBytes>>20)
+	if len(b) > limit {
+		return nil, fmt.Errorf("%s is larger than %d MiB", rawURL, limit>>20)
 	}
 	return b, nil
 }

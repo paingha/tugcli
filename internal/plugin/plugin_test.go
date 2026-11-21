@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/paingha/tugcli/internal/sandbox"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -49,51 +50,53 @@ func TestSDKPluginEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prov := NewProvider(p, &Runner{Bin: p.Bin, Name: p.Name()})
-	ctx := context.Background()
+	eachSandbox(t, p, func(t *testing.T, sb *sandbox.Sandbox) {
+		prov := NewProvider(p, &Runner{Bin: p.Bin, Name: p.Name(), Sandbox: sb})
+		ctx := context.Background()
 
-	d, err := prov.Describe(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.Name != "example" || !d.Capabilities.Has(provider.CapList|provider.CapCredential) {
-		t.Fatalf("describe = %+v", d)
-	}
+		d, err := prov.Describe(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Name != "example" || !d.Capabilities.Has(provider.CapList|provider.CapCredential) {
+			t.Fatalf("describe = %+v", d)
+		}
 
-	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443,ci=https://ci:6443"}}
-	token := map[string]string{"api_token": "ex_t0k"}
-	clusters, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(clusters) != 2 || clusters[0].Endpoints.Public != "https://127.0.0.1:6443" {
-		t.Fatalf("clusters = %+v", clusters)
-	}
+		acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443,ci=https://ci:6443"}}
+		token := map[string]string{"api_token": "ex_t0k"}
+		clusters, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(clusters) != 2 || clusters[0].Endpoints.Public != "https://127.0.0.1:6443" {
+			t.Fatalf("clusters = %+v", clusters)
+		}
 
-	_, err = prov.List(ctx, provider.ListRequest{Account: provider.Account{ID: "empty"}, Secrets: token})
-	var pe *provider.Error
-	if provider.CodeOf(err) != provider.InvalidConfig {
-		t.Fatalf("want InvalidConfig, got %v", err)
-	}
-	if pe = provider.AsError(err); pe.Hint == "" {
-		t.Fatal("hint lost on the wire")
-	}
+		_, err = prov.List(ctx, provider.ListRequest{Account: provider.Account{ID: "empty"}, Secrets: token})
+		var pe *provider.Error
+		if provider.CodeOf(err) != provider.InvalidConfig {
+			t.Fatalf("want InvalidConfig, got %v", err)
+		}
+		if pe = provider.AsError(err); pe.Hint == "" || strings.Contains(pe.Hint, "sandbox") {
+			t.Fatalf("hint = %q, want the plugin's own", pe.Hint)
+		}
 
-	// Undeclared secrets are never sent.
-	cred, err := prov.Credential(ctx, provider.CredentialRequest{
-		Account: acct, ClusterID: "dev",
-		Secrets: map[string]string{"api_token": "ex_t0k", "other_plugin_secret": "nope"},
+		// Undeclared secrets are never sent.
+		cred, err := prov.Credential(ctx, provider.CredentialRequest{
+			Account: acct, ClusterID: "dev",
+			Secrets: map[string]string{"api_token": "ex_t0k", "other_plugin_secret": "nope"},
+		})
+		if err != nil || cred.Token != "ex_t0k" {
+			t.Fatalf("credential = %+v, %v", cred, err)
+		}
+		if got := prov.declared(map[string]string{"api_token": "a", "x": "b"}); len(got) != 1 {
+			t.Fatalf("declared = %v", got)
+		}
+
+		if _, err := prov.Accounts(ctx); provider.CodeOf(err) != provider.Unimplemented {
+			t.Fatalf("accounts: want Unimplemented, got %v", err)
+		}
 	})
-	if err != nil || cred.Token != "ex_t0k" {
-		t.Fatalf("credential = %+v, %v", cred, err)
-	}
-	if got := prov.declared(map[string]string{"api_token": "a", "x": "b"}); len(got) != 1 {
-		t.Fatalf("declared = %v", got)
-	}
-
-	if _, err := prov.Accounts(ctx); provider.CodeOf(err) != provider.Unimplemented {
-		t.Fatalf("accounts: want Unimplemented, got %v", err)
-	}
 }
 
 const scriptManifest = `apiVersion: tug.plugin/v1alpha1
@@ -225,6 +228,21 @@ func TestManifestValidation(t *testing.T) {
 		{"escaping bin", func(m *Manifest) { m.Spec.Platforms[0].Bin = "../../bin/sh" }, "inside the plugin directory"},
 		{"bad env", func(m *Manifest) { m.Spec.Env = []string{"A=B"} }, "spec.env"},
 		{"bad minTugVersion", func(m *Manifest) { m.Spec.MinTugVersion = "soon" }, "spec.minTugVersion"},
+		{"wasip1 without wasm", func(m *Manifest) { m.Spec.Platforms[0] = Platform{OS: WASMOS, Arch: "amd64", Bin: "x.wasm"} }, "{os: wasip1, arch: wasm}"},
+		{"wasm without wasip1", func(m *Manifest) { m.Spec.Platforms[0] = Platform{OS: "js", Arch: WASMArch, Bin: "x.wasm"} }, "{os: wasip1, arch: wasm}"},
+		{"two WebAssembly builds", func(m *Manifest) {
+			m.Spec.Platforms = append(m.Spec.Platforms, Platform{OS: WASMOS, Arch: WASMArch, Bin: "a.wasm"}, Platform{OS: WASMOS, Arch: WASMArch, Bin: "b.wasm"})
+		}, "more than one WebAssembly build"},
+		{"WebAssembly with a described network", func(m *Manifest) {
+			m.Spec.Platforms = append(m.Spec.Platforms, Platform{OS: WASMOS, Arch: WASMArch, Bin: "a.wasm"})
+			m.Spec.Network = []string{"the server in the account's url setting"}
+		}, "spec.network entry"},
+		{"relative sandbox path", func(m *Manifest) { m.Spec.Sandbox.Read = []string{".tsh"} }, "spec.sandbox.read"},
+		{"sandbox path escaping", func(m *Manifest) { m.Spec.Sandbox.Write = []string{"~/x/../.ssh"} }, `must not contain a ".." component`},
+		{"relative tool path", func(m *Manifest) { m.Spec.Sandbox.Tools = []string{"bin/tsh"} }, "spec.sandbox.tools"},
+		{"empty tool", func(m *Manifest) { m.Spec.Sandbox.Tools = []string{""} }, "spec.sandbox.tools"},
+		{"relative socket", func(m *Manifest) { m.Spec.Sandbox.Sockets = []string{"run/x.sock"} }, "spec.sandbox.sockets"},
+		{"bad port", func(m *Manifest) { m.Spec.Sandbox.Ports = []int{70000} }, "spec.sandbox.ports"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -244,6 +262,128 @@ func TestManifestValidation(t *testing.T) {
 				t.Fatalf("Validate = %v, want mention of %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestPlatformSelection checks which build Load runs: the native one, else
+// the WebAssembly one, the WebAssembly one first when preferred, and in each
+// case the first that is built.
+func TestPlatformSelection(t *testing.T) {
+	native := Platform{OS: runtime.GOOS, Arch: runtime.GOARCH, Bin: "bin/native"}
+	other := Platform{OS: "plan9", Arch: "386", Bin: "bin/plan9"}
+	wasm := Platform{OS: WASMOS, Arch: WASMArch, Bin: "bin/plugin.wasm"}
+	tests := []struct {
+		name      string
+		platforms []Platform
+		built     []string
+		prefer    bool
+		want      string
+		wantErr   string
+	}{
+		{"native", []Platform{native, wasm}, []string{"bin/native", "bin/plugin.wasm"}, false, "bin/native", ""},
+		{"WebAssembly preferred", []Platform{native, wasm}, []string{"bin/native", "bin/plugin.wasm"}, true, "bin/plugin.wasm", ""},
+		{"no native build for here", []Platform{other, wasm}, []string{"bin/plan9", "bin/plugin.wasm"}, false, "bin/plugin.wasm", ""},
+		{"native not built", []Platform{native, wasm}, []string{"bin/plugin.wasm"}, false, "bin/plugin.wasm", ""},
+		{"preferred but not built", []Platform{native, wasm}, []string{"bin/native"}, true, "bin/native", ""},
+		{"nothing for here", []Platform{other}, []string{"bin/plan9"}, false, "", "no WebAssembly build"},
+		{"nothing built", []Platform{native, wasm}, nil, false, "", "bin/native"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			var lines []string
+			for _, p := range tt.platforms {
+				lines = append(lines, "  - {os: "+p.OS+", arch: "+p.Arch+", bin: "+p.Bin+"}")
+			}
+			manifest := "apiVersion: tug.plugin/v1alpha1\nkind: ProviderPlugin\nmetadata: {name: pick, version: 1.0.0}\n" +
+				"spec:\n  protocols: [provider/v1alpha1]\n  platforms:\n" + strings.Join(lines, "\n") + "\n"
+			if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(manifest), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, b := range tt.built {
+				content := []byte("#!/bin/sh\n")
+				if strings.HasSuffix(b, ".wasm") {
+					content = wasmHeader
+				}
+				path := filepath.Join(dir, filepath.FromSlash(b))
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, content, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p, err := Load(dir, true, PreferWASM(tt.prefer))
+			if tt.wantErr != "" {
+				// With nothing built, the error is the best build's.
+				if tt.built == nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("Load = %v, want a missing file", err)
+				}
+				if err == nil || !strings.Contains(filepath.ToSlash(err.Error()), tt.wantErr) {
+					t.Fatalf("Load = %v, %v; want an error containing %q", p, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := filepath.ToSlash(strings.TrimPrefix(p.Bin, dir+string(filepath.Separator))); got != tt.want || p.WASM != strings.HasSuffix(tt.want, ".wasm") {
+				t.Fatalf("Load picked %s (WASM %v), want %s", got, p.WASM, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadRefusesAWASMBuildThatIsNot(t *testing.T) {
+	dir := t.TempDir()
+	manifest := "apiVersion: tug.plugin/v1alpha1\nkind: ProviderPlugin\nmetadata: {name: fake, version: 1.0.0}\n" +
+		"spec:\n  protocols: [provider/v1alpha1]\n  platforms:\n  - {os: wasip1, arch: wasm, bin: plugin.wasm}\n"
+	if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plugin.wasm"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, true); err == nil || !strings.Contains(err.Error(), "is not a WebAssembly module") {
+		t.Fatalf("Load of a script listed as WebAssembly = %v", err)
+	}
+}
+
+func TestManifestSandbox(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata: {name: acme, version: 1.0.0}
+spec:
+  protocols: [provider/v1alpha1]
+  platforms:
+  - {os: linux, arch: amd64, bin: tug-provider-acme}
+  network: [api.acme.example, "auth.acme.example:8443", "the server in the account's url setting"]
+  sandbox:
+    tools: [acme, /opt/acme/bin/acme-helper]
+    read: ["~/.acme", "$ACME_HOME/config"]
+    write: ["~/.acme/cache"]
+    sockets: [/var/run/acme.sock]
+    ports: [3080, 8443]
+    port: [1]
+`
+	if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := m.Spec.Sandbox
+	if !slices.Equal(s.Tools, []string{"acme", "/opt/acme/bin/acme-helper"}) || !slices.Equal(s.Read, []string{"~/.acme", "$ACME_HOME/config"}) ||
+		!slices.Equal(s.Write, []string{"~/.acme/cache"}) || !slices.Equal(s.Sockets, []string{"/var/run/acme.sock"}) {
+		t.Errorf("Spec.Sandbox = %+v", s)
+	}
+	if got, want := m.SandboxPorts(), []uint16{3080, 8443}; !slices.Equal(got, want) {
+		t.Errorf("SandboxPorts() = %v, want %v", got, want)
+	}
+	if !slices.Equal(m.Unknown, []string{"spec.sandbox.port"}) {
+		t.Errorf("Unknown = %v, want [spec.sandbox.port]", m.Unknown)
 	}
 }
 
@@ -454,47 +594,53 @@ func TestServeModeKeepsOneProcess(t *testing.T) {
 	if !p.Manifest.Spec.Capabilities.Has(provider.CapServe) {
 		t.Fatal("the example manifest should declare serve")
 	}
-	r := &Runner{Bin: p.Bin, Name: p.Name(), Serve: true}
-	prov := NewProvider(p, r)
-	t.Cleanup(func() { _ = prov.Close() })
-	ctx := context.Background()
-	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443"}}
-	token := map[string]string{"api_token": "ex_t0k"}
+	eachSandbox(t, p, func(t *testing.T, sb *sandbox.Sandbox) {
+		r := &Runner{Bin: p.Bin, Name: p.Name(), Serve: true, Sandbox: sb}
+		prov := NewProvider(p, r)
+		t.Cleanup(func() { _ = prov.Close() })
+		ctx := context.Background()
+		acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443"}}
+		token := map[string]string{"api_token": "ex_t0k"}
 
-	var wg sync.WaitGroup
-	errs := make([]error, 8)
-	for i := range errs {
-		wg.Go(func() {
-			if i%2 == 0 {
-				_, errs[i] = prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
-			} else {
-				_, errs[i] = prov.Credential(ctx, provider.CredentialRequest{Account: acct, ClusterID: "dev", Secrets: token})
+		var wg sync.WaitGroup
+		errs := make([]error, 8)
+		for i := range errs {
+			wg.Go(func() {
+				if i%2 == 0 {
+					_, errs[i] = prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
+				} else {
+					_, errs[i] = prov.Credential(ctx, provider.CredentialRequest{Account: acct, ClusterID: "dev", Secrets: token})
+				}
+			})
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			t.Fatal(err)
+		}
+		inst, done := r.srv.running()
+		if _, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: map[string]string{"api_token": "bad"}}); provider.CodeOf(err) != provider.Unauthenticated {
+			t.Fatalf("a provider error through serve mode = %v, want Unauthenticated", err)
+		}
+		if again, _ := r.srv.running(); again != inst {
+			t.Fatal("serve mode started a second process for a later call")
+		}
+
+		// The process dies; the next call starts a new one.
+		_ = inst.kill()
+		<-done
+		if _, err := prov.Describe(ctx); err != nil {
+			t.Fatalf("describe after the process died: %v", err)
+		}
+		if err := prov.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := prov.Describe(ctx); err == nil {
+			t.Fatal("a call after Close succeeded")
+		}
+		if sb != nil {
+			if left, _ := os.ReadDir(sb.TempRoot); len(left) != 0 {
+				t.Errorf("after Close, %d private temporary directories are left", len(left))
 			}
-		})
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		t.Fatal(err)
-	}
-	cmd, done := r.srv.process()
-	pid := cmd.Process.Pid
-	if _, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: map[string]string{"api_token": "bad"}}); provider.CodeOf(err) != provider.Unauthenticated {
-		t.Fatalf("a provider error through serve mode = %v, want Unauthenticated", err)
-	}
-	if again, _ := r.srv.process(); again.Process.Pid != pid {
-		t.Fatal("serve mode started a second process for a later call")
-	}
-
-	// The process dies; the next call starts a new one.
-	_ = cmd.Process.Kill()
-	<-done
-	if _, err := prov.Describe(ctx); err != nil {
-		t.Fatalf("describe after the process died: %v", err)
-	}
-	if err := prov.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := prov.Describe(ctx); err == nil {
-		t.Fatal("a call after Close succeeded")
-	}
+		}
+	})
 }

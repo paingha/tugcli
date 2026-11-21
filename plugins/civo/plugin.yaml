@@ -1,0 +1,25 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: civo
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/civo
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-civo}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-civo}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-civo}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-civo}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-civo.exe}
+  secrets:
+  - {name: api_key, prompt: "Civo API key"}
+  env: []
+  network: [api.civo.com]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "API endpoint override (https)"}
+      regions: {type: string, description: "regions to list, comma separated, such as lon1,fra1 (default: every region with Kubernetes)"}

@@ -19,6 +19,11 @@ spec:
   env: [NEBIUS_PROFILE]
   # Hosts the nebius CLI calls on the plugin's behalf.
   network: [api.nebius.cloud, mk8s.api.nebius.cloud, tokens.iam.api.nebius.cloud, auth.nebius.com]
+  # The CLI is on PATH or where its installer puts it, and keeps its
+  # profiles and token cache in ~/.nebius, which it updates.
+  sandbox:
+    tools: [nebius, ~/.nebius/bin/nebius]
+    write: ["~/.nebius"]
   accountConfig:
     type: object
     properties:

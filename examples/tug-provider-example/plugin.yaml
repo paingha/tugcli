@@ -16,6 +16,9 @@ spec:
   - {os: linux, arch: arm64, bin: bin/tug-provider-example}
   - {os: windows, arch: amd64, bin: bin/tug-provider-example.exe}
   - {os: windows, arch: arm64, bin: bin/tug-provider-example.exe}
+  # One WebAssembly build runs on every platform, in tug's sandbox; tug uses
+  # it where no native build matches. Build it with `make example-plugin-wasm`.
+  - {os: wasip1, arch: wasm, bin: bin/tug-provider-example.wasm}
   secrets:
   - {name: api_token, prompt: "Example API token"}
   env: []
@@ -24,3 +27,5 @@ spec:
     type: object
     properties:
       clusters: {type: string, description: "name=url pairs, comma separated"}
+      authCommand: {type: string, description: "kubectl exec plugin that tug runs for credentials, told which cluster they are for"}
+      tunnel: {type: string, description: "a tunnel to reach every cluster through, as for tug tunnel set"}

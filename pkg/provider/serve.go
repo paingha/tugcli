@@ -32,39 +32,36 @@ type ServeResponse struct {
 // maxServeLine bounds one line in serve mode: a message and its envelope.
 const maxServeLine = MaxMessageBytes + 64<<10
 
-// serve answers requests from stdin, one JSON line each and concurrently,
-// until stdin closes or ctx ends. Responses may come out of order; each
-// carries its request's ID.
+// serve answers requests from stdin, one JSON line each, until stdin closes
+// or ctx ends. Native plugins answer concurrently, so responses may come out
+// of order; each carries its request's ID. WebAssembly plugins answer in
+// order (see serveInOrder).
 func serve(ctx context.Context, p Provider, stdin io.Reader, stdout, stderr io.Writer) int {
-	var (
-		outMu   sync.Mutex
-		wg      sync.WaitGroup
-		cMu     sync.Mutex
-		cancels = map[string]context.CancelFunc{}
-	)
-	write := func(id string, msg any) {
-		b, err := json.Marshal(msg)
-		if err != nil {
-			b, _ = json.Marshal(errorResponseMsg{typeMeta: meta(kindError), Error: Error{Code: Internal, Message: err.Error()}})
-		}
-		line, _ := json.Marshal(ServeResponse{ID: id, Response: b})
-		outMu.Lock()
-		defer outMu.Unlock()
-		_, _ = stdout.Write(append(line, '\n'))
+	s := &serveSession{p: p, stdout: stdout, stderr: stderr, cancels: map[string]context.CancelFunc{}}
+	if serveInOrder {
+		return s.inOrder(ctx, stdin)
 	}
-	writeErr := func(id, op string, e *Error) {
-		if e.Code == "" {
-			e.Code = Internal
-		}
-		write(id, errorResponseMsg{typeMeta: meta(kindError), Error: *e})
-		fmt.Fprintf(stderr, "%s %s: %v\n", progName(), op, e)
-	}
+	return s.concurrent(ctx, stdin)
+}
 
+// serveSession is what one run of serve shares between its requests.
+type serveSession struct {
+	p              Provider
+	stdout, stderr io.Writer
+
+	outMu   sync.Mutex
+	cMu     sync.Mutex
+	cancels map[string]context.CancelFunc
+}
+
+// concurrent reads lines in a goroutine of its own and answers each request
+// in another, so a cancel line can reach a request that is still running.
+func (s *serveSession) concurrent(ctx context.Context, stdin io.Reader) int {
+	var wg sync.WaitGroup
 	lines := make(chan []byte)
 	readErr := make(chan error, 1)
 	go func() {
-		sc := bufio.NewScanner(stdin)
-		sc.Buffer(make([]byte, 64<<10), maxServeLine)
+		sc := newServeScanner(stdin)
 		for sc.Scan() {
 			select {
 			case lines <- bytes.Clone(sc.Bytes()):
@@ -80,61 +77,121 @@ func serve(ctx context.Context, p Provider, stdin io.Reader, stdout, stderr io.W
 		var line []byte
 		select {
 		case <-ctx.Done():
-			cMu.Lock()
-			for _, cancel := range cancels {
+			s.cMu.Lock()
+			for _, cancel := range s.cancels {
 				cancel()
 			}
-			cMu.Unlock()
+			s.cMu.Unlock()
 			return ExitOK
 		case err := <-readErr:
-			if err != nil && !errors.Is(err, io.EOF) {
-				writeErr("", OpServe, Errorf(InvalidConfig, "reading requests: %v", err))
-				return ExitError
-			}
-			return ExitOK // stdin closed: finish what is in flight, then exit
+			return s.end(err) // stdin closed: finish what is in flight, then exit
 		case line = <-lines:
 		}
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var req ServeRequest
-		if err := json.Unmarshal(line, &req); err != nil || req.ID == "" {
-			writeErr("", OpServe, Errorf(InvalidConfig, "each line must be a JSON object with an id"))
-			continue
-		}
-		if req.Cancel {
-			cMu.Lock()
-			if cancel, ok := cancels[req.ID]; ok {
-				cancel()
-			}
-			cMu.Unlock()
-			continue
-		}
-		if req.Op == OpServe || !IsKnownOp(req.Op) {
-			writeErr(req.ID, req.Op, Errorf(InvalidConfig, "unknown operation %q", req.Op))
+		req, body, ok := s.parse(line)
+		if !ok {
 			continue
 		}
 		rctx, cancel := context.WithCancel(ctx)
-		cMu.Lock()
-		cancels[req.ID] = cancel
-		cMu.Unlock()
-		body := []byte(req.Request)
-		if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
-			body = nil
-		}
+		s.cMu.Lock()
+		s.cancels[req.ID] = cancel
+		s.cMu.Unlock()
 		wg.Go(func() {
 			defer func() {
-				cMu.Lock()
-				delete(cancels, req.ID)
-				cMu.Unlock()
+				s.cMu.Lock()
+				delete(s.cancels, req.ID)
+				s.cMu.Unlock()
 				cancel()
 			}()
-			resp, err := dispatch(rctx, p, req.Op, bytes.NewReader(body))
-			if err != nil {
-				writeErr(req.ID, req.Op, AsError(err))
-				return
-			}
-			write(req.ID, resp)
+			s.answer(rctx, req, body)
 		})
 	}
+}
+
+// inOrder answers each request before it reads the next line. Nothing runs
+// while a line is read, so a cancel line has nothing to cancel.
+func (s *serveSession) inOrder(ctx context.Context, stdin io.Reader) int {
+	sc := newServeScanner(stdin)
+	for sc.Scan() {
+		if ctx.Err() != nil {
+			return ExitOK
+		}
+		if req, body, ok := s.parse(sc.Bytes()); ok {
+			s.answer(ctx, req, body)
+		}
+	}
+	return s.end(sc.Err())
+}
+
+func newServeScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), maxServeLine)
+	return sc
+}
+
+// parse reads one line. It answers lines that are not requests, and cancels
+// the request a cancel line names, and then returns false.
+func (s *serveSession) parse(line []byte) (ServeRequest, []byte, bool) {
+	var req ServeRequest
+	if len(bytes.TrimSpace(line)) == 0 {
+		return req, nil, false
+	}
+	if err := json.Unmarshal(line, &req); err != nil || req.ID == "" {
+		s.writeErr("", OpServe, Errorf(InvalidConfig, "each line must be a JSON object with an id"))
+		return req, nil, false
+	}
+	if req.Cancel {
+		s.cMu.Lock()
+		if cancel, ok := s.cancels[req.ID]; ok {
+			cancel()
+		}
+		s.cMu.Unlock()
+		return req, nil, false
+	}
+	if req.Op == OpServe || !IsKnownOp(req.Op) {
+		s.writeErr(req.ID, req.Op, Errorf(InvalidConfig, "unknown operation %q", req.Op))
+		return req, nil, false
+	}
+	body := []byte(req.Request)
+	if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
+		body = nil
+	}
+	return req, body, true
+}
+
+// answer runs one request and writes its response.
+func (s *serveSession) answer(ctx context.Context, req ServeRequest, body []byte) {
+	resp, err := dispatch(ctx, s.p, req.Op, bytes.NewReader(body))
+	if err != nil {
+		s.writeErr(req.ID, req.Op, AsError(err))
+		return
+	}
+	s.write(req.ID, resp)
+}
+
+// end returns the exit code once stdin has closed or failed.
+func (s *serveSession) end(err error) int {
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.writeErr("", OpServe, Errorf(InvalidConfig, "reading requests: %v", err))
+		return ExitError
+	}
+	return ExitOK
+}
+
+func (s *serveSession) write(id string, msg any) {
+	b, err := json.Marshal(msg)
+	if err != nil {
+		b, _ = json.Marshal(errorResponseMsg{typeMeta: meta(kindError), Error: Error{Code: Internal, Message: err.Error()}})
+	}
+	line, _ := json.Marshal(ServeResponse{ID: id, Response: b})
+	s.outMu.Lock()
+	defer s.outMu.Unlock()
+	_, _ = s.stdout.Write(append(line, '\n'))
+}
+
+func (s *serveSession) writeErr(id, op string, e *Error) {
+	if e.Code == "" {
+		e.Code = Internal
+	}
+	s.write(id, errorResponseMsg{typeMeta: meta(kindError), Error: *e})
+	fmt.Fprintf(s.stderr, "%s %s: %v\n", progName(), op, e)
 }

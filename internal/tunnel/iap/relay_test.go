@@ -1,9 +1,12 @@
 package iap
 
 import (
+	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -29,8 +32,11 @@ type fakeRelay struct {
 	srv *httptest.Server
 	wg  sync.WaitGroup // handlers, which outlive the server's own tracking once hijacked
 
+	pki *testPKI // the CA of the relay's certificate, for relays started with one
+
 	mu       sync.Mutex
 	requests []*http.Request
+	dialed   []string // the addresses tunnels asked for, through hostOptions
 	sessions map[string]*fakeSession
 	nextSID  int
 	socks    []*websocket.Conn
@@ -70,6 +76,25 @@ func newFakeTLSRelay(t *testing.T) *fakeRelay {
 	return startFakeRelay(t, httptest.NewTLSServer)
 }
 
+// newFakePKIRelay starts a relay whose certificate pki issued for hosts,
+// so that it can stand in for them through hostOptions. clientAuth says
+// whether it asks for a client certificate, which pki must have issued.
+func newFakePKIRelay(t *testing.T, pki *testPKI, clientAuth tls.ClientAuthType, hosts ...string) *fakeRelay {
+	t.Helper()
+	r := startFakeRelay(t, func(h http.Handler) *httptest.Server {
+		srv := httptest.NewUnstartedServer(h)
+		srv.TLS = &tls.Config{
+			Certificates: []tls.Certificate{pki.serverCert(t, hosts...)},
+			ClientAuth:   clientAuth,
+			ClientCAs:    pki.pool,
+		}
+		srv.StartTLS()
+		return srv
+	})
+	r.pki = pki
+	return r
+}
+
 func startFakeRelay(t *testing.T, start func(http.Handler) *httptest.Server) *fakeRelay {
 	t.Helper()
 	r := &fakeRelay{t: t, sessions: map[string]*fakeSession{}}
@@ -94,12 +119,26 @@ func (r *fakeRelay) url() string { return "ws" + strings.TrimPrefix(r.srv.URL, "
 
 // options are the Dial options that point at the relay with the test token.
 func (r *fakeRelay) options(extra ...Option) []Option {
+	return append([]Option{WithRelayURL(r.url())}, r.hostOptions(extra...)...)
+}
+
+// hostOptions are the Dial options for the test token and the relay's
+// certificate, without a relay URL. The tunnel chooses its relay host and
+// reaches this relay whatever the host, as if DNS sent it here.
+func (r *fakeRelay) hostOptions(extra ...Option) []Option {
 	opts := []Option{
-		WithRelayURL(r.url()),
 		WithTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: testToken})),
 		withReconnectBackoff(10*time.Millisecond, 50*time.Millisecond),
+		withNetDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			r.set(func() { r.dialed = append(r.dialed, addr) })
+			var d net.Dialer
+			return d.DialContext(ctx, network, r.srv.Listener.Addr().String())
+		}),
 	}
-	if r.srv.TLS != nil {
+	switch {
+	case r.pki != nil:
+		opts = append(opts, WithTLSConfig(&tls.Config{RootCAs: r.pki.pool}))
+	case r.srv.TLS != nil:
 		opts = append(opts, WithTLSConfig(r.srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()))
 	}
 	return append(opts, extra...)

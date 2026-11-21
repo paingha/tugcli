@@ -131,6 +131,40 @@ esac`,
 			contains: "still running",
 		},
 		{
+			name: "cluster config without provideClusterInfo",
+			script: `case "$1" in
+  ` + goodDescribe + `
+  list) cat >/dev/null; echo '{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[{"id":"c","name":"c","endpoints":{"public":"https://c.example"}}]}' ;;
+  credential) cat >/dev/null; echo '{"apiVersion":"provider/v1alpha1","kind":"CredentialResponse","credential":{"type":"delegate","exec":{"command":"cp-creds","clusterConfig":{"audience":"c"}}}}' ;;
+  ` + unknown + `
+esac`,
+			opts:     Options{Name: "bad", Account: provider.Account{ID: "a"}},
+			failing:  "credential is valid and unexpired",
+			contains: "without exec.provideClusterInfo",
+		},
+		{
+			name: "tunnel with a password",
+			script: `case "$1" in
+  ` + goodDescribe + `
+  list) cat >/dev/null; echo '{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[{"id":"a","name":"a","endpoints":{"public":"https://10.0.0.1"},"tunnel":"http://u:secret@proxy.example.com:3128"}]}' ;;
+  ` + unknown + `
+esac`,
+			opts:     Options{Name: "bad", Account: provider.Account{ID: "a"}},
+			failing:  "list returns valid clusters",
+			contains: "carries a password",
+		},
+		{
+			name: "tunnel that is not a URL",
+			script: `case "$1" in
+  ` + goodDescribe + `
+  list) cat >/dev/null; echo '{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[{"id":"a","name":"a","endpoints":{"public":"https://10.0.0.1"},"tunnel":"bastion.example.com"}]}' ;;
+  ` + unknown + `
+esac`,
+			opts:     Options{Name: "bad", Account: provider.Account{ID: "a"}},
+			failing:  "list returns valid clusters",
+			contains: "tunnel is not a URL",
+		},
+		{
 			name: "describe names another provider",
 			script: `case "$1" in
   ` + goodDescribe + `

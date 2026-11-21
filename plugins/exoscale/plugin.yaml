@@ -1,0 +1,29 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: exoscale
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/exoscale
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-exoscale}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-exoscale}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-exoscale}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-exoscale}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-exoscale.exe}
+  secrets:
+  - {name: api_key, prompt: "Exoscale API key (EXO...)"}
+  - {name: api_secret, prompt: "Exoscale API secret"}
+  env: []
+  # One API endpoint per zone, api-<zone>.exoscale.com.
+  network: ["api-*.exoscale.com"]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "API endpoint override (https); {zone} stands for the zone's name"}
+      zones: {type: string, description: "zones to list, comma separated, such as ch-gva-2,de-fra-1 (default: every zone)"}
+      user: {type: string, description: "user name in generated kubeconfigs, the client certificate's common name (default: tug)"}
+      groups: {type: string, description: "Kubernetes groups of generated kubeconfigs, comma separated (default: system:masters)"}

@@ -116,3 +116,50 @@ func (b *syncBuffer) String() string {
 	defer func() { <-b.mu }()
 	return b.buf.String()
 }
+
+// lineReader hands out one line per Read and calls before ahead of each one,
+// so a test can see what was written before serve asked for more.
+type lineReader struct {
+	lines  []string
+	before func(next int)
+	next   int
+}
+
+func (r *lineReader) Read(p []byte) (int, error) {
+	r.before(r.next)
+	if r.next == len(r.lines) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.lines[r.next]+"\n")
+	r.next++
+	return n, nil
+}
+
+// TestServeInOrderAnswersBeforeReading checks the loop WebAssembly plugins
+// use: each request is answered before the next line is read, since a read
+// there blocks the whole module.
+func TestServeInOrderAnswersBeforeReading(t *testing.T) {
+	var out bytes.Buffer
+	in := &lineReader{lines: []string{
+		`{"id":"1","op":"describe"}`,
+		`{"id":"1","cancel":true}`,
+		`{"id":"2","op":"nope"}`,
+		`{"id":"3","op":"list","request":{"account":{"id":"a"},"secrets":{"api_token":"good"}}}`,
+	}}
+	answered := []int{0, 1, 1, 2, 3} // responses written before each read
+	in.before = func(next int) {
+		if got := strings.Count(out.String(), "\n"); got != answered[next] {
+			t.Errorf("before reading line %d, %d responses were written, want %d", next+1, got, answered[next])
+		}
+	}
+	s := &serveSession{p: fake{}, stdout: &out, stderr: io.Discard, cancels: map[string]context.CancelFunc{}}
+	if code := s.inOrder(context.Background(), in); code != ExitOK {
+		t.Fatalf("inOrder exit %d, want %d", code, ExitOK)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	for i, want := range []string{`"id":"1"`, `"id":"2"`, `"id":"3"`} {
+		if i >= len(lines) || !strings.Contains(lines[i], want) {
+			t.Fatalf("responses = %q, want %s at %d", lines, want, i)
+		}
+	}
+}

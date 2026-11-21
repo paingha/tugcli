@@ -155,7 +155,8 @@ func newFake(t *testing.T) (*fakeAPI, *Provider) {
 			clusterProfile("fleet", "old", "credentialProviders", accessProvider("google", "https://old.example.com")),
 			clusterProfile("fleet", "unmatched", "accessProviders", accessProvider("oidc", "https://oidc.example.com")),
 			clusterProfile("fleet", "pending", ""),
-			clusterProfile("other", "reader", "accessProviders", accessProvider("secretreader", "https://reader.example.com")),
+			clusterProfile("other", "reader", "accessProviders", accessProvider("secretreader", "https://reader.example.com",
+				extension("client.authentication.k8s.io/exec", map[string]any{"clusterName": "reader", "port": 6443}))),
 		},
 	}
 	srv := httptest.NewServer(f)
@@ -205,10 +206,14 @@ func TestList(t *testing.T) {
 	if old := byID["fleet/old"]; old.Endpoints.Public != "https://old.example.com" {
 		t.Fatalf("old = %+v, want its deprecated credentialProviders read", old)
 	}
-	// The plugin needs cluster information tug cannot pass, so there is
-	// nothing to store at import; Credential says why.
-	if byID["other/reader"].Credential != nil {
-		t.Fatal("other/reader has an inline credential")
+	// The secretreader plugin asks for cluster information, so it gets the
+	// profile's exec extension as its cluster config.
+	if c := byID["other/reader"].Credential; c == nil || !c.Exec.ProvideClusterInfo || string(c.Exec.ClusterConfig) != `{"clusterName":"reader","port":6443}` {
+		t.Fatalf("other/reader credential = %+v, want cluster information with the exec extension", c)
+	}
+	// azure's plugin does not ask, so the extension is not passed on.
+	if c := byID["fleet/aks-dev"].Credential; c == nil || c.Exec.ProvideClusterInfo || c.Exec.ClusterConfig != nil {
+		t.Fatalf("fleet/aks-dev credential = %+v, want no cluster information", c)
 	}
 	if !f.requested("/apis/multicluster.x-k8s.io/v1alpha2/clusterprofiles") {
 		t.Fatal("List did not read v1alpha2 ClusterProfiles in every namespace")
@@ -291,6 +296,32 @@ func TestCredential(t *testing.T) {
 	}
 }
 
+func TestCredentialWithClusterInfo(t *testing.T) {
+	f, p := newFake(t)
+	f.profiles = append(f.profiles, clusterProfile("other", "plain", "accessProviders", accessProvider("secretreader", "https://plain.example.com")))
+	tests := []struct {
+		id         string
+		wantConfig string // "" means none
+	}{
+		{"other/reader", `{"clusterName":"reader","port":6443}`},
+		{"other/plain", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			c, err := p.Credential(context.Background(), provider.CredentialRequest{Account: account(t, providersJSON), ClusterID: tt.id})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Validate(); err != nil {
+				t.Fatalf("Credential(%s) = %+v, which is invalid: %v", tt.id, c.Exec, err)
+			}
+			if c.Exec.Command != "/bin/secretreader-plugin" || !c.Exec.ProvideClusterInfo || string(c.Exec.ClusterConfig) != tt.wantConfig {
+				t.Fatalf("Credential(%s) = %+v, want secretreader-plugin with cluster information and config %q", tt.id, c.Exec, tt.wantConfig)
+			}
+		})
+	}
+}
+
 func TestCredentialRefusals(t *testing.T) {
 	f, p := newFake(t)
 	f.profiles = append(f.profiles, clusterProfile("fleet", "bad-args", "accessProviders",
@@ -300,7 +331,6 @@ func TestCredentialRefusals(t *testing.T) {
 		code provider.Code
 		msg  string
 	}{
-		{"other/reader", provider.Unimplemented, "provideClusterInfo"},
 		{"fleet/unmatched", provider.NotFound, "offers no access provider"},
 		{"fleet/gone", provider.NotFound, "reading ClusterProfile fleet/gone"},
 		{"fleet/bad-args", provider.InvalidConfig, "not a list of strings"},

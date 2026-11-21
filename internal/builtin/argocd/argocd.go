@@ -135,6 +135,9 @@ type clusterConfig struct {
 		APIVersion         string            `json:"apiVersion"`
 		InstallHint        string            `json:"installHint"`
 		ProvideClusterInfo bool              `json:"provideClusterInfo"`
+		// Config is what Argo CD passes as spec.cluster.config, as a
+		// kubeconfig's client.authentication.k8s.io/exec extension.
+		Config json.RawMessage `json:"config"`
 	} `json:"execProviderConfig"`
 	ProxyURL string `json:"proxyUrl"`
 }
@@ -285,10 +288,6 @@ func (p *Provider) credential(acct provider.Account, c *cluster) (provider.Crede
 		if e.Command == "" {
 			return provider.Credential{}, provider.Errorf(provider.InvalidConfig, "Argo CD cluster Secret %s has an execProviderConfig without a command", c.secret)
 		}
-		if e.ProvideClusterInfo {
-			return provider.Credential{}, provider.Errorf(provider.Unimplemented,
-				"Argo CD cluster Secret %s asks for provideClusterInfo, and tug cannot pass cluster information to exec plugins", c.secret)
-		}
 		if !allowExec(acct) {
 			return provider.Credential{}, provider.Errorf(provider.PermissionDenied,
 				"Argo CD cluster Secret %s gets its credential by running %q, and tug runs commands from a cluster only when the account allows it", c.secret, e.Command).
@@ -298,6 +297,12 @@ func (p *Provider) credential(acct provider.Account, c *cluster) (provider.Crede
 		cred.Exec.Env = maps.Clone(e.Env)
 		cred.Exec.APIVersion = e.APIVersion
 		cred.Exec.InstallHint = e.InstallHint
+		// Like client-go, which Argo CD hands both to, tug passes the
+		// config only to a command that asks for cluster information.
+		if e.ProvideClusterInfo {
+			cred.Exec.ProvideClusterInfo = true
+			cred.Exec.ClusterConfig = e.Config
+		}
 		return cred, nil
 	case cfg.BearerToken != "":
 		return provider.Token(cfg.BearerToken, p.now().Add(credentialTTL)), nil

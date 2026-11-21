@@ -190,7 +190,16 @@ class Endpoints:
 @dataclass
 class ExecConfig:
     """A command that prints a client.authentication.k8s.io ExecCredential,
-    for example a vendor's own kubectl exec plugin."""
+    for example a vendor's own kubectl exec plugin.
+
+    provide_cluster_info asks tug to tell the command which cluster it
+    authenticates to, as kubectl does for a kubeconfig exec plugin that sets
+    provideClusterInfo: KUBERNETES_EXEC_INFO then has a spec.cluster with the
+    cluster's server, CA data, TLS server name, insecure flag and proxy URL.
+    cluster_config, any JSON value or None, is passed as spec.cluster.config,
+    which kubectl fills from the cluster's client.authentication.k8s.io/exec
+    kubeconfig extension. It needs provide_cluster_info and is not meant for
+    secrets."""
 
     command: str
     args: list[str] = field(default_factory=list)
@@ -198,6 +207,8 @@ class ExecConfig:
     api_version: str = ""
     interactive_mode: str = ""
     install_hint: str = ""
+    provide_cluster_info: bool = False
+    cluster_config: Any = None
 
     def to_dict(self) -> dict[str, Any]:
         """Returns the JSON object for the command."""
@@ -212,6 +223,10 @@ class ExecConfig:
             d["interactiveMode"] = self.interactive_mode
         if self.install_hint:
             d["installHint"] = self.install_hint
+        if self.provide_cluster_info:
+            d["provideClusterInfo"] = True
+        if self.cluster_config is not None:
+            d["clusterConfig"] = sorted_map(self.cluster_config)
         return d
 
     @classmethod
@@ -225,6 +240,8 @@ class ExecConfig:
             api_version=f.string("apiVersion"),
             interactive_mode=f.string("interactiveMode"),
             install_hint=f.string("installHint"),
+            provide_cluster_info=f.boolean("provideClusterInfo"),
+            cluster_config=f.raw("clusterConfig"),
         )
 
 
@@ -261,6 +278,10 @@ class Credential:
         elif self.type == CREDENTIAL_DELEGATE:
             if self.exec is None or not self.exec.command:
                 raise ValueError("delegate credential needs exec.command")
+            if self.exec.cluster_config is not None and not self.exec.provide_cluster_info:
+                # kubectl passes the extension only with provideClusterInfo,
+                # so the command would never see it.
+                raise ValueError("delegate credential sets exec.clusterConfig without exec.provideClusterInfo")
         else:
             raise ValueError("unknown credential type %s" % quote(str(self.type)))
 
@@ -357,10 +378,13 @@ def delegate(
     api_version: str = "",
     interactive_mode: str = "",
     install_hint: str = "",
+    provide_cluster_info: bool = False,
+    cluster_config: Any = None,
 ) -> Credential:
     """Returns a credential that runs another exec plugin unchanged.
     install_hint tells users how to install the command when it is
-    missing."""
+    missing. provide_cluster_info and cluster_config tell it which cluster it
+    authenticates to, as ExecConfig describes."""
     return Credential(
         type=CREDENTIAL_DELEGATE,
         exec=ExecConfig(
@@ -370,6 +394,8 @@ def delegate(
             api_version=api_version,
             interactive_mode=interactive_mode,
             install_hint=install_hint,
+            provide_cluster_info=provide_cluster_info,
+            cluster_config=cluster_config,
         ),
     )
 
@@ -378,9 +404,11 @@ def delegate(
 class Cluster:
     """One Kubernetes cluster a provider can reach. id is stable for the
     life of the cluster within its account. ca_data is the cluster CA in
-    PEM. credential may be set when the provider already holds the
-    credential at list time; tug moves it to the keychain and never writes
-    it to the catalog."""
+    PEM. tunnel, written as for tug tunnel set, is how tug reaches an API
+    server that kubectl cannot reach directly; a tunnel the user sets wins
+    over it, and it must not carry a password. credential may be set when
+    the provider already holds the credential at list time; tug moves it to
+    the keychain and never writes it to the catalog."""
 
     id: str
     name: str
@@ -392,6 +420,7 @@ class Cluster:
     insecure_skip_tls_verify: bool = False
     proxy_url: str = ""
     default_namespace: str = ""
+    tunnel: str = ""
     labels: dict[str, str] = field(default_factory=dict)
     credential: Optional[Credential] = None
 
@@ -413,6 +442,8 @@ class Cluster:
             d["proxyURL"] = self.proxy_url
         if self.default_namespace:
             d["defaultNamespace"] = self.default_namespace
+        if self.tunnel:
+            d["tunnel"] = self.tunnel
         if self.labels:
             d["labels"] = sorted_map(self.labels)
         if self.credential is not None:
@@ -435,6 +466,7 @@ class Cluster:
             insecure_skip_tls_verify=f.boolean("insecureSkipTLSVerify"),
             proxy_url=f.string("proxyURL"),
             default_namespace=f.string("defaultNamespace"),
+            tunnel=f.string("tunnel"),
             labels=f.string_map("labels"),
             credential=None if cred is None else Credential.from_dict(cred, f.path("credential")),
         )
