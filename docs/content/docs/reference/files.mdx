@@ -26,6 +26,7 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
   <Folder name="~/.local/share/tug" defaultOpen>
     <File name="catalog.yaml" />
     <File name="pins.yaml" />
+    <File name="plugin-index-keys.yaml" />
     <File name="secrets.enc" />
     <Folder name="plugins" defaultOpen>
       <File name="links.yaml" />
@@ -34,6 +35,7 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
           <File name="plugin.yaml" />
           <Folder name="bin" />
         </Folder>
+        <File name="0.1.0.receipt.yaml" />
       </Folder>
     </Folder>
   </Folder>
@@ -61,6 +63,8 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
 | `pins.yaml` | The [pin files](/docs/guides/pins) you've allowed, by path and content. |
 | `secrets.enc` | The encrypted secret store, only if you use the `file` backend. |
 | `plugins/<name>/<version>/` | Installed plugins. `links.yaml` lists linked ones. |
+| `plugins/<name>/<version>.receipt.yaml` | How that version was installed: the archive's SHA-256, where it came from and who signed it, for [revocation](/docs/plugins/managing#revoked-plugins) checks and `tug plugin inspect`. |
+| `plugin-index-keys.yaml` | The newer signing key each [plugin index](/docs/plugins/indexes#changing-the-signing-key) has handed over to, so that one signed with the old key is refused. |
 | cache | API discovery data, to make commands faster. |
 | `sessions/<id>/` | One folder per terminal: its kubeconfig (no secrets), prompt text and state. |
 | `tugd.sock`, `tugd.log` | tugd's private control socket and its log. |

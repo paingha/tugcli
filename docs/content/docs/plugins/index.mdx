@@ -31,6 +31,7 @@ Plugins handle your credentials, so tug is careful with them:
 - **You see what it gets before you install.** `tug plugin install` shows the
   publisher, the secrets the plugin will receive, the environment variables
   it reads and the hosts it talks to, then asks you to confirm.
+  `tug plugin inspect` shows the same, and more, without installing anything.
 - **Checksums are verified.** The binary for your platform must match the
   SHA-256 in its manifest, at install time and every time it's loaded.
 - **Version checks.** A plugin that needs a newer tug (its `minTugVersion`) is
@@ -44,8 +45,14 @@ Plugins handle your credentials, so tug is careful with them:
   for the account it's working on.
 - **Built-ins can't be replaced by accident.** A plugin named `aws` is ignored
   unless you allow it in [`plugins.allowOverride`](/docs/reference/configuration).
-- **Timeouts.** Each call has a time limit (30 seconds to list, 10 seconds for a
-  credential), after which tug stops the plugin.
+- **Timeouts and limits.** Each call has a time limit (30 seconds to list, 10
+  seconds for a credential), after which tug stops the plugin, and
+  [`plugins.limits`](/docs/plugins/managing#limits) caps the CPU time and
+  memory any plugin gets.
+- **Revocations and pins.** An index can revoke a bad release, which tug then
+  refuses to install and warns you about if you have it, and you can
+  [pin](/docs/plugins/managing#pin-a-version) a plugin to a version you've
+  reviewed.
 
 ## Where to next
 
