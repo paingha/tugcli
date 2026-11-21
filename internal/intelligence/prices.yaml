@@ -1,0 +1,72 @@
+# The prices tug assumes for each model, in US dollars per million tokens at
+# the provider's standard rate (not batch, flex or priority, and the
+# short-context rate where a provider charges more for long prompts).
+#
+# tug matches a model id to the longest model below that starts it, so a
+# dated id such as claude-opus-5-5-20261101 takes its family's price. Every
+# row comes before any row that starts it (claude-opus-5-5 before
+# claude-opus-5), so reading the table top down finds the same row; a test
+# holds that. A model none of them starts has an unknown cost, never zero.
+# config.yaml's intelligence.prices adds rows or overrides these.
+#
+# cacheRead is the price of a prompt token read back from the provider's
+# cache, where the provider lists one; without it tug assumes a tenth of the
+# input price. Anthropic charges 1.25 times the input price to write the
+# cache.
+sources:
+  - provider: anthropic
+    url: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: "2026-11-03"
+  - provider: openai
+    url: https://developers.openai.com/api/docs/pricing
+    checked: "2026-11-21"
+  - provider: mistral
+    url: https://docs.mistral.ai/inference/pricing
+    checked: "2026-11-21"
+models:
+  # Anthropic.
+  - {provider: anthropic, model: claude-fable-5-2, input: 8, output: 40, cacheRead: 0.2}
+  - {provider: anthropic, model: claude-mythos-5-2, input: 8, output: 40, cacheRead: 0.2}
+  - {provider: anthropic, model: claude-fable-5-1, input: 10, output: 50}
+  - {provider: anthropic, model: claude-mythos-5-1, input: 10, output: 50}
+  - {provider: anthropic, model: claude-fable-5, input: 10, output: 50}
+  - {provider: anthropic, model: claude-opus-5-5, input: 4, output: 20, cacheRead: 0.2}
+  - {provider: anthropic, model: claude-opus-5, input: 5, output: 25}
+  - {provider: anthropic, model: claude-opus-4-8, input: 5, output: 25}
+  - {provider: anthropic, model: claude-opus-4-7, input: 5, output: 25}
+  - {provider: anthropic, model: claude-opus-4-6, input: 5, output: 25}
+  - {provider: anthropic, model: claude-sonnet-5-5, input: 2, output: 10, cacheRead: 0.1}
+  - {provider: anthropic, model: claude-sonnet-5, input: 2, output: 10}
+  - {provider: anthropic, model: claude-sonnet-4-6, input: 3, output: 15}
+  - provider: anthropic
+    model: claude-haiku-5-5
+    input: 0.1
+    output: 0.5
+    note: for prompts up to 100K tokens; longer ones cost $0.50 in and $2.50 out
+  - {provider: anthropic, model: claude-haiku-4-5, input: 1, output: 5}
+
+  # OpenAI.
+  - {provider: openai, model: gpt-6.2-astra, input: 8, output: 40, cacheRead: 0.4}
+  - {provider: openai, model: gpt-6.2-sol, input: 2, output: 10, cacheRead: 0.1}
+  - {provider: openai, model: gpt-6.1-terra, input: 1, output: 5, cacheRead: 0.05}
+  - {provider: openai, model: gpt-6-luna, input: 0.1, output: 0.5, cacheRead: 0.01}
+  - {provider: openai, model: gpt-5.4-mini, input: 0.75, output: 4.5, cacheRead: 0.075}
+  - {provider: openai, model: gpt-5.4-nano, input: 0.2, output: 1.25, cacheRead: 0.02}
+
+  # Mistral. Its pricing page lists Mistral Large 4 and Mistral Small 4 but
+  # no API ids; these rows price the -latest aliases and the ids on the model
+  # cards at those models' prices.
+  - provider: mistral
+    model: mistral-large-latest
+    input: 0.7
+    output: 2.1
+    cacheRead: 0.07
+    note: priced as Mistral Large 4, the large model Mistral's pricing page lists
+  - {provider: mistral, model: mistral-large-4, input: 0.7, output: 2.1, cacheRead: 0.07}
+  - provider: mistral
+    model: mistral-small-latest
+    input: 0.15
+    output: 0.6
+    cacheRead: 0.015
+    note: priced as Mistral Small 4, the small model Mistral's pricing page lists
+  - {provider: mistral, model: mistral-small-2603, input: 0.15, output: 0.6, cacheRead: 0.015}
