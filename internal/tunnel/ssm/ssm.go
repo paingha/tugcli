@@ -30,13 +30,9 @@ import (
 	"strconv"
 	"strings"
 
-	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/gorilla/websocket"
-
-	"github.com/paingha/tugcli/internal/version"
 )
 
 // Scheme is the URL scheme of SSM tunnels.
@@ -159,50 +155,14 @@ func WithLogger(l *slog.Logger) Option { return func(o *options) { o.log = l } }
 //
 // The context bounds starting the session and the handshake; once Dial has
 // returned, cancelling it does not affect the connection. Closing the
-// connection ends the session.
+// connection ends the session. Dial loads the AWS configuration on every
+// call; a Dialer loads it once for many connections.
 func Dial(ctx context.Context, cfg Config, address string, opts ...Option) (net.Conn, error) {
-	o := options{dialer: websocket.DefaultDialer, log: slog.New(slog.DiscardHandler)}
-	for _, opt := range opts {
-		opt(&o)
-	}
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	host, port, err := splitAddress(address)
+	d, err := NewDialer(cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
-	api, signer, err := o.clients(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	out, err := api.StartSession(ctx, &ssm.StartSessionInput{
-		Target:       awsv2.String(cfg.Target),
-		DocumentName: awsv2.String(DocumentName),
-		// localPortNumber only tells the Session Manager plugin where to
-		// listen; the document defaults it, and the agent ignores it.
-		Parameters: map[string][]string{"host": {host}, "portNumber": {port}},
-	})
-	if err != nil {
-		return nil, startError(cfg.Target, err)
-	}
-	sessionID := awsv2.ToString(out.SessionId)
-	streamURL := awsv2.ToString(out.StreamUrl)
-	token := awsv2.ToString(out.TokenValue)
-	log := o.log.With("session", sessionID, "target", cfg.Target, "address", address)
-	c := newConn(api, sessionID, address, log)
-	if sessionID == "" || streamURL == "" || token == "" {
-		// Best effort: the session is unusable either way.
-		_ = c.terminate()
-		return nil, fmt.Errorf("starting an SSM session on %s: StartSession returned no session, stream URL or token", cfg.Target)
-	}
-	log.Debug("started SSM session")
-	if err := c.open(ctx, o.dialer, signer, streamURL, token); err != nil {
-		// abort ends the session, whatever state the channel got to.
-		c.abort(err)
-		return nil, fmt.Errorf("opening SSM session %s on %s to %s: %w", sessionID, cfg.Target, address, err)
-	}
-	return c, nil
+	return d.Dial(ctx, address)
 }
 
 // splitAddress checks that address is host:port and returns its parts.
@@ -218,58 +178,6 @@ func splitAddress(address string) (host, port string, err error) {
 		return "", "", fmt.Errorf("tunnel address %q has no port between 1 and 65535", address)
 	}
 	return host, port, nil
-}
-
-// clients returns the SSM API and, when credentials are at hand, what signs
-// the data channel's WebSocket request.
-func (o *options) clients(ctx context.Context, cfg Config) (API, *streamSigner, error) {
-	if o.api != nil {
-		return o.api, nil, nil
-	}
-	awsCfg, err := loadConfig(ctx, cfg.Profile, cfg.Region)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading AWS configuration%s: %w", profileSuffix(cfg.Profile), err)
-	}
-	if awsCfg.Region == "" {
-		return nil, nil, fmt.Errorf("no AWS region for the SSM tunnel to %s; add ?region=<region> to the ssm:// URL or set a region in the AWS profile", cfg.Target)
-	}
-	if awsCfg.Credentials == nil {
-		return nil, nil, fmt.Errorf("no AWS credentials%s; configure the profile or set AWS_PROFILE", profileSuffix(cfg.Profile))
-	}
-	// Resolve credentials now so that an expired sign-in is reported as
-	// such. The SDK caches them, so the API calls reuse the result.
-	creds, err := awsCfg.Credentials.Retrieve(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolving AWS credentials%s; sign in again or refresh the profile's credentials: %w", profileSuffix(cfg.Profile), err)
-	}
-	var ssmOpts []func(*ssm.Options)
-	if o.endpoint != "" {
-		endpoint := o.endpoint
-		ssmOpts = append(ssmOpts, func(so *ssm.Options) { so.BaseEndpoint = &endpoint })
-	}
-	return ssm.NewFromConfig(awsCfg, ssmOpts...), &streamSigner{creds: creds, region: awsCfg.Region}, nil
-}
-
-// loadConfig loads the shared AWS configuration the way the built-in EKS
-// provider does: the named profile, or the default chain, with an explicit
-// region taking precedence over the profile's.
-func loadConfig(ctx context.Context, profile, region string) (awsv2.Config, error) {
-	var opts []func(*awsconfig.LoadOptions) error
-	if profile != "" {
-		opts = append(opts, awsconfig.WithSharedConfigProfile(profile))
-	}
-	if region != "" {
-		opts = append(opts, awsconfig.WithRegion(region))
-	}
-	opts = append(opts, awsconfig.WithAppID("tug/"+version.String()))
-	return awsconfig.LoadDefaultConfig(ctx, opts...)
-}
-
-func profileSuffix(profile string) string {
-	if profile == "" {
-		return ""
-	}
-	return fmt.Sprintf(" for profile %q", profile)
 }
 
 // startError explains why StartSession failed, with what to do about the

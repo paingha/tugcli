@@ -19,14 +19,14 @@ import (
 
 const (
 	testTarget    = "i-0123456789abcdef0"
-	testSessionID = "tug-test-0123456789"
+	testSessionID = "tug-test"
 	testToken     = "token-for-test"
 )
 
-// fakeAgent plays Session Manager and the SSM agent at the far end of a
-// data channel. It serves the WebSocket, runs the Port session handshake and
-// echoes input back as output, acknowledging, holding back and reordering
-// messages the way the agent does.
+// fakeAgent plays Session Manager and the SSM agent at the far end of data
+// channels. It issues sessions, serves their WebSockets, runs the Port
+// session handshake and echoes input back as output, acknowledging, holding
+// back and reordering messages the way the agent does.
 type fakeAgent struct {
 	agentVersion string
 	// actions are the handshake's requested actions; nil asks for a Port
@@ -44,23 +44,33 @@ type fakeAgent struct {
 	// this output.
 	closeWith *string
 
-	done chan struct{} // closed when the session ends
+	streamURL string
 
 	mu       sync.Mutex
 	problems []string
+	sessions []*agentSession
+	byToken  map[string]*agentSession
+}
+
+// agentSession is one session on the agent's side. Its protocol state is
+// used by one connection's handler at a time.
+type agentSession struct {
+	a    *fakeAgent
+	id   string
+	done chan struct{} // closed when the client ends the session
+
+	writeMu sync.Mutex // serialises writes to ws
+
+	mu       sync.Mutex
+	ws       *websocket.Conn
 	header   http.Header
-	hello    openDataChannel
+	hellos   []openDataChannel
 	inputs   []message     // every input message, resends included
 	acks     map[int64]int // output sequence numbers the client acknowledged
 	sent     []int64       // output sequence numbers sent, duplicates included
 	response *handshakeResponse
 	flags    []flag
-}
 
-// agentSession is the state of one data channel on the agent's side.
-type agentSession struct {
-	a        *fakeAgent
-	ws       *websocket.Conn
 	expected int64
 	held     map[int64]message
 	nextSeq  int64
@@ -83,17 +93,50 @@ func (a *fakeAgent) check(t *testing.T) {
 	}
 }
 
+// issue creates a session, as StartSession does, and returns its ID and
+// token.
+func (a *fakeAgent) issue() (id, token string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := len(a.sessions) + 1
+	s := &agentSession{a: a, id: fmt.Sprintf("%s-%d", testSessionID, n), done: make(chan struct{}),
+		acks: map[int64]int{}, held: map[int64]message{}}
+	token = testToken
+	if n > 1 {
+		token = fmt.Sprintf("%s-%d", testToken, n)
+	}
+	a.sessions = append(a.sessions, s)
+	if a.byToken == nil {
+		a.byToken = map[string]*agentSession{}
+	}
+	a.byToken[token] = s
+	return s.id, token
+}
+
+// session returns the nth session issued, counting from zero.
+func (a *fakeAgent) session(t *testing.T, n int) *agentSession {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if n >= len(a.sessions) {
+		t.Fatalf("the fake agent issued %d sessions, not %d", len(a.sessions), n+1)
+	}
+	return a.sessions[n]
+}
+
+func (a *fakeAgent) sessionCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.sessions)
+}
+
 func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
-	defer close(a.done)
 	ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 	if err != nil {
 		a.problem("upgrading: %v", err)
 		return
 	}
 	defer ws.Close()
-	a.mu.Lock()
-	a.header = r.Header.Clone()
-	a.mu.Unlock()
 
 	kind, data, err := ws.ReadMessage()
 	if err != nil {
@@ -106,15 +149,25 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	a.hello = hello
+	s := a.byToken[hello.TokenValue]
 	a.mu.Unlock()
-	if hello.TokenValue != testToken {
-		a.problem("token = %q, want %q", hello.TokenValue, testToken)
+	if s == nil {
+		a.problem("unknown token %q", hello.TokenValue)
 		return
 	}
+	s.mu.Lock()
+	s.ws = ws
+	s.header = r.Header.Clone()
+	s.hellos = append(s.hellos, hello)
+	first := len(s.hellos) == 1
+	s.mu.Unlock()
+	s.run(ws, first)
+}
 
-	s := &agentSession{a: a, ws: ws, held: map[int64]message{}}
-	if !a.silent {
+// run speaks the agent's side of one connection of the session.
+func (s *agentSession) run(ws *websocket.Conn, first bool) {
+	a := s.a
+	if first && !a.silent {
 		actions := a.actions
 		if actions == nil {
 			actions = []requestedAction{{
@@ -127,6 +180,7 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, data, err := ws.ReadMessage()
 		if err != nil {
+			close(s.done)
 			return
 		}
 		m, err := parseMessage(data)
@@ -145,6 +199,16 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// waitDone waits for the client to end the session's connection.
+func (s *agentSession) waitDone(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the fake agent's session %s did not end", s.id)
+	}
+}
+
 func (s *agentSession) acknowledged(m message) {
 	var a ackContent
 	if err := json.Unmarshal(m.Payload, &a); err != nil {
@@ -154,20 +218,17 @@ func (s *agentSession) acknowledged(m message) {
 	if a.MessageType != typeOutput || !a.Sequential || m.Flags != flagsAck {
 		s.a.problem("acknowledgement %+v with flags %d", a, m.Flags)
 	}
-	s.a.mu.Lock()
-	defer s.a.mu.Unlock()
-	if s.a.acks == nil {
-		s.a.acks = map[int64]int{}
-	}
-	s.a.acks[a.Sequence]++
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acks[a.Sequence]++
 }
 
 // input handles an input message the way the agent's data channel does:
 // in order, holding back and acknowledging messages that arrive early.
 func (s *agentSession) input(m message) {
-	s.a.mu.Lock()
-	s.a.inputs = append(s.a.inputs, m)
-	s.a.mu.Unlock()
+	s.mu.Lock()
+	s.inputs = append(s.inputs, m)
+	s.mu.Unlock()
 	if s.a.dropFirst && m.PayloadType == payloadOutput && !s.dropped {
 		s.dropped = true
 		return
@@ -202,9 +263,9 @@ func (s *agentSession) process(m message) {
 			s.a.problem("bad handshake response %q: %v", m.Payload, err)
 			return
 		}
-		s.a.mu.Lock()
-		s.a.response = &resp
-		s.a.mu.Unlock()
+		s.mu.Lock()
+		s.response = &resp
+		s.mu.Unlock()
 		for _, action := range resp.ProcessedClientActions {
 			if action.ActionStatus != actionSuccess {
 				return // the agent cancels the session
@@ -214,15 +275,15 @@ func (s *agentSession) process(m message) {
 		s.greet()
 		if s.a.closeWith != nil {
 			s.write(newMessage(typeChannelClosed, 0, flagsAck, 0, mustJSON(channelClosed{
-				MessageType: typeChannelClosed, SessionID: testSessionID, SchemaVersion: 1, Output: *s.a.closeWith,
+				MessageType: typeChannelClosed, SessionID: s.id, SchemaVersion: 1, Output: *s.a.closeWith,
 			}), time.Now()))
 		}
 	case payloadOutput:
 		s.send(payloadOutput, m.Payload)
 	case payloadFlag:
-		s.a.mu.Lock()
-		s.a.flags = append(s.a.flags, flag(binary.BigEndian.Uint32(m.Payload)))
-		s.a.mu.Unlock()
+		s.mu.Lock()
+		s.flags = append(s.flags, flag(binary.BigEndian.Uint32(m.Payload)))
+		s.mu.Unlock()
 	default:
 		s.a.problem("unexpected input payload type %d", m.PayloadType)
 	}
@@ -251,6 +312,8 @@ func (s *agentSession) ack(m message) {
 
 // next numbers an output message.
 func (s *agentSession) next(pt payloadType, payload []byte) message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var f uint64
 	if s.nextSeq == 0 {
 		f = 1 // SYN, as the agent sets on its first message
@@ -265,14 +328,35 @@ func (s *agentSession) send(pt payloadType, payload []byte) { s.write(s.next(pt,
 func (s *agentSession) sendJSON(pt payloadType, v any) { s.send(pt, mustJSON(v)) }
 
 func (s *agentSession) write(m message) {
+	s.mu.Lock()
 	if m.Type == typeOutput {
-		s.a.mu.Lock()
-		s.a.sent = append(s.a.sent, m.Sequence)
-		s.a.mu.Unlock()
+		s.sent = append(s.sent, m.Sequence)
 	}
+	ws := s.ws
+	s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	// A write can fail once the client has closed the WebSocket, as when
 	// acknowledging its last message; the client side is checked instead.
-	_ = s.ws.WriteMessage(websocket.BinaryMessage, m.marshal())
+	_ = ws.WriteMessage(websocket.BinaryMessage, m.marshal())
+}
+
+func (s *agentSession) hello() openDataChannel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hellos[len(s.hellos)-1]
+}
+
+func (s *agentSession) handshakeResponse() *handshakeResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.response
+}
+
+func (s *agentSession) flagsSent() []flag {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.flags)
 }
 
 func mustJSON(v any) []byte {
@@ -283,8 +367,10 @@ func mustJSON(v any) []byte {
 	return b
 }
 
-// fakeAPI is the SSM API: StartSession points at a fake agent.
+// fakeAPI is the SSM API. StartSession issues a session on the fake agent,
+// or, without one, points at streamURL.
 type fakeAPI struct {
+	agent     *fakeAgent
 	streamURL string
 	startErr  error
 
@@ -300,11 +386,11 @@ func (f *fakeAPI) StartSession(_ context.Context, in *ssm.StartSessionInput, _ .
 	if f.startErr != nil {
 		return nil, f.startErr
 	}
-	return &ssm.StartSessionOutput{
-		SessionId:  awsv2.String(testSessionID),
-		StreamUrl:  awsv2.String(f.streamURL),
-		TokenValue: awsv2.String(testToken),
-	}, nil
+	if f.agent == nil {
+		return &ssm.StartSessionOutput{SessionId: awsv2.String(testSessionID), StreamUrl: awsv2.String(f.streamURL), TokenValue: awsv2.String(testToken)}, nil
+	}
+	id, token := f.agent.issue()
+	return &ssm.StartSessionOutput{SessionId: awsv2.String(id), StreamUrl: awsv2.String(f.agent.streamURL), TokenValue: awsv2.String(token)}, nil
 }
 
 func (f *fakeAPI) TerminateSession(_ context.Context, in *ssm.TerminateSessionInput, _ ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error) {
@@ -320,27 +406,25 @@ func (f *fakeAPI) terminations() []string {
 	return slices.Clone(f.terminated)
 }
 
-// startAgent serves a over TLS and returns the stream URL and a dialer that
-// trusts the server.
-func startAgent(t *testing.T, a *fakeAgent) (string, *websocket.Dialer) {
+// startAgent serves a over TLS and returns a dialer that trusts the server.
+func startAgent(t *testing.T, a *fakeAgent) *websocket.Dialer {
 	t.Helper()
 	if a.agentVersion == "" {
 		a.agentVersion = "3.3.1142.0"
 	}
-	a.done = make(chan struct{})
 	srv := httptest.NewTLSServer(http.HandlerFunc(a.serve))
 	t.Cleanup(srv.Close)
 	tlsConfig := srv.Client().Transport.(*http.Transport).TLSClientConfig
-	streamURL := "wss://" + srv.Listener.Addr().String() + "/v1/data-channel/" + testSessionID + "?role=publish_subscribe"
-	return streamURL, &websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 5 * time.Second}
+	a.streamURL = "wss://" + srv.Listener.Addr().String() + "/v1/data-channel/session?role=publish_subscribe"
+	return &websocket.Dialer{TLSClientConfig: tlsConfig, HandshakeTimeout: 5 * time.Second}
 }
 
 // newFake starts a fake agent and returns the options that make Dial use
 // it through a fake SSM API.
 func newFake(t *testing.T, a *fakeAgent) (*fakeAPI, []Option) {
 	t.Helper()
-	streamURL, dialer := startAgent(t, a)
-	api := &fakeAPI{streamURL: streamURL}
+	dialer := startAgent(t, a)
+	api := &fakeAPI{agent: a}
 	return api, []Option{WithAPI(api), WithDialer(dialer)}
 }
 
@@ -353,15 +437,5 @@ func eventually(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-// waitDone waits for the fake agent's session to end.
-func (a *fakeAgent) waitDone(t *testing.T) {
-	t.Helper()
-	select {
-	case <-a.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the fake agent's session did not end")
 	}
 }

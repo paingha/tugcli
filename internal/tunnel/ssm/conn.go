@@ -940,8 +940,10 @@ func isClosed(ch chan struct{}) bool {
 // streamSigner signs the data channel's WebSocket request with SigV4 for the
 // ssmmessages service, as current Session Manager plugins do. Older plugins
 // relied on the session token alone, which Session Manager still accepts.
+// It takes credentials from the shared cache each time, so a resumed or
+// later session signs with fresh ones.
 type streamSigner struct {
-	creds  awsv2.Credentials
+	creds  awsv2.CredentialsProvider
 	region string
 }
 
@@ -949,11 +951,15 @@ type streamSigner struct {
 const emptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 func (s *streamSigner) header(ctx context.Context, streamURL string, now time.Time) (http.Header, error) {
+	creds, err := s.creds.Retrieve(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolving AWS credentials: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	if err := v4.NewSigner().SignHTTP(ctx, s.creds, req, emptyPayloadHash, "ssmmessages", s.region, now); err != nil {
+	if err := v4.NewSigner().SignHTTP(ctx, creds, req, emptyPayloadHash, "ssmmessages", s.region, now); err != nil {
 		return nil, err
 	}
 	return req.Header, nil

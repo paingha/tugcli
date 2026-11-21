@@ -71,17 +71,18 @@ func TestDialEchoesThroughTheDataChannel(t *testing.T) {
 		t.Fatal("echo differs from the data written")
 	}
 
-	agent.mu.Lock()
-	hello, resp := agent.hello, agent.response
+	s := agent.session(t, 0)
+	hello, resp := s.hello(), s.handshakeResponse()
+	s.mu.Lock()
 	var seqs []int64
 	var sizes []int
-	for _, m := range agent.inputs {
+	for _, m := range s.inputs {
 		if m.PayloadType == payloadOutput {
 			seqs = append(seqs, m.Sequence)
 			sizes = append(sizes, len(m.Payload))
 		}
 	}
-	agent.mu.Unlock()
+	s.mu.Unlock()
 
 	if hello.ClientVersion != clientVersion || hello.MessageSchemaVersion != "1.0" || hello.ClientID == "" || hello.RequestID == "" {
 		t.Errorf("open data channel request = %+v", hello)
@@ -103,14 +104,14 @@ func TestDialEchoesThroughTheDataChannel(t *testing.T) {
 
 	// Every output message is acknowledged, the duplicate twice.
 	eventually(t, "acknowledgements", func() bool {
-		agent.mu.Lock()
-		defer agent.mu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		want := map[int64]int{}
-		for _, seq := range agent.sent {
+		for _, seq := range s.sent {
 			want[seq]++
 		}
 		for seq, n := range want {
-			if agent.acks[seq] < n {
+			if s.acks[seq] < n {
 				return false
 			}
 		}
@@ -130,15 +131,12 @@ func TestDialEchoesThroughTheDataChannel(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Errorf("second Close() error = %v", err)
 	}
-	agent.waitDone(t)
-	agent.mu.Lock()
-	flags := slices.Clone(agent.flags)
-	agent.mu.Unlock()
-	if !slices.Equal(flags, []flag{flagTerminateSession}) {
+	s.waitDone(t)
+	if flags := s.flagsSent(); !slices.Equal(flags, []flag{flagTerminateSession}) {
 		t.Errorf("flags sent = %v, want [%d]", flags, flagTerminateSession)
 	}
-	if got := api.terminations(); !slices.Equal(got, []string{testSessionID}) {
-		t.Errorf("TerminateSession calls = %v, want [%s]", got, testSessionID)
+	if got := api.terminations(); !slices.Equal(got, []string{s.id}) {
+		t.Errorf("TerminateSession calls = %v, want [%s]", got, s.id)
 	}
 	if _, err := c.Read(make([]byte, 1)); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Read() after Close error = %v, want net.ErrClosed", err)
@@ -146,8 +144,8 @@ func TestDialEchoesThroughTheDataChannel(t *testing.T) {
 	if _, err := c.Write([]byte("x")); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Write() after Close error = %v, want net.ErrClosed", err)
 	}
-	if got := c.LocalAddr().String(); got != testSessionID {
-		t.Errorf("LocalAddr() = %q, want %q", got, testSessionID)
+	if got := c.LocalAddr().String(); got != s.id {
+		t.Errorf("LocalAddr() = %q, want %q", got, s.id)
 	}
 	if got := c.RemoteAddr(); got.Network() != "ssm" || got.String() != "10.0.0.1:443" {
 		t.Errorf("RemoteAddr() = %s %s, want ssm 10.0.0.1:443", got.Network(), got)
@@ -195,10 +193,9 @@ func TestDialRefusesWhatItCannotDo(t *testing.T) {
 			if tt.wantMsg != "" && !strings.Contains(err.Error(), tt.wantMsg) {
 				t.Errorf("Dial() error = %v, want it to mention %s", err, tt.wantMsg)
 			}
-			agent.waitDone(t)
-			agent.mu.Lock()
-			resp := agent.response
-			agent.mu.Unlock()
+			s := agent.session(t, 0)
+			s.waitDone(t)
+			resp := s.handshakeResponse()
 			if resp == nil || len(resp.ProcessedClientActions) != len(tt.actions) || len(resp.Errors) == 0 {
 				t.Fatalf("handshake response = %+v, want one result per action and an error", resp)
 			}
@@ -206,8 +203,8 @@ func TestDialRefusesWhatItCannotDo(t *testing.T) {
 			if last.ActionStatus == actionSuccess {
 				t.Errorf("handshake response %+v accepts %s", last, last.ActionType)
 			}
-			if got := api.terminations(); !slices.Equal(got, []string{testSessionID}) {
-				t.Errorf("TerminateSession calls = %v, want [%s]", got, testSessionID)
+			if got := api.terminations(); !slices.Equal(got, []string{s.id}) {
+				t.Errorf("TerminateSession calls = %v, want [%s]", got, s.id)
 			}
 			agent.check(t)
 		})
@@ -266,9 +263,10 @@ func TestDialStopsWithItsContext(t *testing.T) {
 	if took := time.Since(start); took > lingerTimeout {
 		t.Errorf("Dial() took %s after its context ended", took)
 	}
-	agent.waitDone(t)
-	if got := api.terminations(); !slices.Equal(got, []string{testSessionID}) {
-		t.Errorf("TerminateSession calls = %v, want [%s]", got, testSessionID)
+	s := agent.session(t, 0)
+	s.waitDone(t)
+	if got := api.terminations(); !slices.Equal(got, []string{s.id}) {
+		t.Errorf("TerminateSession calls = %v, want [%s]", got, s.id)
 	}
 	agent.check(t)
 }

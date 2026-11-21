@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -88,8 +89,9 @@ type apiCall struct {
 }
 
 // fakeSSMEndpoint serves the SSM JSON API's StartSession and
-// TerminateSession, so Dial runs through the real SDK client.
-func fakeSSMEndpoint(t *testing.T, streamURL string) (*httptest.Server, func() []apiCall) {
+// TerminateSession for the fake agent, so Dial runs through the real SDK
+// client.
+func fakeSSMEndpoint(t *testing.T, agent *fakeAgent) (*httptest.Server, func() []apiCall) {
 	t.Helper()
 	var (
 		mu    sync.Mutex
@@ -105,9 +107,10 @@ func fakeSSMEndpoint(t *testing.T, streamURL string) (*httptest.Server, func() [
 		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 		switch call.target {
 		case "AmazonSSM.StartSession":
-			fmt.Fprintf(w, `{"SessionId":%q,"StreamUrl":%q,"TokenValue":%q}`, testSessionID, streamURL, testToken)
+			id, token := agent.issue()
+			fmt.Fprintf(w, `{"SessionId":%q,"StreamUrl":%q,"TokenValue":%q}`, id, agent.streamURL, token)
 		case "AmazonSSM.TerminateSession":
-			fmt.Fprintf(w, `{"SessionId":%q}`, testSessionID)
+			fmt.Fprintf(w, `{"SessionId":%q}`, call.body["SessionId"])
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"__type":"UnknownOperationException","message":"unknown operation"}`)
@@ -149,8 +152,8 @@ func TestDialThroughTheSSMAPI(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			agent := &fakeAgent{}
-			streamURL, dialer := startAgent(t, agent)
-			endpoint, calls := fakeSSMEndpoint(t, streamURL)
+			dialer := startAgent(t, agent)
+			endpoint, calls := fakeSSMEndpoint(t, agent)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
@@ -193,13 +196,14 @@ func TestDialThroughTheSSMAPI(t *testing.T) {
 				string(params) != `{"host":["10.0.0.1"],"portNumber":["443"]}` {
 				t.Errorf("StartSession body = %v", start)
 			}
-			if got[1].body["SessionId"] != testSessionID {
-				t.Errorf("TerminateSession body = %v, want SessionId %s", got[1].body, testSessionID)
+			s := agent.session(t, 0)
+			if got[1].body["SessionId"] != s.id {
+				t.Errorf("TerminateSession body = %v, want SessionId %s", got[1].body, s.id)
 			}
 
-			agent.mu.Lock()
-			upgrade := agent.header.Clone()
-			agent.mu.Unlock()
+			s.mu.Lock()
+			upgrade := s.header.Clone()
+			s.mu.Unlock()
 			if a := upgrade.Get("Authorization"); !strings.Contains(a, scope) || !strings.Contains(a, "/"+tt.wantRegion+"/ssmmessages/aws4_request") {
 				t.Errorf("data channel Authorization = %q, want a signature for ssmmessages in %s", a, tt.wantRegion)
 			}
@@ -209,4 +213,81 @@ func TestDialThroughTheSSMAPI(t *testing.T) {
 			agent.check(t)
 		})
 	}
+}
+
+// writeAWSFiles writes an AWS config and credentials file with the given
+// profiles, each with a region and fake keys.
+func writeAWSFiles(t *testing.T, config, credentials string, profiles ...string) {
+	t.Helper()
+	var cfg, creds strings.Builder
+	for _, p := range profiles {
+		fmt.Fprintf(&cfg, "[profile %s]\nregion = eu-west-1\n\n", p)
+		fmt.Fprintf(&creds, "[%s]\naws_access_key_id = AKIDTUGTEST\naws_secret_access_key = fake-secret\n\n", p)
+	}
+	if err := os.WriteFile(config, []byte(cfg.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(credentials, []byte(creds.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDialerSharesItsAWSConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "config")
+	credentials := filepath.Join(dir, "credentials")
+	writeAWSFiles(t, config, credentials)
+	isolateAWS(t, config, credentials)
+
+	agent := &fakeAgent{}
+	dialer := startAgent(t, agent)
+	endpoint, calls := fakeSSMEndpoint(t, agent)
+	d, err := NewDialer(Config{Target: testTarget, Profile: "pool"}, WithEndpoint(endpoint.URL), WithDialer(dialer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// A failed load is not kept: once the profile exists, Dial works.
+	if _, err := d.Dial(ctx, "10.0.0.1:443"); err == nil || !strings.Contains(err.Error(), `profile "pool"`) {
+		t.Fatalf("Dial() without the profile error = %v, want it to name the profile", err)
+	}
+	writeAWSFiles(t, config, credentials, "pool")
+	first, err := d.Dial(ctx, "10.0.0.1:443")
+	if err != nil {
+		t.Fatalf("Dial() once the profile exists error = %v", err)
+	}
+	defer first.Close()
+
+	// A loaded configuration is kept: the files no longer matter.
+	writeAWSFiles(t, config, credentials)
+	second, err := d.Dial(ctx, "10.0.0.1:443")
+	if err != nil {
+		t.Fatalf("second Dial() error = %v, want the shared configuration", err)
+	}
+	defer second.Close()
+	for _, c := range []net.Conn{first, second} {
+		if _, err := c.Write([]byte("ping")); err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(c, buf); err != nil || string(buf) != "ping" {
+			t.Fatalf("Read() = %q, %v, want %q", buf, err, "ping")
+		}
+	}
+	if n := agent.sessionCount(); n != 2 {
+		t.Errorf("sessions = %d, want one per connection", n)
+	}
+	starts := 0
+	for _, c := range calls() {
+		if c.target == "AmazonSSM.StartSession" {
+			starts++
+		}
+	}
+	if starts != 2 {
+		t.Errorf("StartSession calls = %d, want 2", starts)
+	}
+	agent.check(t)
 }
