@@ -115,7 +115,7 @@ func (p IndexPlugin) Latest() (IndexVersion, bool) {
 
 // Version returns the named version.
 func (p IndexPlugin) Version(v string) (IndexVersion, bool) {
-	i := slices.IndexFunc(p.Versions, func(x IndexVersion) bool { return strings.TrimPrefix(x.Version, "v") == strings.TrimPrefix(v, "v") })
+	i := slices.IndexFunc(p.Versions, func(x IndexVersion) bool { return sameVersion(x.Version, v) })
 	if i < 0 {
 		return IndexVersion{}, false
 	}

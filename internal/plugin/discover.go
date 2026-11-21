@@ -27,6 +27,30 @@ type Dirs struct {
 	// PreferWASM runs a plugin's WebAssembly build even when it also has a
 	// build for this machine.
 	PreferWASM bool
+	// Pins maps a plugin's name to the one version of it that may be
+	// installed and run, as plugins.pins in config.yaml says. Discover
+	// runs that version of an installed plugin rather than the highest.
+	Pins map[string]string
+}
+
+// ErrPinned is returned for a plugin version other than the one it is
+// pinned to.
+var ErrPinned = errors.New("pinned to another version")
+
+// Pin returns the version the named plugin is pinned to, if any.
+func (d Dirs) Pin(name string) (string, bool) {
+	v, ok := d.Pins[name]
+	return v, ok && v != ""
+}
+
+// CheckPin returns an error wrapping ErrPinned when m's plugin is pinned to
+// a version other than m's.
+func (d Dirs) CheckPin(m *Manifest) error {
+	pin, ok := d.Pin(m.Metadata.Name)
+	if !ok || sameVersion(pin, m.Metadata.Version) {
+		return nil
+	}
+	return fmt.Errorf("%s is %w: plugins.pins in config.yaml pins it to %s, and this is %s", m.Metadata.Name, ErrPinned, pin, m.Metadata.Version)
 }
 
 func (d Dirs) load(dir string, dev bool) (*Plugin, error) {
@@ -108,7 +132,7 @@ func (d Dirs) Discover() ([]*Plugin, []Problem) {
 		if !n.IsDir() || strings.HasPrefix(n.Name(), ".") { // skip staging dirs
 			continue
 		}
-		dir, err := latestVersionDir(filepath.Join(d.Installed, n.Name()))
+		dir, err := d.versionDir(filepath.Join(d.Installed, n.Name()), n.Name())
 		if err != nil {
 			problems = append(problems, Problem{Location: filepath.Join(d.Installed, n.Name()), Err: err})
 			continue
@@ -250,9 +274,10 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// latestVersionDir picks the highest version directory under a plugin's
-// install directory.
-func latestVersionDir(dir string) (string, error) {
+// versionDir picks the version directory to run under a plugin's install
+// directory: the pinned version when the plugin is pinned, and the highest
+// otherwise.
+func (d Dirs) versionDir(dir, name string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", err
@@ -267,8 +292,22 @@ func latestVersionDir(dir string) (string, error) {
 		return "", errors.New("no versions installed")
 	}
 	sort.Slice(versions, func(i, j int) bool { return compareVersions(versions[i], versions[j]) > 0 })
-	return filepath.Join(dir, versions[0]), nil
+	pin, ok := d.Pin(name)
+	if !ok {
+		return filepath.Join(dir, versions[0]), nil
+	}
+	for _, v := range versions {
+		if sameVersion(v, pin) {
+			return filepath.Join(dir, v), nil
+		}
+	}
+	return "", fmt.Errorf("%s is pinned to %s in config.yaml, which is not installed (installed: %s); run `tug plugin install %s@%s`",
+		name, pin, strings.Join(versions, ", "), name, pin)
 }
+
+// sameVersion reports whether a and b name the same version, with or
+// without a leading v.
+func sameVersion(a, b string) bool { return strings.TrimPrefix(a, "v") == strings.TrimPrefix(b, "v") }
 
 // compareVersions compares dotted numeric versions such as 0.3.0 or v1.2;
 // non-numeric parts compare as strings.

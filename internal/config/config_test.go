@@ -548,3 +548,60 @@ func TestWriteFileAtomicErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestSetPluginPin(t *testing.T) {
+	clearConfigEnv(t)
+	tests := []struct {
+		name, before, version, want, was string
+	}{
+		{"new file", "", "0.3.1", "plugins:\n  pins:\n    acme: \"0.3.1\"\n", ""},
+		{"only comments", "# my settings\n", "1.10", "# my settings\nplugins:\n  pins:\n    acme: \"1.10\"\n", ""},
+		{
+			"keeps the rest",
+			"# keyring first\nkeyring: {backend: file}\nplugins:\n  # trusted\n  allowOverride: [aws]\n",
+			"0.3.1",
+			"# keyring first\nkeyring: {backend: file}\nplugins:\n  # trusted\n  allowOverride: [aws]\n  pins:\n    acme: \"0.3.1\"\n",
+			"",
+		},
+		{"replaces", "plugins:\n  pins:\n    acme: 0.2.0 # old\n    other: \"1\"\n", "0.3.1", "plugins:\n  pins:\n    acme: \"0.3.1\"\n    other: \"1\"\n", "0.2.0"},
+		{"empty plugins", "plugins:\n", "0.3.1", "plugins:\n  pins:\n    acme: \"0.3.1\"\n", ""},
+		{"removes", "plugins:\n  pins:\n    acme: 0.2.0\n    other: \"1\"\n", "", "plugins:\n  pins:\n    other: \"1\"\n", "0.2.0"},
+		{"removes nothing", "kubectl: kubectl\n", "", "kubectl: kubectl\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.before != "" {
+				if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(tt.before), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			was, err := SetPluginPin(dir, "acme", tt.version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if was != tt.was {
+				t.Errorf("SetPluginPin returned %q as the old pin, want %q", was, tt.was)
+			}
+			b, _ := os.ReadFile(filepath.Join(dir, "config.yaml"))
+			if tt.before == "" && tt.version == "" {
+				return
+			}
+			if string(b) != tt.want {
+				t.Errorf("config.yaml =\n%s\nwant\n%s", b, tt.want)
+			}
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := c.Plugins.PluginPin("acme"); got != tt.version {
+				t.Errorf("PluginPin(acme) = %q, want %q", got, tt.version)
+			}
+		})
+	}
+
+	dir := writeConfig(t, "plugins: [1, 2]\n")
+	if _, err := SetPluginPin(dir, "acme", "0.1.0"); err == nil {
+		t.Error("SetPluginPin on a plugins list succeeded, want an error")
+	}
+}

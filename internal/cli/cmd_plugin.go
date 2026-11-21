@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/importer"
 	"github.com/paingha/tugcli/internal/plugin"
@@ -46,6 +47,7 @@ func (a *app) pluginDirs() plugin.Dirs {
 	d := plugin.NewDirs(a.paths.Data)
 	d.TugVersion = version.String()
 	d.PreferWASM = a.cfg.Plugins.WASM.Prefer
+	d.Pins = a.cfg.Plugins.Pins
 	return d
 }
 
@@ -61,9 +63,10 @@ func newPluginLsCmd(a *app) *cobra.Command {
 			for _, name := range reg.Names() {
 				e, _ := reg.Entry(name)
 				info := e.Provider.Info()
-				rows = append(rows, []string{name, dash(info.Version), e.Kind.String(), info.Capabilities.String(), dash(e.Location)})
+				pin, _ := a.cfg.Plugins.PluginPin(name)
+				rows = append(rows, []string{name, dash(info.Version), dash(pin), e.Kind.String(), info.Capabilities.String(), dash(e.Location)})
 			}
-			if err := render.Table(a.stdout, []string{"NAME", "VERSION", "KIND", "CAPABILITIES", "LOCATION"}, rows); err != nil {
+			if err := render.Table(a.stdout, []string{"NAME", "VERSION", "PINNED", "KIND", "CAPABILITIES", "LOCATION"}, rows); err != nil {
 				return err
 			}
 			for _, p := range a.problems {
@@ -78,6 +81,9 @@ type installOptions struct {
 	sha256 string
 	yes    bool
 	force  bool
+	// pin pins the plugin to the version installed, replacing any pin it
+	// has, rather than refusing a version other than its pin.
+	pin bool
 	// wantName is the plugin an index promised the archive holds, and
 	// wantVersion its version.
 	wantName    string
@@ -101,7 +107,11 @@ will receive and the hosts it talks to, and asks you to confirm.
 
 A plain name, or name@version, installs from the signed plugin indexes in
 plugins.indexes: the index's signature, the archive's sha256 and every
-binary's sha256 are all checked. When the index names a Sigstore signature
+binary's sha256 are all checked.
+
+A plugin pinned in plugins.pins in config.yaml installs at its pinned
+version, and any other version is refused. --pin installs the version given
+and pins the plugin to it, replacing its pin. When the index names a Sigstore signature
 for the archive, tug downloads the bundle and checks it first: the Fulcio
 certificate chain, the Rekor transparency log entry and that the signer is
 the one the index names. With plugins.requireSignatures set in config.yaml,
@@ -110,6 +120,7 @@ has no index to name its signer, so tug checks no signature on it and warns
 that it is unsigned.`,
 		Example: `  tug plugin install acme
   tug plugin install acme@0.1.0
+  tug plugin install acme@0.1.0 --pin   # and keep it at 0.1.0
   tug plugin install ./tug-provider-acme_0.1.0.tar.gz
   tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz --sha256 9f2c...`,
 		Args: cobra.ExactArgs(1),
@@ -120,6 +131,7 @@ that it is unsigned.`,
 	cmd.Flags().StringVar(&o.sha256, "sha256", "", "expected sha256 of the archive (required for URLs)")
 	cmd.Flags().BoolVarP(&o.yes, "yes", "y", false, "install without asking")
 	cmd.Flags().BoolVar(&o.force, "force", false, "replace the same version if it is installed")
+	cmd.Flags().BoolVar(&o.pin, "pin", false, "pin the plugin to the version installed, in plugins.pins in config.yaml")
 	return cmd
 }
 
@@ -144,7 +156,11 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		}
 		// A bare name, or name@version, comes from a signed index, which
 		// pins the archive's sha256.
-		m, v, err := a.resolveIndexed(ctx, src)
+		ref, err := a.pinnedRef(src, o)
+		if err != nil {
+			return err
+		}
+		m, v, err := a.resolveIndexed(ctx, ref)
 		if err != nil {
 			return err
 		}
@@ -173,6 +189,14 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	m := staged.Plugin.Manifest
 	if o.wantName != "" && m.Metadata.Name != o.wantName {
 		return fmt.Errorf("the index lists %s, but the archive holds %s; not installed", o.wantName, m.Metadata.Name)
+	}
+	if o.wantVersion != "" && strings.TrimPrefix(m.Metadata.Version, "v") != strings.TrimPrefix(o.wantVersion, "v") {
+		return fmt.Errorf("the index lists %s %s, but the archive holds %s; not installed", o.wantName, o.wantVersion, m.Metadata.Version)
+	}
+	if !o.pin {
+		if err := dirs.CheckPin(m); err != nil {
+			return fmt.Errorf("%w; not installed. Pass --pin to install it and move the pin", err)
+		}
 	}
 	if e, ok := a.registry().Entry(m.Metadata.Name); ok && e.Kind == registry.KindBuiltin &&
 		!slices.Contains(a.cfg.Plugins.AllowOverride, m.Metadata.Name) {
@@ -215,8 +239,39 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		return err
 	}
 	fmt.Fprintf(a.stdout, "%s %s %s in %s\n", c.Green("Installed"), p.Name(), m.Metadata.Version, p.Dir)
+	if o.pin {
+		was, err := config.SetPluginPin(a.paths.Config, p.Name(), m.Metadata.Version)
+		if err != nil {
+			return fmt.Errorf("installed, but not pinned: %w", err)
+		}
+		if was != "" && was != m.Metadata.Version {
+			fmt.Fprintf(a.stdout, "Pinned %s to %s in config.yaml, which pinned it to %s\n", p.Name(), m.Metadata.Version, was)
+		} else {
+			fmt.Fprintf(a.stdout, "Pinned %s to %s in config.yaml\n", p.Name(), m.Metadata.Version)
+		}
+	}
 	fmt.Fprintf(a.stdout, "Next: tug import %s --account <id>\n", p.Name())
 	return nil
+}
+
+// pinnedRef returns the name[@version] to look up in the indexes for ref:
+// a pinned plugin named without a version means its pinned version, and a
+// version other than its pin is refused unless --pin moves the pin.
+func (a *app) pinnedRef(ref string, o installOptions) (string, error) {
+	name, version, _ := strings.Cut(ref, "@")
+	pin, ok := a.cfg.Plugins.PluginPin(name)
+	switch {
+	case !ok:
+		return ref, nil
+	case version == "" && !o.pin:
+		fmt.Fprintf(a.stderr, "%s is pinned to %s in config.yaml\n", name, pin)
+		return name + "@" + pin, nil
+	case version != "" && strings.TrimPrefix(version, "v") != strings.TrimPrefix(pin, "v") && !o.pin:
+		return "", fmt.Errorf("%s is %w: plugins.pins in config.yaml pins it to %s; not installed. Pass --pin to install %s and move the pin",
+			name, plugin.ErrPinned, pin, version)
+	default:
+		return ref, nil
+	}
 }
 
 // checkSignature checks the archive against the Sigstore signature its

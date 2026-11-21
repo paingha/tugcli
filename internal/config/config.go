@@ -146,6 +146,17 @@ type PluginsConfig struct {
 	// Sandbox confines plugins' native builds with the operating system's
 	// sandbox.
 	Sandbox SandboxConfig `json:"sandbox,omitzero"`
+	// Pins holds a version for each plugin that must stay at it, such as
+	// {acme: "0.3.1"}. tug plugin install refuses any other version of a
+	// pinned plugin, and tug runs the pinned version even when a newer one
+	// is installed. Linked plugins are not affected.
+	Pins map[string]string `json:"pins,omitempty"`
+}
+
+// PluginPin returns the version the named plugin is pinned to, if any.
+func (c PluginsConfig) PluginPin(name string) (string, bool) {
+	v, ok := c.Pins[name]
+	return v, ok && v != ""
 }
 
 // WASMConfig controls the WebAssembly builds of plugins, which tug runs in
