@@ -43,6 +43,10 @@ type Factory struct {
 	UserAgent string
 	// Tunnels opens the cluster's tunnel, when it has one.
 	Tunnels Tunnels
+	// Refresh makes RESTConfig ask the cluster's provider for a new
+	// credential rather than use the stored one, as tugd does once the
+	// cluster has refused it.
+	Refresh bool
 }
 
 // Tunnels opens tunnels; *tunnel.Pool is one.
@@ -94,7 +98,7 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 		cfg.Proxy = http.ProxyURL(u)
 	}
 
-	r, err := f.Broker.Resolve(ctx, cl.ID, false)
+	r, err := f.Broker.Resolve(ctx, cl.ID, f.Refresh)
 	if err != nil {
 		return nil, fmt.Errorf("getting credentials for %s: %w", cl.Name, err)
 	}

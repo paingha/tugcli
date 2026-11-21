@@ -59,11 +59,12 @@ func Main() int {
 // Run runs tug with explicit arguments and streams and returns the exit code.
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	a := &app{
-		stdin:  stdin,
-		in:     bufio.NewReader(stdin),
-		stdout: stdout,
-		stderr: stderr,
-		now:    time.Now,
+		stdin:         stdin,
+		in:            bufio.NewReader(stdin),
+		stdout:        stdout,
+		stderr:        stderr,
+		now:           time.Now,
+		expandAliases: true,
 	}
 	defer a.closeTunnels()
 	defer a.closePlugins()
@@ -81,6 +82,11 @@ func (a *app) execute(ctx context.Context, args []string) error {
 		return err
 	}
 	root := newRootCmd(a)
+	if a.expandAliases {
+		// Only the command line typed is expanded, never one tug runs itself.
+		a.expandAliases = false
+		args = a.expandAlias(root, args)
+	}
 	root.SetArgs(args)
 	root.SetIn(a.stdin)
 	root.SetOut(a.stdout)
@@ -113,6 +119,13 @@ type app struct {
 	stderr io.Writer
 	now    func() time.Time
 	debug  bool
+	// command is the tug command running, such as "tug restart", which
+	// audit entries give as the intent.
+	command string
+
+	// expandAliases is true until the command line typed has had its
+	// alias, if any, expanded.
+	expandAliases bool
 
 	paths config.Paths
 	cfg   *config.Config
@@ -410,7 +423,7 @@ func (a *app) signInUI(device bool) oidc.UI {
 	}
 }
 
-// audit returns the log of the writes tug lets through.
+// audit returns the log of what tug lets through and refuses.
 func (a *app) audit() *audit.Log { return audit.New(audit.Dir(a.paths.Data), audit.WithNow(a.now)) }
 
 func (a *app) catalogPath() string { return catalog.Path(a.paths.Data) }
@@ -432,12 +445,17 @@ func (a *app) sessions() *session.Manager {
 }
 
 // session returns the session commands run in: this terminal's, or the
-// temporary one a run across clusters made for this app.
+// temporary one a run across clusters made for this app. An unlock of this
+// terminal's that has run out is recorded on the way.
 func (a *app) session() (*session.Session, error) {
 	if a.fixed != nil {
 		return a.fixed, nil
 	}
-	return a.sessions().Current()
+	s, err := a.sessions().Current()
+	if err == nil {
+		a.endExpiredUnlock(s)
+	}
+	return s, err
 }
 
 // currentSession returns this terminal's session with a helpful error.
