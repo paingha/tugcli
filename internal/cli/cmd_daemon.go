@@ -66,8 +66,9 @@ func newDaemonRunCmd(a *app) *cobra.Command {
 }
 
 // daemonUpstream builds the client config tugd forwards a cluster's traffic
-// with: the catalog's endpoint and CA, and the cluster's real credential.
-func (a *app) daemonUpstream(ctx context.Context, clusterID string) (*rest.Config, error) {
+// with: the catalog's endpoint and CA, and the cluster's real credential,
+// asked anew of its provider with refresh.
+func (a *app) daemonUpstream(ctx context.Context, clusterID string, refresh bool) (*rest.Config, error) {
 	cat, err := a.loadCatalog()
 	if err != nil {
 		return nil, err
@@ -80,7 +81,7 @@ func (a *app) daemonUpstream(ctx context.Context, clusterID string) (*rest.Confi
 	if err != nil {
 		return nil, err
 	}
-	f := &kube.Factory{Cluster: cl, Broker: broker, CacheDir: a.paths.Cache, UserAgent: "tugd/" + version.String(), Tunnels: a.tunnels()}
+	f := &kube.Factory{Cluster: cl, Broker: broker, CacheDir: a.paths.Cache, UserAgent: "tugd/" + version.String(), Tunnels: a.tunnels(), Refresh: refresh}
 	return f.RESTConfig(ctx)
 }
 

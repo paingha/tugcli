@@ -869,7 +869,7 @@ func (a *app) writeSchema(view schemaView, v *apiinfo.CRDVersion, oneField bool)
 	} else {
 		head := c.Bold(view.Kind) + " " + view.APIVersion
 		if v.Schema != nil && v.Schema.Description != "" {
-			head += ": " + summary(v.Schema.Description)
+			head += ": " + firstSentence(v.Schema.Description)
 		}
 		fmt.Fprintln(a.stdout, head)
 		if len(fields) == 0 {
@@ -917,7 +917,7 @@ func fieldDetail(f apiinfo.Field, width int) []string {
 // fieldSummary is the first sentence of a field's description, with its
 // allowed values and default.
 func fieldSummary(f apiinfo.Field) string {
-	s := summary(f.Description)
+	s := firstSentence(f.Description)
 	if len(f.Enum) > 0 {
 		s = strings.TrimSpace(s + " One of: " + strings.Join(f.Enum, ", ") + ".")
 	}
@@ -930,8 +930,8 @@ func fieldSummary(f apiinfo.Field) string {
 // maxSummary bounds a description's summary, in characters.
 const maxSummary = 100
 
-// summary is the first sentence of a description, cut short when long.
-func summary(desc string) string {
+// firstSentence is the first sentence of a description, cut short when long.
+func firstSentence(desc string) string {
 	desc = strings.TrimSpace(desc)
 	if i := strings.IndexByte(desc, '\n'); i >= 0 {
 		desc = desc[:i]

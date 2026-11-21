@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -102,14 +103,25 @@ func TestProxySessionGuardsEveryClient(t *testing.T) {
 	if writes.Load() != 1 {
 		t.Fatalf("the unlocked delete should reach the cluster once, got %d", writes.Load())
 	}
-	// tugd recorded it; the refused one is not there.
+	// tugd recorded the refusal, then the write and how it was answered,
+	// between the session's start and the unlock tug recorded.
 	var entries []audit.Entry
 	if err := json.Unmarshal([]byte(run("audit", "-o", "json")), &entries); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Source != audit.SourceProxy || entries[0].Allowed != audit.AllowedUnlocked ||
-		entries[0].Method != "DELETE" || entries[0].Path != "/api/v1/namespaces/payments" || entries[0].Cluster != "payments-prod" {
-		t.Fatalf("audit after a delete through tugd: %+v", entries)
+	kinds := make([]string, len(entries))
+	for i, e := range entries {
+		kinds[i] = e.Source + " " + e.Kind
+	}
+	if want := []string{"tugd write", "tug unlock", "tugd refused", "tug session-start"}; !slices.Equal(kinds, want) {
+		t.Fatalf("audit after a delete through tugd: %q, want %q: %+v", kinds, want, entries)
+	}
+	if w := entries[0]; w.Allowed != audit.AllowedUnlocked || w.Method != "DELETE" || w.Path != "/api/v1/namespaces/payments" ||
+		w.Cluster != "payments-prod" || w.Status == 0 {
+		t.Fatalf("the write through tugd: %+v", w)
+	}
+	if st := entries[3]; !st.Proxy || !st.ReadOnly {
+		t.Fatalf("the session's start: %+v, want read-only through tugd", st)
 	}
 
 	// A client that loaded the kubeconfig before tugd moved is told to run

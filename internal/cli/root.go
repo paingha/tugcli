@@ -29,6 +29,7 @@ prefixed with its cluster:
 			if cmd.Flags().Changed("parallel") {
 				return fmt.Errorf("%s works only with %s", flagParallel, flagClusterSelector)
 			}
+			a.command = cmd.CommandPath() // the intent in audit entries
 			return a.setup(debug)
 		},
 	}
