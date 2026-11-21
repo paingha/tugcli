@@ -206,7 +206,10 @@ func TestRoundTripperLogsWhatItCannotRecord(t *testing.T) {
 		t.Fatalf("RoundTrip = %v, want the write sent once it was recorded", err)
 	}
 	resp.Body.Close()
-	_, err = Wrap(&okTransport{}, &Policy{Cluster: "dev", ReadOnly: true, Audit: &failAfter{}, Log: log}).RoundTrip(del)
+	resp, err = Wrap(&okTransport{}, &Policy{Cluster: "dev", ReadOnly: true, Audit: &failAfter{}, Log: log}).RoundTrip(del)
+	if resp != nil {
+		resp.Body.Close()
+	}
 	var denied *DeniedError
 	if !errors.As(err, &denied) {
 		t.Fatalf("RoundTrip on read-only = %v, want DeniedError", err)
