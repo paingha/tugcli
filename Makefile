@@ -26,7 +26,7 @@ build: ## Build bin/tug
 example-plugin: ## Build the example provider plugin
 	go build -o examples/tug-provider-example/bin/tug-provider-example ./examples/tug-provider-example
 
-PLUGINS        := akamai civo coreweave crusoe digitalocean exoscale ionos nebius omni openshift rancher scaleway tailscale teleport vultr
+PLUGINS        := akamai civo coreweave crusoe digitalocean exoscale ibm ionos nebius omni openshift oracle ovhcloud rancher scaleway tailscale teleport vultr
 PLUGIN_HOST    := $(shell go env GOOS)_$(shell go env GOARCH)
 PLUGIN_EXT     := $(if $(filter windows,$(shell go env GOOS)),.exe,)
 PLUGIN_TARGETS := darwin_arm64 darwin_amd64 linux_amd64 linux_arm64 windows_amd64
