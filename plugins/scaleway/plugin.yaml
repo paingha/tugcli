@@ -1,0 +1,27 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: scaleway
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/scaleway
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-scaleway}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-scaleway}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-scaleway}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-scaleway}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-scaleway.exe}
+  secrets:
+  - {name: secret_key, prompt: "Scaleway API secret key"}
+  env: []
+  network: [api.scaleway.com]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "API endpoint override (https)"}
+      regions: {type: string, description: "regions to list, comma separated, such as fr-par,nl-ams (default: fr-par, nl-ams and pl-waw)"}
+      project: {type: string, description: "ID of the Project to list clusters in (default: every Project the key can see)"}
+      accessKey: {type: string, description: "the API key's access key (SCW...), to read when the key expires"}
