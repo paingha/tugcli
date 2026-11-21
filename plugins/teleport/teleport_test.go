@@ -22,6 +22,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 const proxyHost = "teleport.example.com"
@@ -41,12 +42,13 @@ piv_pin_cache_ttl: 0s
 
 // tshScript stands in for tsh. It prints recorded output for the commands
 // the plugin runs, and fails on any others, so the tests also check the
-// arguments.
+// arguments. Like tsh, it runs no other programs, only shell builtins, and
+// has no here-documents, which macOS's sh writes to /tmp; so it also works
+// in tug's sandbox, which lets the plugin run tsh alone.
 const tshScript = `#!/bin/sh
 case "$*" in
 "status --format=json" | "status --format=json --proxy=teleport.example.com:443")
-	cat <<'EOF'
-{
+	printf '%s\n' '{
   "active": {
     "profile_url": "https://teleport.example.com:443",
     "username": "alice",
@@ -58,12 +60,10 @@ case "$*" in
     "valid_until": "2026-11-21T08:00:00Z"
   },
   "profiles": []
-}
-EOF
+}'
 	;;
 "kube ls --format=json --proxy=teleport.example.com:443 --cluster=root")
-	cat <<'EOF'
-[
+	printf '%s\n' '[
   {
     "kube_cluster_name": "eks-prod",
     "labels": {"env": "prod", "region": "eu-west-1", "teleport.dev/origin": "cloud"},
@@ -82,13 +82,10 @@ EOF
     "selected": false,
     "scope": "/staging"
   }
-]
-EOF
+]'
 	;;
 "kube ls --format=json --proxy=teleport.example.com:443 --cluster=leaf")
-	cat <<'EOF'
-[{"kube_cluster_name": "edge", "labels": {"env": "staging"}, "selected": false, "scope": ""}]
-EOF
+	printf '%s\n' '[{"kube_cluster_name": "edge", "labels": {"env": "staging"}, "selected": false, "scope": ""}]'
 	;;
 *)
 	echo "ERROR: unexpected arguments: $*" >&2
@@ -579,4 +576,5 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the teleport plugin does not conform")
 	}
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Name: Name, Manifest: "plugin.yaml", Bin: bin, Settings: map[string]any{ConfigProxy: proxyHost + ":443"}})
 }

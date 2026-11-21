@@ -17,6 +17,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 const (
@@ -362,4 +363,5 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the rancher plugin does not conform")
 	}
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Name: Name, Manifest: "plugin.yaml", Bin: bin, Settings: f.account().Config, Secrets: secrets(goodToken)})
 }

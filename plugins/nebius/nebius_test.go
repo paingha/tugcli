@@ -15,6 +15,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 // fakeScript is a stand-in for the nebius CLI. It logs its arguments, checks
@@ -22,10 +23,13 @@ import (
 // clusters[-<page token>].json for `mk8s cluster list` and
 // nodegroups-<cluster ID>.json for `mk8s node-group list`. A file named exit
 // makes it fail with that code and the contents of stderr; one named sleep
-// makes it hang.
+// makes it hang. Like the real CLI, it runs no other programs, only shell
+// builtins, so it also works in tug's sandbox, which lets the plugin run
+// the nebius CLI and nothing else; there it cannot log its calls.
 const fakeScript = `#!/bin/sh
-dir=$(dirname "$0")
-echo "$*" >> "$dir/calls"
+out() { while IFS= read -r line || [ -n "$line" ]; do printf '%s\n' "$line"; done; }
+dir=${0%/*}
+{ echo "$*" >> "$dir/calls"; } 2>/dev/null
 cmd="$1 $2 $3"
 shift 3
 parent= token= format= browser=
@@ -46,8 +50,9 @@ if [ -f "$dir/sleep" ]; then
 	sleep 5
 fi
 if [ -f "$dir/exit" ]; then
-	cat "$dir/stderr" >&2
-	exit "$(cat "$dir/exit")"
+	out < "$dir/stderr" >&2
+	read -r code < "$dir/exit"
+	exit "$code"
 fi
 case "$cmd" in
 "mk8s cluster list") f="$dir/clusters${token:+-$token}.json" ;;
@@ -58,7 +63,7 @@ if [ ! -f "$f" ]; then
 	echo "rpc error: code = NotFound desc = resource not found" >&2
 	exit 13
 fi
-cat "$f"
+out < "$f"
 `
 
 const testCA = "-----BEGIN CERTIFICATE-----\nMIIBdzCCAR2gAwIBAgIBADAKBggqhkjOPQQDAjAjMSEwHwYDVQQDDBhrM3Mtc2Vy\n-----END CERTIFICATE-----\n"
@@ -373,11 +378,13 @@ func TestConformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the plugin")
 	}
-	fakeCLI(t, listing)
+	// Build before fakeCLI points HOME away from go's caches.
 	bin := filepath.Join(t.TempDir(), "tug-provider-nebius")
 	if out, err := exec.Command("go", "build", "-o", bin, "./cmd/tug-provider-nebius").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	tug := tugtest.Build(t)
+	fakeCLI(t, listing)
 	r := conformance.Run(context.Background(), conformance.Target{Command: bin}, conformance.Options{
 		Name:            Name,
 		Account:         account(map[string]any{ConfigProject: "project-e00test"}),
@@ -389,4 +396,5 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the nebius plugin does not conform")
 	}
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Tug: tug, Name: Name, Manifest: "plugin.yaml", Bin: bin, Settings: map[string]any{ConfigProject: "project-e00test"}})
 }
