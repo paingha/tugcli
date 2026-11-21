@@ -78,6 +78,10 @@ tidy: ## Tidy go.mod and fail if it changed
 	go mod tidy
 	git diff --exit-code go.mod go.sum
 
+.PHONY: sigstore-root
+sigstore-root: ## Refresh the Sigstore trust root built into tug; review the diff
+	go generate ./internal/sigstore
+
 .PHONY: e2e-kind
 e2e-kind: build ## Create a kind cluster and run the end-to-end script against it
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER) --wait 60s
