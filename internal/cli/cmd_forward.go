@@ -20,12 +20,24 @@ import (
 	"github.com/paingha/tugcli/internal/version"
 )
 
-// startNamedForward hands a port-forward to tugd, which keeps it open and
-// starts it again on a new pod when the old one goes away.
+// startNamedForward hands a port-forward to tugd and says where it listens.
 func (a *app) startNamedForward(ctx context.Context, env *opsEnv, t resolve.Target, name string, ports, addresses []string) error {
-	c, err := a.ensureDaemon(ctx)
+	st, err := a.namedForward(ctx, env, t, name, ports, addresses)
 	if err != nil {
 		return err
+	}
+	fmt.Fprintln(a.stderr, a.colors().Dim("tugd keeps it open across pod restarts; tug pf ls shows it, tug pf stop "+name+" ends it"))
+	_, err = fmt.Fprintf(a.stdout, "Forwarding %s to %s (pod/%s) as %s\n", strings.Join(localPorts(st.Bound), ", "), st.Target, st.Pod, st.Name)
+	return err
+}
+
+// namedForward hands a port-forward to tugd, starting tugd when it is not
+// running. tugd keeps the forward open and starts it again on a new pod
+// when the old one goes away.
+func (a *app) namedForward(ctx context.Context, env *opsEnv, t resolve.Target, name string, ports, addresses []string) (daemon.ForwardState, error) {
+	c, err := a.ensureDaemon(ctx)
+	if err != nil {
+		return daemon.ForwardState{}, err
 	}
 	st, err := c.StartForward(ctx, daemon.Forward{
 		Name:      name,
@@ -37,11 +49,9 @@ func (a *app) startNamedForward(ctx context.Context, env *opsEnv, t resolve.Targ
 		Addresses: addresses,
 	})
 	if err != nil {
-		return fmt.Errorf("starting the forward %s: %w", name, err)
+		return daemon.ForwardState{}, fmt.Errorf("starting the forward %s: %w", name, err)
 	}
-	fmt.Fprintln(a.stderr, a.colors().Dim("tugd keeps it open across pod restarts; tug pf ls shows it, tug pf stop "+name+" ends it"))
-	_, err = fmt.Fprintf(a.stdout, "Forwarding %s to %s (pod/%s) as %s\n", strings.Join(localPorts(st.Bound), ", "), st.Target, st.Pod, st.Name)
-	return err
+	return st, nil
 }
 
 // localPorts turns local:remote pairs into localhost:local -> remote.

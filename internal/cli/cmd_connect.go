@@ -70,16 +70,9 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	if err != nil {
 		return err
 	}
-	readOnly, auth, err := a.connectTo(ctx, s, cl, o)
+	readOnly, auth, err := a.connectByHand(ctx, s, cl, o)
 	if err != nil {
 		return err
-	}
-	// Connecting by hand ends any pin: leaving the pinned directory must
-	// not undo the user's own choice.
-	if s.State.Pin != nil {
-		if err := s.SetPin(nil); err != nil {
-			return err
-		}
 	}
 
 	c := a.colors()
@@ -104,6 +97,22 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 		fmt.Fprintf(a.stderr, "%s %v\n", c.Yellow("warning: credentials are not ready:"), err)
 	}
 	return nil
+}
+
+// connectByHand points session s at cl as the user chose, in tug connect or
+// the TUI. It ends any pin: leaving the pinned directory must not undo the
+// user's own choice.
+func (a *app) connectByHand(ctx context.Context, s *session.Session, cl *catalog.Cluster, o connectOptions) (bool, session.AuthCommand, error) {
+	readOnly, auth, err := a.connectTo(ctx, s, cl, o)
+	if err != nil {
+		return false, auth, err
+	}
+	if s.State.Pin != nil {
+		if err := s.SetPin(nil); err != nil {
+			return false, auth, err
+		}
+	}
+	return readOnly, auth, nil
 }
 
 // connectTo points session s at cl: read-only by its labels unless o says
