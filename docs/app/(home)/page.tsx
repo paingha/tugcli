@@ -559,9 +559,11 @@ function Explains() {
                   <p className="text-[#a9bccb]">{'         keeps crashing and waits to restart; last exit code 1 (Error)'}</p>
                   <p>
                     {'         '}
-                    <span className="text-[#5ee3a1]">next:</span> read the crashed container&apos;s logs:{' '}
-                    <span className="text-[#ffcf5c]">`tug logs pod/billing-5d4f-x2x4z --previous -n shop`</span>
+                    <span className="text-[#7b8fa3]">next:</span> read the crashed container&apos;s logs:
                   </p>
+                </div>
+                <div className="overflow-x-auto whitespace-pre pl-[15ch] text-[#5fd4dc] [scrollbar-width:thin]">
+                  tug logs pod/billing-5d4f-x2x4z --previous -n shop
                 </div>
               </div>
             </div>
