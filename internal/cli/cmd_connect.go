@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/kube"
@@ -141,7 +142,24 @@ func (a *app) connectTo(ctx context.Context, s *session.Session, cl *catalog.Clu
 		}
 		auth.ProxyURL, auth.ProxyCA = reg.ProxyURL, reg.ProxyCA
 	}
-	return readOnly, auth, s.Connect(cl, o.namespace, readOnly, auth)
+	prev := s.State
+	if err := s.Connect(cl, o.namespace, readOnly, auth); err != nil {
+		return readOnly, auth, err
+	}
+	a.noteSession(ctx, audit.KindSessionEnd, prev)
+	a.noteSession(ctx, audit.KindSessionStart, s.State)
+	return readOnly, auth, nil
+}
+
+// disconnect points session s at no cluster, and records that it left the
+// one it was on.
+func (a *app) disconnect(ctx context.Context, s *session.Session) error {
+	prev := s.State
+	if err := s.Disconnect(); err != nil {
+		return err
+	}
+	a.noteSession(ctx, audit.KindSessionEnd, prev)
+	return nil
 }
 
 // chooseCluster resolves a target and label filters to one cluster.
@@ -197,7 +215,7 @@ func newDisconnectCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return s.Disconnect()
+			return a.disconnect(cmd.Context(), s)
 		},
 	}
 }
@@ -366,7 +384,9 @@ func (a *app) factory(s *session.Session) (*kube.Factory, error) {
 		Confirm: func(action string) bool {
 			return a.confirm(fmt.Sprintf("%s is read-only. Allow %s?", cl.Name, action), false)
 		},
-		Audit: a.audit(),
+		Audit:  a.audit(),
+		Intent: a.command,
+		Log:    a.log,
 	}
 	return &kube.Factory{
 		Cluster:   cl,
@@ -430,6 +450,13 @@ func newUnlockCmd(a *app) *cobra.Command {
 			if err := s.Unlock(d); err != nil {
 				return err
 			}
+			// Every write is recorded anyway, but an unlock that cannot be
+			// recorded is taken back, so none goes unrecorded.
+			e := a.sessionEntry(audit.KindUnlock, s.State)
+			e.Time, e.Until = s.State.UnlockedUntil.Add(-d), s.State.UnlockedUntil
+			if err := a.audit().Record(cmd.Context(), e); err != nil {
+				return errors.Join(fmt.Errorf("not unlocked, since the unlock could not be recorded in the audit log: %w", err), s.Lock())
+			}
 			c := a.colors()
 			_, err = fmt.Fprintf(a.stdout, "%s writes allowed on %s until %s\n", c.Yellow("Unlocked:"), c.Bold(s.State.ClusterName),
 				s.State.UnlockedUntil.Local().Format(time.Kitchen))
@@ -448,7 +475,16 @@ func newLockCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return s.Lock()
+			until, unlocked := s.State.UnlockedUntil, s.State.ReadOnly && s.State.Writable(a.now())
+			if err := s.Lock(); err != nil {
+				return err
+			}
+			if unlocked {
+				e := a.sessionEntry(audit.KindLock, s.State)
+				e.Until = until
+				a.note(cmd.Context(), e)
+			}
+			return nil
 		},
 	}
 }
@@ -466,9 +502,11 @@ func newShellCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			a.noteSession(cmd.Context(), audit.KindSessionStart, s.State) // connected like its parent
 			if len(args) > 0 {
 				if err := a.connect(cmd.Context(), s, args, o); err != nil {
 					_ = mgr.Remove(s.State.ID)
+					a.noteSession(cmd.Context(), audit.KindSessionEnd, s.State)
 					return err
 				}
 			}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/session"
 )
 
@@ -63,13 +64,18 @@ func newSessionCmd(a *app) *cobra.Command {
 				return err
 			}
 			mgr := a.sessions()
-			if _, err := mgr.Sweep(a.cfg.Sessions.MaxAge.Duration); err != nil {
+			removed, err := mgr.Sweep(a.cfg.Sessions.MaxAge.Duration)
+			if err != nil {
 				a.log.Debug("sweeping sessions", "err", err)
+			}
+			for _, st := range removed {
+				a.noteSession(cmd.Context(), audit.KindSessionEnd, st)
 			}
 			s, err := mgr.Create(pid, parent)
 			if err != nil {
 				return err
 			}
+			a.noteSession(cmd.Context(), audit.KindSessionStart, s.State) // connected like its parent
 			_, err = fmt.Fprint(a.stdout, session.ExportScript(sh, sessionEnv(s, mgr, pid)))
 			return err
 		},
@@ -90,7 +96,15 @@ func newSessionCmd(a *app) *cobra.Command {
 			if id == "" {
 				return session.ErrNoSession
 			}
-			return a.sessions().Remove(id)
+			mgr := a.sessions()
+			ending, openErr := mgr.Open(id)
+			if err := mgr.Remove(id); err != nil {
+				return err
+			}
+			if openErr == nil {
+				a.noteSession(cmd.Context(), audit.KindSessionEnd, ending.State)
+			}
+			return nil
 		},
 	}
 	endCmd.Flags().StringVar(&id, "id", "", "session ID (default $TUG_SESSION)")

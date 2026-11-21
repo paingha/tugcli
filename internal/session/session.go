@@ -249,19 +249,20 @@ func (m *Manager) Remove(id string) error {
 }
 
 // Sweep removes sessions whose shell has exited, and any session not updated
-// within maxAge. It returns how many it removed.
-func (m *Manager) Sweep(maxAge time.Duration) (int, error) {
+// within maxAge. It returns the state of each session it removed; one whose
+// state could not be read has only its ID.
+func (m *Manager) Sweep(maxAge time.Duration) ([]State, error) {
 	if err := m.checkPrivate(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	entries, err := os.ReadDir(m.root)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return nil, nil
 	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	removed := 0
+	var removed []State
 	for _, e := range entries {
 		if !e.IsDir() || !validID.MatchString(e.Name()) {
 			continue
@@ -276,7 +277,11 @@ func (m *Manager) Sweep(maxAge time.Duration) (int, error) {
 		orphan := err != nil && m.now().Sub(info.ModTime()) > time.Hour
 		if old || dead || orphan {
 			if os.RemoveAll(filepath.Join(m.root, e.Name())) == nil {
-				removed++
+				st := State{ID: e.Name()}
+				if err == nil {
+					st = s.State
+				}
+				removed = append(removed, st)
 			}
 		}
 	}

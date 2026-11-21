@@ -305,12 +305,12 @@ func TestSweepRemovesDeadSessions(t *testing.T) {
 	m := NewManager(t.TempDir())
 	alive, _ := m.Create(os.Getpid(), "")
 	dead, _ := m.Create(999999, "") // assumed unused
-	n, err := m.Sweep(24 * time.Hour)
+	removed, err := m.Sweep(24 * time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("removed %d sessions, want 1", n)
+	if len(removed) != 1 || removed[0].ID != dead.State.ID || removed[0].PID != 999999 {
+		t.Fatalf("removed %+v, want the dead session's state", removed)
 	}
 	if _, err := m.Open(alive.State.ID); err != nil {
 		t.Fatal("live session removed")

@@ -102,6 +102,7 @@ func (a *app) ensureWritable(env *opsEnv, action string) error {
 		policy.Confirm = func(string) bool { return true }
 		return nil
 	}
+	a.noteRefused(env.session.State, env.namespace)
 	return &guard.DeniedError{Cluster: env.session.State.ClusterName, Action: action}
 }
 
