@@ -27,6 +27,11 @@ Add the shell hook to your rc file (after any prompt theme):
 eval "$(tug init zsh)"          # bash: tug init bash, fish: tug init fish | source
 ```
 
+The prompt then shows the terminal's cluster, namespace and env label, whether
+it is read-only or how long an unlock has left, and `proxy` when it goes
+through tugd. A production cluster gets a red badge in every mode, and an
+unlock ends in the prompt on time, using the shell's own clock.
+
 Then:
 
 ```bash
@@ -42,6 +47,7 @@ tug why api                     # why it is not ready: crashes, image pulls, pro
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
 tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
+tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -51,6 +57,7 @@ tug auth rotate lke-prod        # new credential from the provider; the old one 
 tug auth login cks-train        # sign in to the cluster's OIDC issuer in the browser (--device over SSH)
 tug tunnel set eks-private ssm://i-0123456789abcdef0   # reach a private cluster; see Tunnels
 tug pin set payments-staging -n payments  # this directory pins the terminal to a cluster
+tug profile up payments         # a saved environment: cluster, namespace, safety, aliases and forwards
 tug plugin install digitalocean # from a signed plugin index
 tug ui                          # full-screen: clusters, workloads, logs, why, tree, shells, forwards
 tug get pods --cluster-selector env=staging   # any read, on every matching cluster at once
@@ -128,7 +135,10 @@ without a live session or a named port-forward.
 tugd also keeps named port-forwards open: `tug pf <target> <ports> --name
 <name>` hands one to tugd, which keeps the same local ports and starts the
 forward again on a running pod when the old one goes away. `tug pf ls` lists
-them and `tug pf stop <name>|--all` ends them.
+them, with their state, restarts and when a dropped one retries, and
+`tug pf stop <name>|--all` ends them. `tug pf profile up|down|ls <profile>`
+starts and stops a profile's forwards as a group; every local port is checked
+first, and none start when one is taken.
 
 ## Tunnels
 
@@ -212,6 +222,31 @@ allowed too. `tug pin set <cluster> -n <ns>` writes and allows one; `tug pin
 show` and `tug pin revoke` check and withdraw. Set `TUG_PIN_DISABLE=1` to turn
 pins off.
 
+## Profiles
+
+A profile is a YAML file in `profiles/` in tug's config directory that bundles
+a cluster, a namespace, a safety mode, command aliases and named
+port-forwards, so it can be reviewed like any other file:
+
+```yaml
+cluster: payments-prod
+namespace: shop
+safety: read-only           # or auto: the cluster's labels decide
+proxy: true
+aliases:
+  api-logs: logs api -f     # tug profile run api-logs
+forwards:
+  - {name: db, target: sts/postgres, ports: [5432]}
+```
+
+`tug profile use <name>` connects the terminal as it says, `tug profile up`
+also starts its forwards through tugd and `tug profile down` stops them.
+`tug profile edit <name>` writes one in your editor and saves it only once it
+parses (or reads it from stdin in a script); `ls`, `show` and `run <alias>` do
+the rest. A profile can make a session read-only but never read-write: on a
+cluster whose labels make it read-only, writes still ask first or need
+`tug unlock`. Profiles are chosen only by name, never by a pin.
+
 ## How it fits together
 
 | Piece | Where |
@@ -236,7 +271,9 @@ pins off.
 | Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
+| Working-environment profiles | [internal/profile](internal/profile) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |

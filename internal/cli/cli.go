@@ -417,7 +417,19 @@ func (a *app) catalogPath() string { return catalog.Path(a.paths.Data) }
 
 func (a *app) loadCatalog() (*catalog.Catalog, error) { return catalog.Load(a.catalogPath()) }
 
-func (a *app) sessions() *session.Manager { return session.NewManager(a.paths.Runtime) }
+// sessions returns the session manager. A cluster whose labels make it
+// read-only is production, which the prompt marks whatever the session's
+// mode.
+func (a *app) sessions() *session.Manager {
+	var opts []session.Option
+	if a.cfg != nil {
+		selectors := a.cfg.Guard.ReadOnlyLabels
+		opts = append(opts, session.WithProduction(func(labels map[string]string) bool {
+			return guard.ReadOnlyFor(labels, selectors)
+		}))
+	}
+	return session.NewManager(a.paths.Runtime, opts...)
+}
 
 // session returns the session commands run in: this terminal's, or the
 // temporary one a run across clusters made for this app.
