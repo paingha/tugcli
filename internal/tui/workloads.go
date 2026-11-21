@@ -106,9 +106,9 @@ func (m *model) tick(msg tickMsg) tea.Cmd {
 		return nil // from a run that has ended
 	}
 	cmds := []tea.Cmd{m.nextTick()}
-	// Nothing reloads under the picker, or while a load is still on its
-	// way.
-	if m.picker == nil && !m.workloads.loading {
+	// Nothing reloads under a pane or the picker, or while a load is still
+	// on its way.
+	if m.pane == nil && m.picker == nil && !m.workloads.loading {
 		cmds = append(cmds, m.loadWorkloads())
 	}
 	return tea.Batch(cmds...)
@@ -276,6 +276,10 @@ func (m *model) workloadsKey(msg tea.KeyMsg) tea.Cmd {
 		return m.openNamespaces()
 	case key.Matches(msg, k.Clusters):
 		return m.enterClusters()
+	default:
+		if w := l.selected(); w != nil {
+			return m.act(msg, *w)
+		}
 	}
 	return nil
 }

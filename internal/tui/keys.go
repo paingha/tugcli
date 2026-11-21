@@ -22,6 +22,10 @@ type keyMap struct {
 	Connect    key.Binding
 	TypeToFind key.Binding
 
+	Logs key.Binding
+	Why  key.Binding
+	Tree key.Binding
+
 	Namespace key.Binding
 	Clusters  key.Binding
 }
@@ -48,6 +52,10 @@ func newKeyMap() keyMap {
 		Connect:    b([]string{"enter"}, "enter", "connect this terminal to the cluster"),
 		TypeToFind: b([]string{"/"}, "type", "filter by name, label value or label=value; / first to type q or ?"),
 
+		Logs: b([]string{"l"}, "l", "stream logs from every pod and container, following new pods"),
+		Why:  b([]string{"w"}, "w", "why it is not ready, and what to do next"),
+		Tree: b([]string{"t"}, "t", "what it is made of, with the health of each part"),
+
 		Namespace: b([]string{"n"}, "n", "switch the session's namespace"),
 		Clusters:  b([]string{"c"}, "c", "clusters"),
 	}
@@ -56,7 +64,13 @@ func newKeyMap() keyMap {
 // hintNames are the one-word names the title line gives keys.
 var hintNames = map[string]string{
 	"q": "quit", "?": "help", "esc": "back", "enter": "choose", "/": "filter",
-	"n": "namespace", "c": "clusters",
+	"n": "namespace", "c": "clusters", "l": "logs", "w": "why", "t": "tree",
+}
+
+// actions are the bindings that act on a workload, from its row in the list
+// or from one of its panes.
+func (k keyMap) actions() []key.Binding {
+	return []key.Binding{k.Logs, k.Why, k.Tree}
 }
 
 // hints turns bindings into the title line's short hints.

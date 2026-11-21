@@ -1,9 +1,9 @@
 // Package tui is tug's full-screen terminal UI. It works on the shared core
-// rather than on kubectl: internal/ops reads the session's workloads, and a
-// Backend from internal/cli connects the session and switches its
-// namespace with the code the commands run. It draws with Bubble Tea and
-// Lip Gloss; its model is driven by messages, so tests run it without a
-// terminal.
+// rather than on kubectl: internal/ops lists the session's workloads,
+// streams their logs and explains them, and a Backend from internal/cli
+// connects the session and switches its namespace with the code the
+// commands run. It draws with Bubble Tea and Lip Gloss; its model is driven
+// by messages, so tests run it without a terminal.
 package tui
 
 import (
@@ -125,6 +125,22 @@ func (t *tasks) cmd(fn func(ctx context.Context) tea.Msg) tea.Cmd {
 		defer t.wg.Done()
 		return fn(t.ctx)
 	}
+}
+
+// start runs fn on a goroutine of its own, with a context that ends when
+// the returned function is called or the program ends.
+func (t *tasks) start(fn func(ctx context.Context)) (stop func()) {
+	ctx, cancel := context.WithCancel(t.ctx)
+	if !t.add() {
+		cancel()
+		return cancel
+	}
+	go func() {
+		defer t.wg.Done()
+		defer cancel()
+		fn(ctx)
+	}()
+	return cancel
 }
 
 // stop cancels every task and waits for them to end.

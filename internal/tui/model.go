@@ -71,6 +71,8 @@ type model struct {
 	workloads workloadList
 	ticker    ticker
 	picker    *picker
+	pane      *pane
+	panes     int // the last pane's ID
 }
 
 func newModel(b Backend, t *tasks, st session.State, sty styles, opts ...Option) *model {
@@ -137,12 +139,16 @@ func (m *model) handle(msg tea.Msg) tea.Cmd {
 		}
 	case namespaceMsg:
 		return m.namespaceSet(msg)
+	case logsMsg:
+		return m.logs(msg)
+	case paneMsg:
+		m.paneLoaded(msg)
 	}
 	return nil
 }
 
 // key handles a key press: the open picker or help takes it first, then
-// the view.
+// the pane, then the view.
 func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	if key.Matches(msg, m.keys.ForceQuit) {
 		return m.quit()
@@ -153,6 +159,8 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case m.showHelp:
 		m.showHelp = false // any key closes it
 		return nil
+	case m.pane != nil:
+		return m.paneKey(msg)
 	case m.view == viewClusters:
 		return m.clustersKey(msg)
 	default:
@@ -162,6 +170,7 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 
 // quit stops what the views run and ends the program.
 func (m *model) quit() tea.Cmd {
+	m.closePane()
 	m.ticker.stop()
 	return tea.Quit
 }
@@ -210,6 +219,9 @@ func (m *model) resize() {
 	h := m.bodyHeight()
 	m.clusters.scroll(h - 2)
 	m.workloads.scroll(h - 2)
+	if m.pane != nil {
+		m.pane.resize(m.width, h)
+	}
 	if m.picker != nil {
 		m.picker.scroll(m.pickerRows())
 	}
@@ -241,6 +253,8 @@ func (m *model) View() string {
 		body = m.helpView()
 	case m.picker != nil:
 		body = m.pickerView(h)
+	case m.pane != nil:
+		body = m.paneView()
 	case m.view == viewClusters:
 		body = m.clustersView(h)
 	default:
@@ -271,11 +285,13 @@ func (m *model) titleLine() string {
 		title, keys = "Help", []key.Binding{k.Back}
 	case m.picker != nil:
 		title, keys = m.picker.title, []key.Binding{k.Connect, k.Back}
+	case m.pane != nil:
+		title, keys = m.pane.title(), append(k.actions(), k.Back, k.Help, k.Quit)
 	case m.view == viewClusters:
 		title, keys = "Clusters", []key.Binding{k.Connect, k.Back, k.Help, k.Quit}
 	default:
 		title = "Workloads in " + m.state.Namespace
-		keys = []key.Binding{k.Namespace, k.Clusters, k.Filter, k.Help, k.Quit}
+		keys = append(k.actions(), k.Namespace, k.Clusters, k.Filter, k.Help, k.Quit)
 	}
 	title = m.st.title.Render(" " + title + " ")
 	m.help.Width = max(m.width-lipgloss.Width(title)-1, 0)
@@ -380,6 +396,7 @@ func (m *model) helpView() string {
 		title    string
 		bindings []key.Binding
 	}{
+		{"The selected workload, in the list or its panes", k.actions()},
 		{"Workloads", []key.Binding{k.Namespace, k.Clusters, k.Filter, k.Refresh}},
 		{"Clusters", []key.Binding{k.TypeToFind, k.Connect}},
 		{"Moving", []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom}},

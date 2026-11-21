@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"hash/fnv"
 	"io"
 	"strings"
 
@@ -23,11 +24,18 @@ type styles struct {
 	green    lipgloss.Style
 	status   lipgloss.Style
 	key      lipgloss.Style
+	// pick are distinguishable colours for log prefixes.
+	pick []lipgloss.Style
 }
 
 func newStyles(out io.Writer) styles {
 	r := lipgloss.NewRenderer(out)
+	var pick []lipgloss.Style
+	for _, c := range []string{"6", "3", "2", "5", "4", "14", "11", "10", "13", "12"} {
+		pick = append(pick, r.NewStyle().Foreground(lipgloss.Color(c)))
+	}
 	return styles{
+		pick:     pick,
 		title:    r.NewStyle().Bold(true),
 		header:   r.NewStyle().Bold(true).Foreground(lipgloss.Color("8")),
 		selected: r.NewStyle().Reverse(true),
@@ -39,6 +47,14 @@ func newStyles(out io.Writer) styles {
 		status:   r.NewStyle().Reverse(true),
 		key:      r.NewStyle().Bold(true),
 	}
+}
+
+// pickFor colours text with a palette colour chosen by key, so the same pod
+// keeps the same colour for the whole log stream, as tug logs does.
+func (s styles) pickFor(key, text string) string {
+	h := fnv.New32a()
+	h.Write([]byte(key))
+	return s.pick[h.Sum32()%uint32(len(s.pick))].Render(text)
 }
 
 // truncate shortens s to width cells, ending it with an ellipsis.
