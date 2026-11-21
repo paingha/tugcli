@@ -415,6 +415,21 @@ func (a *app) supportLine(minor string, s apiinfo.Support) string {
 	return line
 }
 
+// The exit codes of tug api diff, which are diff's.
+const (
+	diffDiffer  = 1
+	diffTrouble = 2
+)
+
+// diffFailed makes an error exit with diffTrouble, so that scripts can tell
+// it from a difference.
+func diffFailed(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &exitError{code: diffTrouble, err: err}
+}
+
 func newAPIDiffCmd(a *app) *cobra.Command {
 	var output string
 	cmd := &cobra.Command{
@@ -426,54 +441,72 @@ resource definition stores objects at a different version. Clusters are named
 as for tug connect, by name, prefix or fuzzy match, and need no session.
 
 diff only reads. Use it before promoting manifests from one cluster to another,
-or to see what an upgrade changed. It exits 1 when the clusters differ, as
-diff does, so scripts and CI can check that two clusters serve the same APIs.`,
+or to see what an upgrade changed. As diff does, it exits 0 when the clusters
+serve the same APIs, 1 when they differ and 2 when it cannot compare them, so
+scripts and CI can tell drift from a cluster they could not read.`,
 		Example: `  tug api diff payments-staging payments-prod
   tug api diff eu-prod us-prod -o json`,
-		Args:              cobra.ExactArgs(2),
+		Args: func(cmd *cobra.Command, args []string) error {
+			return diffFailed(cobra.ExactArgs(2)(cmd, args))
+		},
 		ValidArgsFunction: a.completeClusters,
+		// Setting up, a bad flag and a wrong number of arguments are trouble
+		// too.
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return diffFailed(cmd.Root().PersistentPreRunE(cmd, args))
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			format, err := render.ParseFormat(output)
-			if err != nil {
-				return err
+			differ, err := a.apiDiff(cmd.Context(), args, output)
+			switch {
+			case err != nil:
+				return diffFailed(err)
+			case differ:
+				return &exitError{code: diffDiffer}
 			}
-			if format == render.FormatName {
-				return errors.New("diff supports -o table, json or yaml")
-			}
-			ctx := cmd.Context()
-			cat, err := a.loadCatalog()
-			if err != nil {
-				return err
-			}
-			var clusters [2]*catalog.Cluster
-			for i, arg := range args {
-				if clusters[i], err = a.chooseCluster(cat, []string{arg}); err != nil {
-					return err
-				}
-			}
-			if clusters[0].ID == clusters[1].ID {
-				return fmt.Errorf("%s and %s are both %s; name two different clusters", args[0], args[1], clusters[0].Name)
-			}
-			var snaps [2]apiinfo.Snapshot
-			for i, cl := range clusters {
-				if snaps[i], err = a.snapshot(ctx, cat, cl); err != nil {
-					return err
-				}
-			}
-			d := apiinfo.Compare(snaps[0], snaps[1])
-			if format != render.FormatTable {
-				err = render.Structured(a.stdout, format, d)
-			} else {
-				err = a.writeAPIDiff(d)
-			}
-			if err == nil && len(d.Resources) > 0 {
-				return &exitError{code: 1}
-			}
-			return err
+			return nil
 		},
 	}
+	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return diffFailed(err) })
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: table, json or yaml")
 	return cmd
+}
+
+// apiDiff compares the two clusters args name and writes how they differ,
+// reporting whether they do.
+func (a *app) apiDiff(ctx context.Context, args []string, output string) (bool, error) {
+	format, err := render.ParseFormat(output)
+	if err != nil {
+		return false, err
+	}
+	if format == render.FormatName {
+		return false, errors.New("diff supports -o table, json or yaml")
+	}
+	cat, err := a.loadCatalog()
+	if err != nil {
+		return false, err
+	}
+	var clusters [2]*catalog.Cluster
+	for i, arg := range args {
+		if clusters[i], err = a.chooseCluster(cat, []string{arg}); err != nil {
+			return false, err
+		}
+	}
+	if clusters[0].ID == clusters[1].ID {
+		return false, fmt.Errorf("%s and %s are both %s; name two different clusters", args[0], args[1], clusters[0].Name)
+	}
+	var snaps [2]apiinfo.Snapshot
+	for i, cl := range clusters {
+		if snaps[i], err = a.snapshot(ctx, cat, cl); err != nil {
+			return false, err
+		}
+	}
+	d := apiinfo.Compare(snaps[0], snaps[1])
+	if format != render.FormatTable {
+		err = render.Structured(a.stdout, format, d)
+	} else {
+		err = a.writeAPIDiff(d)
+	}
+	return len(d.Resources) > 0, err
 }
 
 // snapshot reads what a catalog cluster serves, through a read-only guard

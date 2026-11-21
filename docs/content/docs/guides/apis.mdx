@@ -126,9 +126,15 @@ tug api diff payments-staging payments-prod
 ```
 
 Neither cluster needs to be the session's; tug reads both through a read-only
-guard. Like `diff`, it exits 1 when the clusters differ, so a CI job can fail
-when staging and production drift apart:
+guard. Like `diff`, it exits 0 when the clusters serve the same APIs, 1 when
+they differ and 2 when it cannot compare them, so a CI job can tell drift from
+a cluster it could not reach:
 
 ```bash
-tug api diff payments-staging payments-prod -o json > api-diff.json   # exits 1 when they differ
+tug api diff payments-staging payments-prod -o json > api-diff.json
+case $? in
+  0) echo "staging and production serve the same APIs" ;;
+  1) echo "staging and production have drifted apart; see api-diff.json"; exit 1 ;;
+  *) echo "could not compare the clusters"; exit 2 ;;
+esac
 ```

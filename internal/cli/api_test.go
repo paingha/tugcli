@@ -383,8 +383,10 @@ func TestAPIDiff(t *testing.T) {
 	old, oldWrites := serveAPIs(t, oldAPIs())
 	cur, curWrites := serveAPIs(t, newAPIs())
 	twin, _ := serveAPIs(t, newAPIs())
+	gone, _ := serveAPIs(t, newAPIs())
+	gone.Close() // shop-staging-gone is unreachable
 	mustTug(t, "import", "kubeconfig", writeFleetKubeconfig(t, map[string]*httptest.Server{
-		"shop-staging-old": old, "shop-staging-new": cur, "shop-staging-twin": twin,
+		"shop-staging-old": old, "shop-staging-new": cur, "shop-staging-twin": twin, "shop-staging-gone": gone,
 	}))
 
 	// differ runs a diff that finds differences, which exits 1 as diff
@@ -432,13 +434,26 @@ func TestAPIDiff(t *testing.T) {
 		t.Errorf("tug api diff -o json of two clusters that serve the same APIs:\n%s", out)
 	}
 
-	for _, tt := range []struct{ args, want string }{
-		{"api diff shop-staging-old shop-staging-old", "name two different clusters"},
-		{"api diff shop-staging-old nowhere", `no cluster matches "nowhere"`},
-		{"api diff shop-staging-old shop-staging-new --cluster-selector env=staging", "tug api diff does not run across clusters"},
+	// Anything that stops the comparison exits 2, as diff's trouble does,
+	// so that a script can tell it from a difference.
+	for _, tt := range []struct {
+		args string
+		code int
+		want string
+	}{
+		{"api diff shop-staging-old shop-staging-old", 2, "name two different clusters"},
+		{"api diff shop-staging-old nowhere", 2, `no cluster matches "nowhere"`},
+		{"api diff shop-staging-old shop-staging-gone", 2, "shop-staging-gone: reading the server's version"},
+		{"api diff shop-staging-old", 2, "accepts 2 arg(s), received 1"},
+		{"api diff shop-staging-old shop-staging-new --bogus", 2, "unknown flag: --bogus"},
+		{"api diff shop-staging-old shop-staging-new -o name", 2, "diff supports -o table, json or yaml"},
+		{"api diff shop-staging-old shop-staging-new --parallel 3", 2, "--parallel works only with --cluster-selector"},
+		// Refused before the command runs, as for any other command.
+		{"api diff shop-staging-old shop-staging-new --cluster-selector env=staging", 1, "tug api diff does not run across clusters"},
 	} {
-		if r := tug(t, strings.Fields(tt.args)...); r.code == 0 || !strings.Contains(r.stderr, tt.want) {
-			t.Errorf("tug %s = %d, stderr %q, want %q", tt.args, r.code, r.stderr, tt.want)
+		r := tug(t, strings.Fields(tt.args)...)
+		if r.code != tt.code || !strings.HasPrefix(r.stderr, "tug: ") || !strings.Contains(r.stderr, tt.want) || r.stdout != "" {
+			t.Errorf("tug %s = exit %d, stdout %q, stderr %q; want exit %d and an error with %q", tt.args, r.code, r.stdout, r.stderr, tt.code, tt.want)
 		}
 	}
 	if oldWrites.Load() != 0 || curWrites.Load() != 0 {
