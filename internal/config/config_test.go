@@ -548,3 +548,30 @@ func TestWriteFileAtomicErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadReadsTeams(t *testing.T) {
+	clearConfigEnv(t)
+	dir := writeConfig(t, `
+teams:
+- name: platform
+  url: https://teams.example.com/platform/team.yaml
+  publicKey: AAAA
+- name: infra
+  git:
+    repo: git@github.com:acme/tug-team.git
+    path: catalogs/infra.yaml
+    ref: main
+  publicKey: BBBB
+`)
+	c, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TeamCatalog{
+		{Name: "platform", URL: "https://teams.example.com/platform/team.yaml", PublicKey: "AAAA"},
+		{Name: "infra", Git: &TeamGit{Repo: "git@github.com:acme/tug-team.git", Path: "catalogs/infra.yaml", Ref: "main"}, PublicKey: "BBBB"},
+	}
+	if !reflect.DeepEqual(c.Teams, want) {
+		t.Errorf("Teams = %+v, want %+v", c.Teams, want)
+	}
+}
