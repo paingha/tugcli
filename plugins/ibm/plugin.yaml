@@ -1,0 +1,28 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: ibm
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/ibm
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-ibm}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-ibm}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-ibm}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-ibm}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-ibm.exe}
+  secrets:
+  - {name: api_key, prompt: "IBM Cloud API key"}
+  env: []
+  # OpenShift clusters also get the API key at their own OAuth server, which
+  # the cluster's master names.
+  network: [iam.cloud.ibm.com, containers.cloud.ibm.com]
+  accountConfig:
+    type: object
+    properties:
+      apiURL: {type: string, description: "Kubernetes Service API endpoint override (https; default: https://containers.cloud.ibm.com/global)"}
+      iamURL: {type: string, description: "IAM endpoint override (https; default: https://iam.cloud.ibm.com)"}
+      resourceGroup: {type: string, description: "ID of the resource group to list clusters in (default: every one the API key can see)"}
