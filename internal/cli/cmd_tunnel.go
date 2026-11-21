@@ -19,7 +19,7 @@ import (
 func newTunnelCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tunnel",
-		Short: "Reach private clusters through an SSH jump host, a proxy, AWS SSM or Google IAP",
+		Short: "Reach private clusters through an SSH jump host, a proxy, AWS SSM, Google IAP or tsh",
 		Long: `Give a cluster a tunnel when its API server is not directly reachable. tug
 commands then go through the tunnel, and tug connect routes kubectl, helm and
 k9s through tugd, which keeps the tunnel open.
@@ -36,7 +36,11 @@ Tunnels:
   iap://<instance>?project=<project>&zone=<zone>
   iap://?project=<project>&region=<region>&network=<network>&group=<group>
       Google Cloud IAP TCP forwarding to a VM, or to a host in a destination
-      group such as a private GKE endpoint; needs only Google credentials`,
+      group such as a private GKE endpoint; needs only Google credentials
+  tsh://<Teleport proxy>/<Teleport cluster>/<Kubernetes cluster>
+      Teleport's tsh proxy kube, for clusters that kubectl cannot reach
+      directly: behind a load balancer that needs connection upgrades, or
+      with a hardware key; tsh keeps the Teleport certificate`,
 	}
 	cmd.AddCommand(newTunnelSetCmd(a), newTunnelRmCmd(a), newTunnelLsCmd(a), newTunnelTestCmd(a))
 	return cmd

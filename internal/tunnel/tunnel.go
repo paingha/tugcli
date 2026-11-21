@@ -1,11 +1,12 @@
 // Package tunnel reaches API servers that are not directly reachable:
-// through an SSH jump host, a SOCKS or HTTP proxy, an AWS SSM session or
-// Google IAP. Every tunnel is handed to Kubernetes clients as a proxy URL,
-// because client-go's exec, attach and port-forward upgrades honour a proxy
-// but not a custom dialer. Tunnels that are not proxies already are served
-// as a SOCKS5 proxy on a loopback port, guarded by random credentials. A
-// tunnel that ends in a local proxy holding the cluster's credential also
-// hands out the endpoint clients must use there, as a Route.
+// through an SSH jump host, a SOCKS or HTTP proxy, an AWS SSM session,
+// Google IAP or Teleport's tsh proxy kube. Every tunnel is handed to
+// Kubernetes clients as a proxy URL, because client-go's exec, attach and
+// port-forward upgrades honour a proxy but not a custom dialer. Tunnels that
+// are not proxies already are served as a SOCKS5 proxy on a loopback port,
+// guarded by random credentials. A tunnel that ends in a local proxy holding
+// the cluster's credential, as tsh's does, also hands out the endpoint
+// clients must use there, as a Route.
 package tunnel
 
 import (
@@ -26,7 +27,7 @@ import (
 type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
 
 // Kinds are the tunnel URL schemes tug understands.
-var Kinds = []string{"ssh", "socks5", "socks5h", "http", "https", "ssm", "iap"}
+var Kinds = []string{"ssh", "socks5", "socks5h", "http", "https", "ssm", "iap", "tsh"}
 
 // proxyKinds are passed to clients as they are.
 var proxyKinds = []string{"socks5", "socks5h", "http", "https"}

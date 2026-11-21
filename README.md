@@ -138,10 +138,11 @@ tug tunnel ls | rm <cluster>
 | `ssm://<instance>[?region=&profile=]` | an AWS Systems Manager session through a managed instance that can reach the private endpoint; tug speaks Session Manager itself, so it needs only AWS credentials, not the session-manager-plugin |
 | `iap://<instance>?project=&zone=` | Google Cloud IAP TCP forwarding to a VM; needs only Application Default Credentials, not gcloud |
 | `iap://?project=&region=&network=&group=` | IAP to a host in a destination group, such as a private GKE endpoint |
+| `tsh://<proxy>/<Teleport cluster>/<Kubernetes cluster>` | Teleport's `tsh proxy kube`, for a Teleport cluster that kubectl cannot reach directly: behind a load balancer that needs connection upgrades, or with a hardware key. tsh keeps the Teleport certificate; tug runs it, and uses the CA and client certificate of its local proxy, which change each time it starts |
 
 Kubernetes clients honour a proxy for exec, attach and port-forward but not
-a custom dialer, so tug serves SSH, SSM and IAP tunnels as a SOCKS5 proxy on a
-loopback port, guarded by a random username and password that only tug
+a custom dialer, so tug serves SSH, SSM, IAP and tsh tunnels as a SOCKS5 proxy
+on a loopback port, guarded by a random username and password that only tug
 knows. `tug doctor` checks a tunnelled cluster through its tunnel.
 
 ## Directory pins
@@ -182,7 +183,7 @@ pins off.
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
 | Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
 | tugd: local API proxy, named port-forwards, control socket | [internal/daemon](internal/daemon) |
-| Tunnels: SSH, proxies, AWS SSM, Google IAP | [internal/tunnel](internal/tunnel) |
+| Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
