@@ -1,0 +1,30 @@
+apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata:
+  name: oracle
+  version: 0.1.0
+  publisher: tug
+  homepage: https://github.com/paingha/tugcli/tree/main/plugins/oracle
+spec:
+  protocols: [provider/v1alpha1]
+  capabilities: [accounts, list, credential, serve]
+  platforms:
+  - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-oracle}
+  - {os: darwin, arch: amd64, bin: bin/darwin_amd64/tug-provider-oracle}
+  - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-oracle}
+  - {os: linux, arch: arm64, bin: bin/linux_arm64/tug-provider-oracle}
+  - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-oracle.exe}
+  # The API key's private key stays in the file the OCI CLI profile names,
+  # as it does for the OCI CLI, rather than in tug's keychain; the plugin
+  # reads it from there to sign requests. Keys with a passphrase are refused.
+  secrets: []
+  env: [OCI_CLI_CONFIG_FILE, OCI_CLI_PROFILE]
+  network: [containerengine.*.oci.oraclecloud.com, identity.*.oci.oraclecloud.com]
+  accountConfig:
+    type: object
+    properties:
+      profile: {type: string, description: "OCI CLI profile whose API key signs requests (default: OCI_CLI_PROFILE or DEFAULT)"}
+      configFile: {type: string, description: "OCI CLI config file (default: OCI_CLI_CONFIG_FILE or ~/.oci/config)"}
+      regions: {type: string, description: "regions to list clusters in, separated by commas (default: the profile's region)"}
+      compartments: {type: string, description: "OCIDs of the compartments to list clusters in, separated by commas (default: the tenancy and every compartment in it the user can see)"}
+      apiURL: {type: string, description: "API endpoint template (https), with {service} and {region} (default: https://{service}.{region}.oci.oraclecloud.com)"}
