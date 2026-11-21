@@ -16,6 +16,7 @@ import (
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/sigstore"
 	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
@@ -72,8 +73,14 @@ type installOptions struct {
 	sha256 string
 	yes    bool
 	force  bool
-	// wantName is the plugin an index promised the archive holds.
-	wantName string
+	// wantName is the plugin an index promised the archive holds, and
+	// wantVersion its version.
+	wantName    string
+	wantVersion string
+	// index is the index the archive is listed in, and sig its Sigstore
+	// signature there, if it has one.
+	index string
+	sig   *plugin.IndexSigstore
 }
 
 func newPluginInstallCmd(a *app) *cobra.Command {
@@ -89,7 +96,13 @@ will receive and the hosts it talks to, and asks you to confirm.
 
 A plain name, or name@version, installs from the signed plugin indexes in
 plugins.indexes: the index's signature, the archive's sha256 and every
-binary's sha256 are all checked.`,
+binary's sha256 are all checked. When the index names a Sigstore signature
+for the archive, tug downloads the bundle and checks it first: the Fulcio
+certificate chain, the Rekor transparency log entry and that the signer is
+the one the index names. With plugins.requireSignatures set in config.yaml,
+tug refuses index entries without a signature. An archive from a file or URL
+has no index to name its signer, so tug checks no signature on it and warns
+that it is unsigned.`,
 		Example: `  tug plugin install acme
   tug plugin install acme@0.1.0
   tug plugin install ./tug-provider-acme_0.1.0.tar.gz
@@ -130,12 +143,23 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		if err != nil {
 			return err
 		}
+		if v.Sigstore == nil && a.cfg.Plugins.RequireSignatures {
+			return fmt.Errorf("index %s has no Sigstore signature for %s %s, and plugins.requireSignatures in config.yaml refuses unsigned plugins; not installed",
+				m.Index, m.Plugin.Name, v.Version)
+		}
 		fmt.Fprintf(a.stderr, "%s %s from index %s\n", m.Plugin.Name, v.Version, m.Index)
 		o.sha256 = v.SHA256
-		o.wantName = m.Plugin.Name
+		o.wantName, o.wantVersion = m.Plugin.Name, v.Version
+		o.index, o.sig = m.Index, v.Sigstore
 		return a.installPlugin(ctx, v.URL, o)
 	}
 
+	// The signature comes first, then the archive's sha256 and every
+	// binary's.
+	signer, err := a.checkSignature(ctx, archive, o)
+	if err != nil {
+		return err
+	}
 	staged, err := dirs.Stage(archive, o.sha256)
 	if err != nil {
 		return err
@@ -151,6 +175,17 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	}
 
 	a.printManifest(m)
+	c := a.colors()
+	switch {
+	case signer != nil:
+		fmt.Fprintf(a.stderr, "  signed by:     %s\n", sigstore.Identity{Subject: signer.Subject, Issuer: signer.Issuer})
+	case o.index != "":
+		fmt.Fprintf(a.stderr, "%s index %s has no Sigstore signature for %s %s, so tug cannot check who built it\n",
+			c.Yellow("warning:"), o.index, o.wantName, o.wantVersion)
+	default:
+		fmt.Fprintf(a.stderr, "%s %s has no Sigstore signature, so tug cannot check who built it; install it only if you trust where it came from\n",
+			c.Yellow("warning:"), src)
+	}
 	a.warnUnknownFields(m, "which it ignores")
 	if !o.yes {
 		if !a.interactive() {
@@ -164,10 +199,50 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	if err != nil {
 		return err
 	}
-	c := a.colors()
 	fmt.Fprintf(a.stdout, "%s %s %s in %s\n", c.Green("Installed"), p.Name(), m.Metadata.Version, p.Dir)
 	fmt.Fprintf(a.stdout, "Next: tug import %s --account <id>\n", p.Name())
 	return nil
+}
+
+// checkSignature checks the archive against the Sigstore signature its
+// index names and returns the signer, or nil when there is no signature to
+// check.
+func (a *app) checkSignature(ctx context.Context, archive string, o installOptions) (*sigstore.Signer, error) {
+	if o.sig == nil {
+		return nil, nil
+	}
+	bundle, err := plugin.FetchBundle(ctx, o.sig.Bundle)
+	if err != nil {
+		return nil, fmt.Errorf("the Sigstore bundle for %s %s: %w", o.wantName, o.wantVersion, err)
+	}
+	v, err := a.sigstoreVerifier(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s, err := v.Verify(archive, bundle, o.sig.Signer())
+	if err != nil {
+		return nil, fmt.Errorf("checking the Sigstore signature of %s %s: %w", o.wantName, o.wantVersion, err)
+	}
+	return s, nil
+}
+
+// sigstoreVerifier checks plugin signatures against plugins.sigstoreTrustedRoot
+// when it is set, and against the public-good Sigstore deployment otherwise.
+func (a *app) sigstoreVerifier(ctx context.Context) (*sigstore.Verifier, error) {
+	if path := a.cfg.Plugins.SigstoreTrustedRoot; path != "" {
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(a.paths.Config, path)
+		}
+		return sigstore.FromFile(path)
+	}
+	v, err := sigstore.PublicGood(ctx, filepath.Join(a.paths.Cache, "sigstore"))
+	if err != nil {
+		return nil, err
+	}
+	if err := v.Stale(); err != nil {
+		a.log.Debug("using the Sigstore trust root built into tug", "err", err)
+	}
+	return v, nil
 }
 
 // printManifest shows what a plugin will be able to see and reach.

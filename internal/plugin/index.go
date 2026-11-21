@@ -32,6 +32,9 @@ const (
 	indexTTL = time.Hour
 	// maxIndexBytes bounds a downloaded index or signature.
 	maxIndexBytes = 8 << 20
+	// maxBundleBytes bounds a downloaded Sigstore bundle, which is a few
+	// KiB.
+	maxBundleBytes = 1 << 20
 )
 
 // Index is a list of reviewed plugins and where to get them. It is signed
@@ -339,18 +342,25 @@ func (c *IndexCache) Load(ctx context.Context, src IndexSource) (*Index, error) 
 }
 
 func (c *IndexCache) get(ctx context.Context, rawURL string) ([]byte, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, err
-	}
-	if u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname())) {
-		return nil, fmt.Errorf("refusing %s: indexes are downloaded over https only", rawURL)
+	return fetchSmall(ctx, c.HTTP, rawURL, "indexes", maxIndexBytes)
+}
+
+// FetchBundle downloads a Sigstore bundle over HTTPS. Plain HTTP is accepted
+// only for loopback hosts, for local testing.
+func FetchBundle(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchSmall(ctx, nil, rawURL, "Sigstore bundles", maxBundleBytes)
+}
+
+// fetchSmall downloads a file of at most limit bytes into memory. what names
+// such files in the error for a URL that is not https.
+func fetchSmall(ctx context.Context, client *http.Client, rawURL, what string, limit int) ([]byte, error) {
+	if !secureURL(rawURL) {
+		return nil, fmt.Errorf("refusing %s: %s are downloaded over https only", rawURL, what)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	client := c.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
@@ -362,12 +372,12 @@ func (c *IndexCache) get(ctx context.Context, rawURL string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("downloading %s: %s", rawURL, resp.Status)
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, maxIndexBytes+1))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > maxIndexBytes {
-		return nil, fmt.Errorf("%s is larger than %d MiB", rawURL, maxIndexBytes>>20)
+	if len(b) > limit {
+		return nil, fmt.Errorf("%s is larger than %d MiB", rawURL, limit>>20)
 	}
 	return b, nil
 }
