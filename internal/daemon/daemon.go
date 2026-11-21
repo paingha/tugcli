@@ -26,6 +26,7 @@ import (
 
 	"k8s.io/client-go/rest"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/filelock"
 	"github.com/paingha/tugcli/internal/session"
@@ -57,9 +58,17 @@ type Config struct {
 	IdleTimeout time.Duration
 	// Forward runs named port-forwards; without it tugd refuses them.
 	Forward ForwardFunc
+	// Audit, when set, records every write the proxy forwards. A write
+	// that cannot be recorded is not forwarded.
+	Audit   Recorder
 	Version string
 	Now     func() time.Time
 	Log     *slog.Logger
+}
+
+// Recorder notes a write the proxy is about to forward.
+type Recorder interface {
+	Record(ctx context.Context, e audit.Entry) error
 }
 
 // Server is a running tugd.

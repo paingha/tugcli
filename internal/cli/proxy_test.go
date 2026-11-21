@@ -16,6 +16,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/paingha/tugcli/internal/audit"
 )
 
 // TestProxySessionGuardsEveryClient runs the real tug binary: tug connect
@@ -99,6 +101,15 @@ func TestProxySessionGuardsEveryClient(t *testing.T) {
 	}
 	if writes.Load() != 1 {
 		t.Fatalf("the unlocked delete should reach the cluster once, got %d", writes.Load())
+	}
+	// tugd recorded it; the refused one is not there.
+	var entries []audit.Entry
+	if err := json.Unmarshal([]byte(run("audit", "-o", "json")), &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Source != audit.SourceProxy || entries[0].Allowed != audit.AllowedUnlocked ||
+		entries[0].Method != "DELETE" || entries[0].Path != "/api/v1/namespaces/payments" || entries[0].Cluster != "payments-prod" {
+		t.Fatalf("audit after a delete through tugd: %+v", entries)
 	}
 
 	// A client that loaded the kubeconfig before tugd moved is told to run

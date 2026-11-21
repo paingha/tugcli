@@ -350,12 +350,15 @@ func (a *app) factory(s *session.Session) (*kube.Factory, error) {
 	}
 	policy := &guard.Policy{
 		Cluster:       cl.Name,
+		ClusterID:     cl.ID,
+		Session:       s.State.ID,
 		ReadOnly:      s.State.ReadOnly,
 		UnlockedUntil: s.State.UnlockedUntil,
 		Now:           a.now,
 		Confirm: func(action string) bool {
 			return a.confirm(fmt.Sprintf("%s is read-only. Allow %s?", cl.Name, action), false)
 		},
+		Audit: a.audit(),
 	}
 	return &kube.Factory{
 		Cluster:   cl,

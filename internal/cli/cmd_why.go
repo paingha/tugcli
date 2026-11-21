@@ -21,8 +21,9 @@ type whyOptions struct {
 func newWhyCmd(a *app) *cobra.Command {
 	var o whyOptions
 	cmd := &cobra.Command{
-		Use:   "why <target>",
-		Short: "Explain why a workload or pod is not ready, and what to do next",
+		Use:         "why <target>",
+		Annotations: acrossClusters(acrossInProcess),
+		Short:       "Explain why a workload or pod is not ready, and what to do next",
 		Long: `Explain why a deployment, statefulset, daemonset, job or pod is not ready: its
 rollout; its pods' phases and conditions; containers that crash (with the last
 exit code), cannot pull their image, run out of memory or miss a ConfigMap or

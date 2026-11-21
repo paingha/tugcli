@@ -1,19 +1,32 @@
-// Package guard enforces read-only sessions. It sits in the HTTP transport of
-// every client tug builds, so tug commands cannot skip it.
+// Package guard enforces read-only sessions and records the writes it lets
+// through. It sits in the HTTP transport of every client tug builds, so tug
+// commands cannot skip it.
 package guard
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/paingha/tugcli/internal/audit"
 )
+
+// Recorder notes a write the guard lets through, before it is sent.
+type Recorder interface {
+	Record(ctx context.Context, e audit.Entry) error
+}
 
 // Policy decides whether writes are allowed on a cluster.
 type Policy struct {
-	Cluster       string
+	Cluster string
+	// ClusterID and Session name the catalog cluster and the tug session
+	// in audit entries.
+	ClusterID     string
+	Session       string
 	ReadOnly      bool
 	UnlockedUntil time.Time
 	// Now defaults to time.Now.
@@ -21,6 +34,9 @@ type Policy struct {
 	// Confirm, when set, is asked once before the first write on a read-only
 	// session. Returning true allows writes for the rest of the command.
 	Confirm func(action string) bool
+	// Audit, when set, records every write the guard lets through. A write
+	// that cannot be recorded is not sent.
+	Audit Recorder
 }
 
 // ReadOnlyFor reports whether a cluster with these labels should open
@@ -55,12 +71,25 @@ func (e *DeniedError) Error() string {
 }
 
 // Writable reports whether writes are allowed now without asking.
-func (p *Policy) Writable() bool {
-	now := time.Now
-	if p.Now != nil {
-		now = p.Now
+func (p *Policy) Writable() bool { return p.allowance() != "" }
+
+// allowance says how writes are allowed now without asking, as an audit
+// entry puts it, or "" when they are not.
+func (p *Policy) allowance() string {
+	switch {
+	case !p.ReadOnly:
+		return audit.AllowedReadWrite
+	case p.now().Before(p.UnlockedUntil):
+		return audit.AllowedUnlocked
 	}
-	return !p.ReadOnly || now().Before(p.UnlockedUntil)
+	return ""
+}
+
+func (p *Policy) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
 }
 
 // Wrap returns a RoundTripper that refuses writes when p does not allow them.
@@ -86,14 +115,54 @@ type roundTripper struct {
 
 func (g *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	u := g.apiURL(req.URL)
-	if IsRead(req.Method, u) || g.policy.Writable() {
+	if IsRead(req.Method, u) {
 		return g.next.RoundTrip(req)
 	}
-	action := Describe(req.Method, u)
-	if g.allowedByConfirm(action) {
-		return g.next.RoundTrip(req)
+	allowed := g.policy.allowance()
+	if allowed == "" {
+		action := Describe(req.Method, u)
+		if !g.allowedByConfirm(action) {
+			closeBody(req)
+			return nil, &DeniedError{Cluster: g.policy.Cluster, Action: action}
+		}
+		allowed = audit.AllowedConfirmed
 	}
-	return nil, &DeniedError{Cluster: g.policy.Cluster, Action: action}
+	if err := g.record(req, u, allowed); err != nil {
+		closeBody(req)
+		return nil, err
+	}
+	return g.next.RoundTrip(req)
+}
+
+// record notes a write in the policy's audit log: the method and the API
+// path u, below any base path, never the query string or the body.
+func (g *roundTripper) record(req *http.Request, u *url.URL, allowed string) error {
+	p := g.policy
+	if p.Audit == nil {
+		return nil
+	}
+	err := p.Audit.Record(req.Context(), audit.Entry{
+		Time:      p.now(),
+		Source:    audit.SourceTug,
+		Cluster:   p.Cluster,
+		ClusterID: p.ClusterID,
+		Session:   p.Session,
+		Allowed:   allowed,
+		Method:    req.Method,
+		Path:      u.Path,
+	})
+	if err != nil {
+		return fmt.Errorf("not sending %s, since it could not be recorded in the audit log: %w", Describe(req.Method, u), err)
+	}
+	return nil
+}
+
+// closeBody closes the body of a request that is not sent, as a
+// RoundTripper must.
+func closeBody(req *http.Request) {
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
 }
 
 // apiURL returns u with the server's base path taken off.
