@@ -1,0 +1,449 @@
+# Flux v2 objects as Flux 2.4 to 2.7 report them, for the tests. The clock
+# of the tests is 2026-11-21T12:00:00Z.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata: {name: flux-system, namespace: flux-system, uid: gitrepo-flux-system, generation: 1}
+spec:
+  interval: 1m0s
+  ref: {branch: main}
+  url: ssh://git@github.com/example/fleet
+status:
+  observedGeneration: 1
+  artifact:
+    digest: sha256:4f1c0d1e5e3b2a7f9c8d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b
+    lastUpdateTime: "2026-11-21T11:58:00Z"
+    path: gitrepository/flux-system/flux-system/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b.tar.gz
+    revision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+    size: 48210
+    url: http://source-controller.flux-system.svc.cluster.local./gitrepository/flux-system/flux-system/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b.tar.gz
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:58:00Z"
+    message: stored artifact for revision 'main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b'
+    observedGeneration: 1
+    reason: Succeeded
+    status: "True"
+    type: Ready
+  - lastTransitionTime: "2026-11-21T11:58:00Z"
+    message: stored artifact for revision 'main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b'
+    observedGeneration: 1
+    reason: Succeeded
+    status: "True"
+    type: ArtifactInStorage
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata: {name: team, namespace: flux-system, uid: gitrepo-team, generation: 2}
+spec:
+  interval: 5m0s
+  ref: {branch: main}
+  url: https://github.com/example/team
+status:
+  observedGeneration: 2
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:40:00Z"
+    message: "building artifact: failed to checkout and determine revision: unable to clone 'https://github.com/example/team': authentication required: Repository not found."
+    observedGeneration: 2
+    reason: GitOperationFailed
+    status: "True"
+    type: FetchFailed
+  - lastTransitionTime: "2026-11-21T11:40:00Z"
+    message: "building artifact: failed to checkout and determine revision: unable to clone 'https://github.com/example/team': authentication required: Repository not found."
+    observedGeneration: 2
+    reason: GitOperationFailed
+    status: "False"
+    type: Ready
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata: {name: podinfo, namespace: flux-system, uid: helmrepo-podinfo, generation: 1}
+spec:
+  interval: 1h0m0s
+  url: https://stefanprodan.github.io/podinfo
+status:
+  observedGeneration: 1
+  artifact:
+    lastUpdateTime: "2026-11-21T11:00:00Z"
+    revision: sha256:9e3f4a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:00:00Z"
+    message: "stored artifact: revision 'sha256:9e3f4a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f'"
+    observedGeneration: 1
+    reason: Succeeded
+    status: "True"
+    type: Ready
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata: {name: bitnami, namespace: flux-system, uid: helmrepo-bitnami, generation: 1}
+spec:
+  interval: 1h0m0s
+  url: https://charts.example.com/bitnami
+status:
+  observedGeneration: 1
+  conditions:
+  - lastTransitionTime: "2026-11-21T10:00:00Z"
+    message: "failed to fetch Helm repository index: failed to cache index to temporary file: failed to fetch https://charts.example.com/bitnami/index.yaml : 404 Not Found"
+    observedGeneration: 1
+    reason: IndexationFailed
+    status: "False"
+    type: Ready
+  - lastTransitionTime: "2026-11-21T10:00:00Z"
+    message: "failed to fetch Helm repository index: failed to cache index to temporary file: failed to fetch https://charts.example.com/bitnami/index.yaml : 404 Not Found"
+    observedGeneration: 1
+    reason: IndexationFailed
+    status: "True"
+    type: FetchFailed
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata: {name: ghcr, namespace: flux-system, uid: helmrepo-ghcr, generation: 1}
+spec:
+  type: oci
+  url: oci://ghcr.io/example/charts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmChart
+metadata: {name: shop-podinfo, namespace: flux-system, uid: helmchart-shop-podinfo, generation: 2}
+spec:
+  chart: podinfo
+  interval: 5m0s
+  reconcileStrategy: ChartVersion
+  sourceRef: {kind: HelmRepository, name: podinfo}
+  version: 6.x
+status:
+  observedGeneration: 2
+  observedChartName: podinfo
+  artifact:
+    lastUpdateTime: "2026-11-21T11:30:00Z"
+    revision: 6.7.1
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:30:00Z"
+    message: "pulled 'podinfo' chart with version '6.7.1'"
+    observedGeneration: 2
+    reason: ChartPullSucceeded
+    status: "True"
+    type: Ready
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmChart
+metadata: {name: shop-redis, namespace: flux-system, uid: helmchart-shop-redis, generation: 1}
+spec:
+  chart: redis
+  interval: 5m0s
+  sourceRef: {kind: HelmRepository, name: bitnami}
+  version: 19.x
+status:
+  observedGeneration: 1
+  conditions:
+  - lastTransitionTime: "2026-11-21T10:00:00Z"
+    message: "invalid chart reference: failed to get chart version for remote reference: no 'redis' chart with version matching '19.x' found"
+    observedGeneration: 1
+    reason: InvalidChartReference
+    status: "False"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: infra-controllers, namespace: flux-system, uid: ks-infra-controllers, generation: 1}
+spec:
+  interval: 1h0m0s
+  path: ./infrastructure/controllers
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  lastAttemptedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:58:30Z"
+    message: "Applied revision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: infra-configs, namespace: flux-system, uid: ks-infra-configs, generation: 1}
+spec:
+  dependsOn:
+  - name: infra-controllers
+  interval: 1h0m0s
+  path: ./infrastructure/configs
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  lastAttemptedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:59:00Z"
+    message: |-
+      ClusterIssuer/letsencrypt dry-run failed (Forbidden): admission webhook "validate.kyverno.svc-fail" denied the request:
+
+      resource ClusterIssuer//letsencrypt was blocked due to the following policies
+
+      require-team-label:
+        check-team: 'validation error: label team is required.'
+    observedGeneration: 1
+    reason: ReconciliationFailed
+    status: "False"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: apps, namespace: flux-system, uid: ks-apps, generation: 1}
+spec:
+  dependsOn:
+  - name: infra-configs
+  interval: 10m0s
+  path: ./apps/production
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+  targetNamespace: shop
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  lastAttemptedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:59:10Z"
+    message: dependency 'flux-system/infra-configs' is not ready
+    observedGeneration: 1
+    reason: DependencyNotReady
+    status: "False"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: tenants, namespace: flux-system, uid: ks-tenants, generation: 1}
+spec:
+  dependsOn:
+  - name: apps
+  - name: crds
+    namespace: platform
+  interval: 10m0s
+  path: ./tenants
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: 1
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:59:10Z"
+    message: dependency 'flux-system/apps' is not ready
+    observedGeneration: 1
+    reason: DependencyNotReady
+    status: "False"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: team, namespace: flux-system, uid: ks-team, generation: 1}
+spec:
+  interval: 10m0s
+  path: ./
+  prune: true
+  sourceRef: {kind: GitRepository, name: team}
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c
+  lastAttemptedRevision: main@sha1:0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:41:00Z"
+    message: "Source artifact not found, retrying in 30s"
+    observedGeneration: 1
+    reason: ArtifactFailed
+    status: "False"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: storefront, namespace: flux-system, uid: ks-storefront, generation: 2}
+spec:
+  interval: 10m0s
+  path: ./apps/storefront
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: 2
+  lastAppliedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  lastAttemptedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:58:40Z"
+    message: "Applied revision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+    observedGeneration: 2
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: Ready
+  inventory:
+    entries:
+    - {id: shop_checkout_apps_Deployment, v: v1}
+    - {id: shop_pricing_apps_Deployment, v: v1}
+    - {id: shop_orders_db.example.com_Database, v: v1}
+    - {id: shop_checkout-config__ConfigMap, v: v1}
+    - {id: shop_checkout-tls__Secret, v: v1}
+    - {id: shop_gone__ConfigMap, v: v1}
+    - {id: _system__storefront-reader_rbac.authorization.k8s.io_ClusterRole, v: v1}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: monitoring, namespace: flux-system, uid: ks-monitoring, generation: 3}
+spec:
+  interval: 30m0s
+  path: ./monitoring
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: 2
+  lastAppliedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  lastAttemptedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  conditions:
+  - lastTransitionTime: "2026-11-21T10:00:00Z"
+    message: "Applied revision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e"
+    observedGeneration: 2
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: legacy, namespace: flux-system, uid: ks-legacy, generation: 1}
+spec:
+  interval: 10m0s
+  path: ./legacy
+  prune: false
+  sourceRef: {kind: GitRepository, name: flux-system}
+  suspend: true
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  lastAttemptedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  conditions:
+  - lastTransitionTime: "2026-11-01T09:00:00Z"
+    message: "Applied revision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e"
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: edge, namespace: flux-system, uid: ks-edge, generation: 1}
+spec:
+  interval: 10m0s
+  kubeConfig:
+    secretRef: {name: edge-kubeconfig}
+  path: ./edge
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+  targetNamespace: shop
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  lastAttemptedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:58:50Z"
+    message: "Applied revision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: Ready
+  inventory:
+    entries:
+    - {id: shop_edge-proxy_apps_Deployment, v: v1}
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata: {name: podinfo, namespace: shop, uid: hr-podinfo, generation: 4}
+spec:
+  chart:
+    spec:
+      chart: podinfo
+      reconcileStrategy: ChartVersion
+      sourceRef: {kind: HelmRepository, name: podinfo, namespace: flux-system}
+      version: 6.x
+  driftDetection:
+    mode: warn
+  interval: 10m0s
+  upgrade:
+    remediation: {retries: 1, remediateLastFailure: true}
+status:
+  observedGeneration: 4
+  helmChart: flux-system/shop-podinfo
+  lastAttemptedConfigDigest: sha256:3a4b5c6d
+  lastAttemptedGeneration: 4
+  lastAttemptedReleaseAction: upgrade
+  lastAttemptedRevision: 6.7.1
+  storageNamespace: shop
+  failures: 2
+  upgradeFailures: 2
+  history:
+  - appVersion: 6.7.0
+    chartName: podinfo
+    chartVersion: 6.7.0
+    configDigest: sha256:3a4b5c6d
+    digest: sha256:aa11bb22
+    firstDeployed: "2026-11-01T09:00:00Z"
+    lastDeployed: "2026-11-21T11:45:00Z"
+    name: podinfo
+    namespace: shop
+    status: deployed
+    version: 5
+  - appVersion: 6.7.1
+    chartName: podinfo
+    chartVersion: 6.7.1
+    configDigest: sha256:3a4b5c6d
+    digest: sha256:cc33dd44
+    firstDeployed: "2026-11-01T09:00:00Z"
+    lastDeployed: "2026-11-21T11:44:00Z"
+    name: podinfo
+    namespace: shop
+    status: failed
+    version: 4
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:45:00Z"
+    message: "Failed to upgrade after 1 attempt(s)"
+    observedGeneration: 4
+    reason: RetriesExceeded
+    status: "True"
+    type: Stalled
+  - lastTransitionTime: "2026-11-21T11:44:00Z"
+    message: |-
+      Helm upgrade failed for release shop/podinfo with chart podinfo@6.7.1: cannot patch "podinfo" with kind Deployment: Deployment.apps "podinfo" is invalid: spec.template.spec.containers[0].resources.requests: Invalid value: "2": must be less than or equal to cpu limit of 1
+    observedGeneration: 4
+    reason: UpgradeFailed
+    status: "False"
+    type: Ready
+  - lastTransitionTime: "2026-11-21T11:44:00Z"
+    message: |-
+      Helm upgrade failed for release shop/podinfo with chart podinfo@6.7.1: cannot patch "podinfo" with kind Deployment: Deployment.apps "podinfo" is invalid: spec.template.spec.containers[0].resources.requests: Invalid value: "2": must be less than or equal to cpu limit of 1
+    observedGeneration: 4
+    reason: UpgradeFailed
+    status: "False"
+    type: Released
+  - lastTransitionTime: "2026-11-21T11:45:00Z"
+    message: "Helm rollback to previous release shop/podinfo.v3 with chart podinfo@6.7.0 succeeded"
+    observedGeneration: 4
+    reason: RollbackSucceeded
+    status: "True"
+    type: Remediated
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata: {name: redis, namespace: shop, uid: hr-redis, generation: 1}
+spec:
+  chart:
+    spec:
+      chart: redis
+      sourceRef: {kind: HelmRepository, name: bitnami, namespace: flux-system}
+      version: 19.x
+  interval: 10m0s
+status:
+  observedGeneration: 1
+  helmChart: flux-system/shop-redis
+  conditions:
+  - lastTransitionTime: "2026-11-21T10:00:00Z"
+    message: "HelmChart 'flux-system/shop-redis' is not ready: invalid chart reference: failed to get chart version for remote reference: no 'redis' chart with version matching '19.x' found"
+    observedGeneration: 1
+    reason: ArtifactFailed
+    status: "False"
+    type: Ready
