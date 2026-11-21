@@ -11,3 +11,7 @@ func (a *app) replaceProcess(path string, args, env []string) error {
 }
 
 func defaultShell() string { return "/bin/sh" }
+
+// defaultEditor is the editor tug profile edit runs when neither $VISUAL
+// nor $EDITOR names one.
+func defaultEditor() string { return "vi" }

@@ -425,8 +425,9 @@ func newPfCmd(a *app) *cobra.Command {
 		Long: `Port-forward to a running pod of a workload until Ctrl-C. With --name, tugd
 runs the forward in the background instead, keeps the same local ports, and
 starts it again on a new pod when the old one goes away. tug pf ls lists
-named forwards and tug pf stop ends them; a workload called ls or stop is
-deploy/ls or deploy/stop.`,
+named forwards and tug pf stop ends them; tug pf profile starts and stops a
+profile's forwards together. A workload called ls, stop or profile is
+deploy/ls, deploy/stop or deploy/profile.`,
 		Example: `  tug pf api 8080          # localhost:8080 -> container port 8080
   tug pf api 9000:http     # localhost:9000 -> the port named http
   tug pf db                # every declared port to the same local port
@@ -471,7 +472,7 @@ deploy/ls or deploy/stop.`,
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "namespace (default: the session's)")
 	cmd.Flags().StringSliceVar(&addresses, "address", []string{"localhost"}, "addresses to listen on")
 	cmd.Flags().StringVar(&name, "name", "", "run in the background through tugd under this name, reconnecting when the pod goes away")
-	cmd.AddCommand(newPfLsCmd(a), newPfStopCmd(a))
+	cmd.AddCommand(newPfLsCmd(a), newPfStopCmd(a), newPfProfileCmd(a))
 	return cmd
 }
 

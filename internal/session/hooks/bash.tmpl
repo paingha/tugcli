@@ -4,6 +4,29 @@
 # Set TUG_PIN_DISABLE=1 to ignore .tug.yaml pin files.
 _tug_bin={{.Bin}}
 
+# The prompt ends an unlock on time with the shell's own clock, so drawing
+# it starts no process: $EPOCHSECONDS in bash 5, printf's %(%s)T in bash
+# 4.2, and in older bash the time the hook loaded plus $SECONDS.
+if [ -n "${EPOCHSECONDS:-}" ]; then
+  _tug_clock=epoch
+elif (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 2) )); then
+  _tug_clock=printf
+elif _tug_t0=$(date +%s 2>/dev/null) && [ -n "$_tug_t0" ]; then
+  _tug_clock=seconds _tug_t0=$(( _tug_t0 - SECONDS ))
+else
+  _tug_clock=none
+fi
+
+# _tug_now sets _tug_t to the time in seconds since 1970, or to nothing.
+_tug_now() {
+  case "$_tug_clock" in
+    epoch) _tug_t=$EPOCHSECONDS ;;
+    printf) printf -v _tug_t '%(%s)T' -1 ;;
+    seconds) _tug_t=$(( _tug_t0 + SECONDS )) ;;
+    *) _tug_t="" ;;
+  esac
+}
+
 if [ "${TUG_SESSION_PID:-}" != "$$" ]; then
   eval "$("$_tug_bin" session new --shell bash --pid $$ --parent "${TUG_SESSION:-}")"
 fi
@@ -17,18 +40,47 @@ _tug_pin() {
   fi
 }
 
+# _tug_sync follows the session: KUBECONFIG, and the prompt from the
+# session's prompt file (see promptLines in internal/session). It keeps $?
+# for whatever runs after it in PROMPT_COMMAND.
 _tug_sync() {
+  local rc=$?
   _tug_pin
-  local f="${TUG_SESSION_DIR:-}/kubeconfig" style text
+  local f="${TUG_SESSION_DIR:-}/kubeconfig" style="" text expiry label badge via flags="" colour
   if [ -n "${TUG_SESSION_DIR:-}" ] && [ -f "$f" ]; then
     export KUBECONFIG="$f"
     TUG_PROMPT=""
-    if [ -r "$TUG_SESSION_DIR/prompt" ] && IFS=$'\t' read -r style text < "$TUG_SESSION_DIR/prompt"; then
+    if [ -r "$TUG_SESSION_DIR/prompt" ]; then
+      { IFS=$'\t' read -r style text; IFS=$'\t' read -r expiry label badge via; } < "$TUG_SESSION_DIR/prompt"
+    fi
+    if [ -n "$style" ]; then
+      case "$expiry" in ''|*[!0-9]*) expiry=0 ;; esac
+      if [ "$style" = unlocked ] && [ "$expiry" -gt 0 ]; then
+        _tug_now
+        if [ -n "$_tug_t" ]; then
+          if [ "$_tug_t" -ge "$expiry" ]; then
+            style=prod
+          else
+            flags="unlocked $(( (expiry - _tug_t + 59) / 60 ))m"
+          fi
+        fi
+      fi
       case "$style" in
-        prod) TUG_PROMPT=$'\001\e[1;31m\002'"⎈ ${text} (read-only)"$'\001\e[0m\002 ' ;;
-        unlocked) TUG_PROMPT=$'\001\e[1;33m\002'"⎈ ${text} (unlocked)"$'\001\e[0m\002 ' ;;
-        *) TUG_PROMPT=$'\001\e[36m\002'"⎈ ${text}"$'\001\e[0m\002 ' ;;
+        prod) colour='1;31' flags=read-only ;;
+        unlocked) colour='1;33' flags="${flags:-unlocked}" ;;
+        *) colour=36 ;;
       esac
+      if [ "$via" = proxy ]; then flags="${flags:+$flags, }proxy"; fi
+      if [ "$badge" = - ]; then badge=""; fi
+      if [ "$label" = - ]; then label=""; fi
+      text="⎈ $text"
+      if [ -z "$badge" ] && [ -n "$label" ]; then text="$text [$label]"; fi
+      if [ -n "$flags" ]; then text="$text ($flags)"; fi
+      TUG_PROMPT=$'\001\e['"$colour"$'m\002'"$text"$'\001\e[0m\002 '
+      # Production is marked whatever the mode, read-write included.
+      if [ -n "$badge" ]; then
+        TUG_PROMPT=$'\001\e[1;97;41m\002'" $badge "$'\001\e[0m\002 '"$TUG_PROMPT"
+      fi
     fi
   else
     if [ "${KUBECONFIG:-}" = "$f" ]; then
@@ -36,6 +88,7 @@ _tug_sync() {
     fi
     TUG_PROMPT=""
   fi
+  return $rc
 }
 
 _tug_exit() {

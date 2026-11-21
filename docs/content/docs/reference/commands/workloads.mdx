@@ -79,10 +79,15 @@ tug pf db 5432 --name db # in the background, through tugd
 
 | Subcommand | Meaning |
 | --- | --- |
-| `tug pf ls [-o table\|json\|yaml\|name]` | List the named forwards tugd keeps open. Alias: `list`. |
+| `tug pf ls [-o table\|json\|yaml\|name]` | List the named forwards tugd keeps open, with their profile, state, restarts and, while reconnecting, when they retry. Alias: `list`. |
 | `tug pf stop <name>... \| --all` | End named forwards. |
+| `tug pf profile up <name>` | Start a [profile](/docs/guides/profiles)'s forwards that aren't running. Every local port is checked first, and none start when one is taken. |
+| `tug pf profile down <name>` | Stop a profile's forwards, including ones since removed from its file. |
+| `tug pf profile ls [name] [-o …]` | List a profile's forwards and how they are doing, or every profile's. |
 
-A workload called `ls` or `stop` is `deploy/ls` or `deploy/stop`.
+tugd starts a named forward that drops again on a running pod, on the same
+local ports, after 1 second and then up to 30 seconds apart. A workload called
+`ls`, `stop` or `profile` is `deploy/ls`, `deploy/stop` or `deploy/profile`.
 
 ## tug restart
 

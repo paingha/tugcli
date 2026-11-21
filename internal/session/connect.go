@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,8 @@ const (
 
 // Connect points the session at a cluster: it writes a kubeconfig with one
 // context whose user runs `tug auth token`, so no secret is written to disk.
+// It ends any unlock and forgets the profile the session was connected
+// with; SetProfile records a new one.
 func (s *Session) Connect(cl *catalog.Cluster, namespace string, readOnly bool, auth AuthCommand) error {
 	if namespace == "" {
 		namespace = cl.DefaultNamespace
@@ -51,6 +54,10 @@ func (s *Session) Connect(cl *catalog.Cluster, namespace string, readOnly bool, 
 		s.State.Namespace = namespace
 		s.State.ReadOnly = readOnly
 		s.State.UnlockedUntil = time.Time{}
+		labels := cl.EffectiveLabels()
+		s.State.Env = labels["env"]
+		s.State.Production = s.m.production(labels)
+		s.State.Profile = ""
 		s.State.ProxyURL = auth.ProxyURL
 		return true, writeKubeconfig(s.KubeconfigPath(), Kubeconfig(cl, namespace, s.State.ID, auth))
 	})
@@ -147,6 +154,18 @@ func (s *Session) Lock() error {
 	})
 }
 
+// SetProfile records the profile the session was connected with, or clears
+// it when name is empty.
+func (s *Session) SetProfile(name string) error {
+	return s.update(func() (bool, error) {
+		if !s.State.Connected() {
+			return false, errors.New("not connected; run `tug connect` first")
+		}
+		s.State.Profile = name
+		return true, nil
+	})
+}
+
 // SetPin records the pin that chose the connection, or clears it when p is
 // nil, for example when the user connects by hand.
 func (s *Session) SetPin(p *Pin) error {
@@ -226,16 +245,61 @@ func (s *Session) saveWithPrompt() error {
 	if !s.State.Connected() {
 		return nil
 	}
-	// The hook reads "<style>\t<text>" with the shell's read builtin, so the
-	// prompt costs no process per command. An unlock expiry is not reflected
-	// until the next tug command; the guard itself always checks the time.
-	text := s.State.ClusterName
-	if s.State.Namespace != "" {
-		text += ":" + s.State.Namespace
+	return config.WriteFileAtomic(filepath.Join(s.dir, promptFileName), []byte(s.promptLines(s.m.now())), 0o600)
+}
+
+// promptLines is the prompt file, which the shell hook reads with the
+// shell's read builtin so that drawing the prompt starts no process.
+//
+// The first line, "<style>\t<cluster>:<namespace>", is all that hooks from
+// earlier versions read, so shells started before an upgrade keep working.
+// The second is "<unlocked-until>\t<env>\t<badge>\t<proxy>": when an unlock
+// ends, in seconds since 1970 or 0 for none, which the hook compares with
+// the shell's own clock so the prompt stops saying unlocked on time without
+// another tug command; the cluster's env label; the badge that marks a
+// production cluster; and "proxy" when the session goes through tugd. An
+// empty field is "-", since read joins runs of tabs.
+func (s *Session) promptLines(now time.Time) string {
+	st := s.State
+	text := st.ClusterName
+	if st.Namespace != "" {
+		text += ":" + st.Namespace
 	}
-	text = strings.NewReplacer("\t", " ", "\n", " ").Replace(text)
-	line := s.PromptStyle(s.m.now()) + "\t" + text + "\n"
-	return config.WriteFileAtomic(filepath.Join(s.dir, promptFileName), []byte(line), 0o600)
+	style := s.PromptStyle(now)
+	until := int64(0)
+	if style == StyleUnlocked {
+		// Rounded down, so the prompt never claims a second too many.
+		until = st.UnlockedUntil.Unix()
+	}
+	badge := ""
+	if st.Production {
+		badge = strings.ToUpper(st.Env)
+		if badge == "" {
+			badge = "PROD"
+		}
+	}
+	proxy := ""
+	if st.ProxyURL != "" {
+		proxy = "proxy"
+	}
+	return style + "\t" + promptField(text) + "\n" +
+		strconv.FormatInt(until, 10) + "\t" + promptField(st.Env) + "\t" + promptField(badge) + "\t" + promptField(proxy) + "\n"
+}
+
+// promptField makes s safe to print in a prompt and to read back as one
+// field: control characters, which could move the cursor or retitle the
+// terminal, become spaces, and an empty field becomes "-".
+func promptField(s string) string {
+	s = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return ' '
+		}
+		return r
+	}, s))
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // Kubeconfig builds the single-context kubeconfig for a cluster. With a

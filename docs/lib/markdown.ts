@@ -58,20 +58,30 @@ function matchLadder(): string {
   ].join('\n');
 }
 
+// promptLine reads <Prompt>'s string attributes; prod and proxy are written
+// prod="true" and proxy="true" here.
 function promptLine(a: Attrs): string {
-  const where = `⎈ ${a.cluster ?? 'staging-us'}:${a.ns ?? 'default'}`;
-  const suffix = a.mode === 'readonly' ? ' (read-only)' : a.mode === 'unlocked' ? ' (unlocked)' : '';
+  const prod = a.prod === 'true';
+  const flags = [
+    a.mode === 'readonly' ? 'read-only' : a.mode === 'unlocked' ? (a.left ? `unlocked ${a.left}` : 'unlocked') : '',
+    a.proxy === 'true' ? 'proxy' : '',
+  ].filter(Boolean);
+  const badge = prod ? `[${(a.env || 'prod').toUpperCase()}] ` : '';
+  const label = !prod && a.env ? ` [${a.env}]` : '';
+  const where = `⎈ ${a.cluster ?? 'staging-us'}:${a.ns ?? 'default'}${label}`;
+  const suffix = flags.length ? ` (${flags.join(', ')})` : '';
   const command = a.command ? ` ${a.command}` : '';
-  return `\`${where}${suffix} ~/src $${command}\``;
+  return `\`${badge}${where}${suffix} ~/src $${command}\``;
 }
 
 function promptModes(a: Attrs): string {
   const cluster = a.cluster ?? 'prod-eu';
   const ns = a.ns ?? 'payments';
   return [
-    `- **Read-write**: \`⎈ staging-us:${ns}\` in cyan. Changes are allowed.`,
-    `- **Read-only**: \`⎈ ${cluster}:${ns} (read-only)\` in bold red. tug refuses or asks before changes.`,
-    `- **Unlocked**: \`⎈ ${cluster}:${ns} (unlocked)\` in bold yellow. A read-only cluster, open for a while.`,
+    `- **Read-write**: \`⎈ staging-us:${ns} [staging]\` in cyan, with the env label. Changes are allowed.`,
+    `- **Read-only**: \`[PROD] ⎈ ${cluster}:${ns} (read-only)\` in bold red. tug refuses or asks before changes.`,
+    `- **Unlocked**: \`[PROD] ⎈ ${cluster}:${ns} (unlocked 12m)\` in bold yellow, with the time left. Read-only again when it runs out.`,
+    `- **Production, read-write**: \`[PROD] ⎈ ${cluster}:${ns}\`. The red PROD badge marks production in every mode.`,
   ].join('\n');
 }
 
