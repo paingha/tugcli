@@ -40,6 +40,7 @@ func newPluginCmd(a *app) *cobra.Command {
 func (a *app) pluginDirs() plugin.Dirs {
 	d := plugin.NewDirs(a.paths.Data)
 	d.TugVersion = version.String()
+	d.PreferWASM = a.cfg.Plugins.WASM.Prefer
 	return d
 }
 
@@ -150,7 +151,17 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		return fmt.Errorf("%s is a built-in provider; a plugin may replace it only if plugins.allowOverride in config.yaml lists it", m.Metadata.Name)
 	}
 
-	a.printManifest(m)
+	if staged.Plugin.WASM {
+		// Compile now: a module tug cannot run is refused before it is
+		// installed, and the first call finds it compiled.
+		runner := a.pluginRunner(staged.Plugin)
+		err := runner.Prepare()
+		_ = runner.Close() // the compiled module stays in the cache
+		if err != nil {
+			return fmt.Errorf("not installed: %w", err)
+		}
+	}
+	a.printManifest(staged.Plugin)
 	a.warnUnknownFields(m, "which it ignores")
 	if !o.yes {
 		if !a.interactive() {
@@ -170,8 +181,10 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 	return nil
 }
 
-// printManifest shows what a plugin will be able to see and reach.
-func (a *app) printManifest(m *plugin.Manifest) {
+// printManifest shows what a plugin will be able to see and reach, and how
+// tug runs it.
+func (a *app) printManifest(p *plugin.Plugin) {
+	m := p.Manifest
 	secrets := make([]string, 0, len(m.Spec.Secrets))
 	for _, s := range m.Spec.Secrets {
 		secrets = append(secrets, s.Name)
@@ -189,6 +202,11 @@ func (a *app) printManifest(m *plugin.Manifest) {
 	fmt.Fprintf(a.stderr, "  environment:   %s\n", dash(strings.Join(m.Spec.Env, ", ")))
 	fmt.Fprintf(a.stderr, "  network hosts: %s\n", dash(strings.Join(m.Spec.Network, ", ")))
 	fmt.Fprintf(a.stderr, "  platforms:     %s\n", strings.Join(platforms, ", "))
+	if p.WASM {
+		fmt.Fprintf(a.stderr, "  runs as:       WebAssembly in tug's sandbox: https to the network hosts only, no files\n")
+	} else {
+		fmt.Fprintf(a.stderr, "  runs as:       a process with your user's access\n")
+	}
 	for i, s := range m.Settings() {
 		label := ""
 		if i == 0 {
@@ -256,7 +274,18 @@ func newPluginLinkCmd(a *app) *cobra.Command {
 					a.colors().Yellow("warning:"), p.Name())
 			}
 			a.warnUnknownFields(p.Manifest, "which it ignores")
-			_, err = fmt.Fprintf(a.stdout, "Linked %s %s from %s %s\n", p.Name(), p.Manifest.Metadata.Version, p.Dir,
+			build := ""
+			if p.WASM {
+				build = " as WebAssembly"
+				// Compile now, so a module tug cannot run says so here; the
+				// link stands, ready for a rebuilt module.
+				runner := a.pluginRunner(p)
+				if err := runner.Prepare(); err != nil {
+					fmt.Fprintf(a.stderr, "%s %v\n", a.colors().Yellow("warning:"), err)
+				}
+				_ = runner.Close() // the compiled module stays in the cache
+			}
+			_, err = fmt.Fprintf(a.stdout, "Linked %s %s%s from %s %s\n", p.Name(), p.Manifest.Metadata.Version, build, p.Dir,
 				a.colors().Yellow("(dev: not checksummed)"))
 			return err
 		},
@@ -297,9 +326,13 @@ func newPluginDescribeCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			a.printManifest(pp.Plugin().Manifest)
+			a.printManifest(pp.Plugin())
 			fmt.Fprintf(a.stderr, "  description:   %s\n", dash(d.Description))
-			fmt.Fprintf(a.stderr, "  protocols:     %s\n  executable:    %s\n", strings.Join(d.Protocols, ", "), pp.Plugin().Bin)
+			bin := "executable:"
+			if pp.Plugin().WASM {
+				bin = "module:"
+			}
+			fmt.Fprintf(a.stderr, "  protocols:     %s\n  %-15s%s\n", strings.Join(d.Protocols, ", "), bin, pp.Plugin().Bin)
 			a.warnUnknownFields(pp.Plugin().Manifest, "which it ignores")
 			if d.Name != pp.Plugin().Name() {
 				fmt.Fprintf(a.stderr, "%s describe says %q but the manifest says %q\n", a.colors().Yellow("warning:"), d.Name, pp.Plugin().Name())
@@ -446,8 +479,20 @@ func (a *app) testPlugin(ctx context.Context, name string, o pluginTestOptions) 
 	var target conformance.Target
 	switch p := e.Provider.(type) {
 	case *plugin.Provider:
-		runner := &plugin.Runner{Bin: p.Plugin().Bin, Env: p.Plugin().Manifest.Spec.Env}
-		target = conformance.Target{Command: p.Plugin().Bin, Env: runner.Environ()}
+		if pl := p.Plugin(); pl.WASM {
+			// tug runs the module, so the suite runs tug, which gives the
+			// module the plugin's sandbox.
+			target = conformance.Target{Command: selfPath(), Args: []string{"provider-exec", name}, Env: os.Environ(), Module: pl.Bin}
+			// Compile once into the cache, rather than in each process.
+			warm := a.pluginRunner(pl)
+			err := warm.Prepare()
+			_ = warm.Close() // the compiled module stays in the cache
+			if err != nil {
+				return err
+			}
+		} else {
+			target = conformance.Target{Command: pl.Bin, Env: a.pluginRunner(pl).Environ()}
+		}
 	default:
 		// Built-ins run through the same process interface as plugins.
 		target = conformance.Target{Command: selfPath(), Args: []string{"provider-exec", name}, Env: os.Environ()}
@@ -540,7 +585,8 @@ func (a *app) printReport(r conformance.Report) {
 }
 
 // newProviderExecCmd serves a provider over the plugin protocol. It lets the
-// conformance suite test built-ins exactly as it tests plugins.
+// conformance suite test built-ins exactly as it tests plugins, and reach a
+// WebAssembly plugin, which only tug can run, through a process.
 func newProviderExecCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:    "provider-exec <provider> <operation>",
@@ -551,6 +597,17 @@ func newProviderExecCmd(a *app) *cobra.Command {
 			p, err := a.registry().Get(args[0])
 			if err != nil {
 				return err
+			}
+			if pp, ok := p.(*plugin.Provider); ok {
+				// The plugin itself answers, bytes and exit status as they are.
+				code, err := pp.Exec(cmd.Context(), args[1:], a.stdin, a.stdout, a.stderr)
+				if err != nil {
+					return err
+				}
+				if code != 0 {
+					return &exitError{code: code}
+				}
+				return nil
 			}
 			if code := provider.Run(cmd.Context(), registry.ToSDK(p), args[1:], a.stdin, a.stdout, a.stderr); code != 0 {
 				return &exitError{code: code}

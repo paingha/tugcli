@@ -221,6 +221,9 @@ plugins:
   allowOverride: [kubeconfig]
   timeouts:
     list: 90s
+  wasm:
+    prefer: true
+    memoryLimitMiB: 512
 sessions:
   maxAge: 24h
 oidc:
@@ -244,6 +247,12 @@ oidc:
 	}
 	if got := c.Plugins.Timeouts["list"].Duration; got != 90*time.Second {
 		t.Errorf("Plugins.Timeouts[list] = %v, want 90s", got)
+	}
+	if !c.Plugins.WASM.Prefer || c.Plugins.WASM.MemoryLimit() != 512<<20 {
+		t.Errorf("Plugins.WASM = %+v (limit %d), want prefer and 512 MiB", c.Plugins.WASM, c.Plugins.WASM.MemoryLimit())
+	}
+	if got := (WASMConfig{}).MemoryLimit(); got != 0 {
+		t.Errorf("MemoryLimit() unset = %d, want 0 for the default", got)
 	}
 	if want := []string{"127.0.0.1:9000"}; !reflect.DeepEqual(c.OIDC.ListenAddresses, want) {
 		t.Errorf("OIDC.ListenAddresses = %v, want %v", c.OIDC.ListenAddresses, want)

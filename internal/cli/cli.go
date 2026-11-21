@@ -191,14 +191,7 @@ func (a *app) registry() *registry.Registry {
 		a.log.Debug("skipping plugin", "location", prob.Location, "err", prob.Err)
 	}
 	for _, p := range plugins {
-		runner := &plugin.Runner{
-			Bin:      p.Bin,
-			Name:     p.Name(),
-			Env:      p.Manifest.Spec.Env,
-			Timeouts: a.cfg.PluginTimeouts(),
-			Serve:    p.Manifest.Spec.Capabilities.Has(provider.CapServe),
-			Log:      a.log,
-		}
+		runner := a.pluginRunner(p)
 		kind := registry.KindPlugin
 		if p.Dev {
 			kind = registry.KindDevPlugin
@@ -208,6 +201,28 @@ func (a *app) registry() *registry.Registry {
 		}
 	}
 	a.reg = r
+	return r
+}
+
+// pluginRunner returns the runner for a plugin: a process for a native
+// build, or tug's sandbox for a WebAssembly one, whose compiled modules are
+// cached so that only the first run of each pays for compiling it.
+func (a *app) pluginRunner(p *plugin.Plugin) *plugin.Runner {
+	r := &plugin.Runner{
+		Bin:      p.Bin,
+		Name:     p.Name(),
+		Env:      p.Manifest.Spec.Env,
+		Timeouts: a.cfg.PluginTimeouts(),
+		Serve:    p.Manifest.Spec.Capabilities.Has(provider.CapServe),
+		Log:      a.log,
+	}
+	if p.WASM {
+		r.WASM = &plugin.WASMOptions{
+			Network:     p.Manifest.Spec.Network,
+			MemoryLimit: a.cfg.Plugins.WASM.MemoryLimit(),
+			CacheDir:    filepath.Join(a.paths.Cache, "wasm"),
+		}
+	}
 	return r
 }
 
