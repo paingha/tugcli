@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +62,7 @@ func TestConnectWritesNoSecrets(t *testing.T) {
 	}
 
 	prompt, _ := os.ReadFile(filepath.Join(s.Dir(), promptFileName))
-	if string(prompt) != "prod\tprod-eu:payments\n" {
+	if string(prompt) != "prod\tprod-eu:payments\n0\t-\t-\t-\n" {
 		t.Fatalf("prompt = %q", prompt)
 	}
 
@@ -334,6 +335,10 @@ func TestHooksRenderAndParse(t *testing.T) {
 		Zsh:  {"zsh", "-n"},
 		Bash: {"bash", "-n"},
 		Fish: {"fish", "--no-execute"},
+		// PowerShell parses the file named by $TUG_TEST_HOOK.
+		PowerShell: {"pwsh", "-NoProfile", "-NonInteractive", "-Command", `$errs = $null; ` +
+			`$null = [System.Management.Automation.Language.Parser]::ParseFile($env:TUG_TEST_HOOK, [ref]$null, [ref]$errs); ` +
+			`if ($errs) { $errs | ForEach-Object { $_.ToString() }; exit 1 }`},
 	}
 	for _, sh := range Shells() {
 		t.Run(string(sh), func(t *testing.T) {
@@ -353,10 +358,18 @@ func TestHooksRenderAndParse(t *testing.T) {
 				t.Skipf("%s not installed", argv[0])
 			}
 			f := filepath.Join(t.TempDir(), "hook")
+			if sh == PowerShell {
+				f += ".ps1"
+			}
 			if err := os.WriteFile(f, []byte(script), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := exec.Command(bin, append(argv[1:], f)...).CombinedOutput(); err != nil {
+			cmd := exec.Command(bin, append(argv[1:], f)...)
+			if sh == PowerShell {
+				cmd = exec.Command(bin, argv[1:]...)
+				cmd.Env = append(os.Environ(), "TUG_TEST_HOOK="+f)
+			}
+			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%s rejects the hook: %v\n%s", sh, err, out)
 			}
 		})
@@ -378,5 +391,88 @@ func TestQuote(t *testing.T) {
 		if got := tt.sh.Quote(tt.in); got != tt.want {
 			t.Errorf("%s.Quote(%q) = %s, want %s", tt.sh, tt.in, got, tt.want)
 		}
+	}
+}
+
+// The prompt file carries what the hook needs to draw the prompt without
+// asking tug: the env label, a production badge whatever the mode, whether
+// the session goes through tugd, and when an unlock ends.
+func TestPromptFile(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	prod := &catalog.Cluster{ID: "x/prod", Name: "prod-eu", Labels: map[string]string{"env": "prod"}}
+	staging := &catalog.Cluster{ID: "x/staging", Name: "staging\x1b]0;owned\x07", Labels: map[string]string{"env": "staging", "tier": "critical"}}
+	tests := []struct {
+		name     string
+		opts     []Option
+		cl       *catalog.Cluster
+		readOnly bool
+		auth     AuthCommand
+		unlock   time.Duration
+		want     string
+	}{
+		{"production read-only", nil, prod, true, AuthCommand{Command: "tug"}, 0,
+			"prod\tprod-eu:web\n0\tprod\tPROD\t-\n"},
+		{"production read-write still has its badge", nil, prod, false, AuthCommand{Command: "tug"}, 0,
+			"normal\tprod-eu:web\n0\tprod\tPROD\t-\n"},
+		{"unlocked through tugd", nil, prod, true, proxied, 15 * time.Minute,
+			fmt.Sprintf("unlocked\tprod-eu:web\n%d\tprod\tPROD\tproxy\n", now.Add(15*time.Minute).Unix())},
+		{"not production, control characters made harmless", nil, staging, false, AuthCommand{Command: "tug"}, 0,
+			"normal\tstaging ]0;owned :web\n0\tstaging\t-\t-\n"},
+		{"production by configured labels", []Option{WithProduction(func(l map[string]string) bool { return l["tier"] == "critical" })},
+			staging, true, AuthCommand{Command: "tug"}, 0,
+			"prod\tstaging ]0;owned :web\n0\tstaging\tSTAGING\t-\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewManager(t.TempDir(), tt.opts...)
+			m.now = func() time.Time { return now }
+			s, err := m.Create(1, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Connect(tt.cl, "web", tt.readOnly, tt.auth); err != nil {
+				t.Fatal(err)
+			}
+			if tt.unlock > 0 {
+				if err := s.Unlock(tt.unlock); err != nil {
+					t.Fatal(err)
+				}
+			}
+			b, err := os.ReadFile(filepath.Join(s.Dir(), promptFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != tt.want {
+				t.Fatalf("prompt file = %q, want %q", b, tt.want)
+			}
+		})
+	}
+}
+
+func TestProfileFollowsTheConnection(t *testing.T) {
+	m := NewManager(t.TempDir())
+	s, _ := m.Create(1, "")
+	if err := s.SetProfile("payments"); err == nil {
+		t.Fatal("SetProfile on a session that is not connected succeeded")
+	}
+	if err := s.Connect(prodEU, "", true, AuthCommand{Command: "tug"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProfile("payments"); err != nil {
+		t.Fatal(err)
+	}
+	child, err := m.Create(2, s.State.ID)
+	if err != nil || child.State.Profile != "payments" {
+		t.Fatalf("child profile = %q, %v; want the parent's", child.State.Profile, err)
+	}
+	if c := s.State.Current(); c.Profile != "payments" {
+		t.Fatalf("Current() = %+v, want the profile", c)
+	}
+	// Connecting some other way forgets the profile.
+	if err := s.Connect(prodEU, "web", true, AuthCommand{Command: "tug"}); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := m.Open(s.State.ID); again.State.Profile != "" {
+		t.Fatalf("profile after connecting by hand = %q", again.State.Profile)
 	}
 }

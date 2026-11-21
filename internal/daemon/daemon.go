@@ -83,12 +83,15 @@ type Recorder interface {
 type Server struct {
 	cfg Config
 
-	mu         sync.Mutex
-	tokens     map[string]string // session ID to its proxy token
-	upstreams  map[string]*upstream
-	building   map[string]*sync.Mutex // per cluster, held while its upstream is built
-	refresh    map[string]bool        // clusters whose next upstream needs a new credential
-	forwards   map[string]*forwardRunner
+	mu        sync.Mutex
+	tokens    map[string]string // session ID to its proxy token
+	upstreams map[string]*upstream
+	building  map[string]*sync.Mutex // per cluster, held while its upstream is built
+	refresh   map[string]bool        // clusters whose next upstream needs a new credential
+	forwards  map[string]*forwardRunner
+	// probe checks that a local port is free before a group of forwards
+	// asks for it.
+	probe      func(addresses []string, port uint16) error
 	proxyURL   string
 	proxyCA    []byte
 	lastActive time.Time
@@ -116,6 +119,7 @@ func New(cfg Config) *Server {
 		building:  map[string]*sync.Mutex{},
 		refresh:   map[string]bool{},
 		forwards:  map[string]*forwardRunner{},
+		probe:     listenProbe,
 		shutdown:  make(chan struct{}),
 	}
 }

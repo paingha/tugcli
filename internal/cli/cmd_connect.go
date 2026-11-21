@@ -231,6 +231,9 @@ type statusView struct {
 	UnlockedUntil *time.Time `json:"unlockedUntil,omitempty"`
 	Kubeconfig    string     `json:"kubeconfig,omitempty"`
 	ProxyURL      string     `json:"proxyURL,omitempty"`
+	Env           string     `json:"env,omitempty"`
+	Production    bool       `json:"production,omitempty"`
+	Profile       string     `json:"profile,omitempty"`
 }
 
 func newStatusCmd(a *app) *cobra.Command {
@@ -251,13 +254,16 @@ func newStatusCmd(a *app) *cobra.Command {
 			}
 			st := s.State
 			v := statusView{
-				Session:   st.ID,
-				Cluster:   st.ClusterName,
-				ClusterID: st.ClusterID,
-				Namespace: st.Namespace,
-				ReadOnly:  st.ReadOnly,
-				Writable:  st.Writable(a.now()),
-				ProxyURL:  st.ProxyURL,
+				Session:    st.ID,
+				Cluster:    st.ClusterName,
+				ClusterID:  st.ClusterID,
+				Namespace:  st.Namespace,
+				ReadOnly:   st.ReadOnly,
+				Writable:   st.Writable(a.now()),
+				ProxyURL:   st.ProxyURL,
+				Env:        st.Env,
+				Production: st.Production,
+				Profile:    st.Profile,
 			}
 			if st.Connected() {
 				v.Kubeconfig = s.KubeconfigPath()
@@ -288,6 +294,16 @@ func newStatusCmd(a *app) *cobra.Command {
 				c.Bold(st.ClusterName), st.Namespace, mode, v.Kubeconfig)
 			if st.ProxyURL != "" {
 				fmt.Fprintf(a.stdout, "proxy:      %s (tugd guards every client)\n", st.ProxyURL)
+			}
+			if st.Env != "" || st.Production {
+				env := st.Env
+				if st.Production {
+					env = c.Red(strings.TrimSpace(env + " (production)"))
+				}
+				fmt.Fprintf(a.stdout, "env:        %s\n", env)
+			}
+			if st.Profile != "" {
+				fmt.Fprintf(a.stdout, "profile:    %s\n", st.Profile)
 			}
 			return nil
 		},

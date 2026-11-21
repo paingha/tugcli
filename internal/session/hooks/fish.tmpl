@@ -4,25 +4,89 @@
 # Set TUG_PIN_DISABLE=1 to ignore .tug.yaml pin files.
 set -g _tug_bin {{.Bin}}
 
+# The prompt ends an unlock on time with the shell's own clock, so drawing
+# it starts no process: path mtime (fish 3.5) gives a file's time and how
+# long ago that was. Older fish asks date, and only while unlocked.
+if contains -- path (builtin -n)
+    set -g _tug_clock path
+end
+
+# _tug_now prints the time in seconds since 1970.
+function _tug_now
+    if set -q _tug_clock
+        set -l m (path mtime -- "$TUG_SESSION_DIR/prompt" 2>/dev/null)
+        set -l r (path mtime --relative -- "$TUG_SESSION_DIR/prompt" 2>/dev/null)
+        if test -n "$m"; and test -n "$r"
+            math $m + $r
+            return
+        end
+    end
+    date +%s 2>/dev/null
+end
+
 if test "$TUG_SESSION_PID" != "$fish_pid"
     $_tug_bin session new --shell fish --pid $fish_pid --parent "$TUG_SESSION" | source
 end
 
+# _tug_sync follows the session: KUBECONFIG, and the prompt from the
+# session's prompt file (see promptLines in internal/session).
 function _tug_sync --on-event fish_prompt
     set -l f "$TUG_SESSION_DIR/kubeconfig"
     if test -n "$TUG_SESSION_DIR"; and test -f "$f"
         set -gx KUBECONFIG $f
         set -g TUG_PROMPT ""
+        set -l style ""
+        set -l text ""
+        set -l expiry 0
+        set -l label -
+        set -l badge -
+        set -l via -
         if test -r "$TUG_SESSION_DIR/prompt"
-            read -l -d \t style text < "$TUG_SESSION_DIR/prompt"
-            switch "$style"
-                case prod
-                    set -g TUG_PROMPT (set_color -o red)"⎈ $text (read-only)"(set_color normal)" "
-                case unlocked
-                    set -g TUG_PROMPT (set_color -o yellow)"⎈ $text (unlocked)"(set_color normal)" "
-                case '*'
-                    set -g TUG_PROMPT (set_color cyan)"⎈ $text"(set_color normal)" "
+            begin
+                read -d \t style text
+                read -d \t expiry label badge via
+            end < "$TUG_SESSION_DIR/prompt"
+        end
+        test -n "$style"; or return 0
+        string match -qr '^[0-9]+$' -- "$expiry"; or set expiry 0
+        set -l flags
+        if test "$style" = unlocked; and test "$expiry" -gt 0
+            set -l now (_tug_now)
+            if string match -qr '^[0-9]+$' -- "$now"
+                if test "$now" -ge "$expiry"
+                    set style prod
+                else
+                    set flags "unlocked "(math "ceil(($expiry - $now) / 60)")"m"
+                end
             end
+        end
+        set -l colour cyan
+        switch "$style"
+            case prod
+                set colour red
+                set flags read-only
+            case unlocked
+                set colour yellow
+                test -n "$flags"; or set flags unlocked
+        end
+        test "$via" = proxy; and set -a flags proxy
+        contains -- "$badge" - ""; and set badge ""
+        contains -- "$label" - ""; and set label ""
+        set -l shown "⎈ $text"
+        if test -z "$badge"; and test -n "$label"
+            set shown "$shown [$label]"
+        end
+        if test -n "$flags"
+            set shown "$shown ("(string join ', ' $flags)")"
+        end
+        if test $colour = cyan
+            set -g TUG_PROMPT (set_color cyan)"$shown"(set_color normal)" "
+        else
+            set -g TUG_PROMPT (set_color -o $colour)"$shown"(set_color normal)" "
+        end
+        # Production is marked whatever the mode, read-write included.
+        if test -n "$badge"
+            set -g TUG_PROMPT (set_color -o -b red white)" $badge "(set_color normal)" $TUG_PROMPT"
         end
     else
         if test "$KUBECONFIG" = "$f"

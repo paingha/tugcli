@@ -26,7 +26,11 @@ func newInitCmd(a *app) *cobra.Command {
   powershell  Invoke-Expression (& tug init powershell | Out-String)
 
 The hook exports KUBECONFIG for this terminal only and adds the cluster to
-your prompt. Set TUG_PROMPT_DISABLE=1 to leave the prompt alone.`,
+your prompt: its namespace and env label, whether it is read-only or
+unlocked and for how long, and whether the session goes through tugd. A
+production cluster gets a red badge whatever the mode. Set
+TUG_PROMPT_DISABLE=1 to leave the prompt alone and use $TUG_PROMPT
+yourself.`,
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"zsh", "bash", "fish", "powershell"},
 		RunE: func(cmd *cobra.Command, args []string) error {

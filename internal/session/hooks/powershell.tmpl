@@ -18,6 +18,9 @@ function global:_TugPin {
     }
 }
 
+# _TugSync follows the session: KUBECONFIG, and the prompt from the
+# session's prompt file (see promptLines in internal/session). The clock is
+# .NET's, so an unlock ends on time without starting a process.
 function global:_TugSync {
     _TugPin
     $f = if ($env:TUG_SESSION_DIR) { Join-Path $env:TUG_SESSION_DIR 'kubeconfig' } else { $null }
@@ -26,13 +29,31 @@ function global:_TugSync {
         $global:TugPrompt = ''
         $p = Join-Path $env:TUG_SESSION_DIR 'prompt'
         if (Test-Path -LiteralPath $p) {
-            $style, $text = (Get-Content -LiteralPath $p -TotalCount 1) -split "`t", 2
+            $lines = @(Get-Content -LiteralPath $p -TotalCount 2)
+            $style, $text = $lines[0] -split "`t", 2
+            $expiry, $label, $badge, $via = if ($lines.Count -gt 1) { $lines[1] -split "`t" } else { @('0', '-', '-', '-') }
             $e = [char]27
-            switch ($style) {
-                'prod' { $global:TugPrompt = "$e[1;31m⎈ $text (read-only)$e[0m " }
-                'unlocked' { $global:TugPrompt = "$e[1;33m⎈ $text (unlocked)$e[0m " }
-                default { $global:TugPrompt = "$e[36m⎈ $text$e[0m " }
+            $flags = @()
+            [long]$endsAt = 0
+            if ($style -eq 'unlocked' -and [long]::TryParse($expiry, [ref]$endsAt) -and $endsAt -gt 0) {
+                $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                if ($now -ge $endsAt) { $style = 'prod' }
+                else { $flags += "unlocked $([math]::Ceiling(($endsAt - $now) / 60))m" }
             }
+            switch ($style) {
+                'prod' { $colour = '1;31'; $flags = @('read-only') }
+                'unlocked' { $colour = '1;33'; if (-not $flags) { $flags = @('unlocked') } }
+                default { $colour = '36' }
+            }
+            if ($via -eq 'proxy') { $flags += 'proxy' }
+            if ($badge -eq '-') { $badge = '' }
+            if ($label -eq '-') { $label = '' }
+            $shown = "⎈ $text"
+            if (-not $badge -and $label) { $shown += " [$label]" }
+            if ($flags) { $shown += " ($($flags -join ', '))" }
+            $global:TugPrompt = "$e[${colour}m$shown$e[0m "
+            # Production is marked whatever the mode, read-write included.
+            if ($badge) { $global:TugPrompt = "$e[1;97;41m $badge $e[0m " + $global:TugPrompt }
         }
     } else {
         if ($f -and $env:KUBECONFIG -eq $f) {
