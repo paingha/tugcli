@@ -319,7 +319,8 @@ func TestTeamFromConfigYAML(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cfg), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	conf := "teams:\n- {name: platform, url: " + srv.catalogURL() + ", publicKey: " + pub + "}\n"
+	// Only the team's policy makes env=prod read-only here.
+	conf := "guard: {readOnlyLabels: [{tier: critical}]}\nteams:\n- {name: platform, url: " + srv.catalogURL() + ", publicKey: " + pub + "}\n"
 	if err := os.WriteFile(cfg, []byte(conf), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -343,6 +344,19 @@ func TestTeamFromConfigYAML(t *testing.T) {
 	}
 	if r := tug(t, "forget", "kubeconfig/team-gpu"); r.code == 0 || !strings.Contains(r.stderr, "no source") {
 		t.Fatalf("the forgotten team account came back: %+v", r)
+	}
+	// The team's policy makes the cluster read-only, and production in the
+	// prompt.
+	newSession(t)
+	if out := mustTug(t, "connect", "pay-prod"); !strings.Contains(out, "read-only") {
+		t.Fatalf("connect under the team's policy: %s", out)
+	}
+	var st statusView
+	if err := json.Unmarshal([]byte(mustTug(t, "status", "-o", "json")), &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.ReadOnly || !st.Production {
+		t.Fatalf("status under the team's policy: %+v, want read-only and production", st)
 	}
 	if r := tug(t, "team", "sync", "nobody"); r.code == 0 || !strings.Contains(r.stderr, "no team nobody") {
 		t.Fatalf("team sync of an unknown team: %+v", r)
