@@ -46,6 +46,8 @@ tug auth login cks-train        # sign in to the cluster's OIDC issuer in the br
 tug tunnel set eks-private ssm://i-0123456789abcdef0   # reach a private cluster; see Tunnels
 tug pin set payments-staging -n payments  # this directory pins the terminal to a cluster
 tug plugin install digitalocean # from a signed plugin index
+tug get pods --cluster-selector env=staging   # any read, on every matching cluster at once
+tug audit --since 24h           # the writes tug let through, per cluster
 ```
 
 Targets are fuzzy: exact beats prefix beats fuzzy, workloads beat bare pods,
@@ -146,6 +148,27 @@ Kubernetes clients honour a proxy for exec, attach and port-forward but not
 a custom dialer, so tug serves SSH, SSM, IAP and tsh tunnels as a SOCKS5 proxy
 on a loopback port, guarded by a random username and password that only tug
 knows. `tug doctor` checks a tunnelled cluster through its tunnel.
+
+## Across clusters
+
+`--cluster-selector label=value` (repeatable; a cluster must match all)
+runs a read on every matching cluster at once: any kubectl command that only
+reads, and `tug why`, `tree`, `logs` and `top`. Each line is prefixed with
+the cluster's name, failures are listed at the end, and tug exits 1 if any
+cluster failed. `--parallel` (default 8) caps how many run together. Writes,
+and commands that bind a local port or the terminal, are refused before
+anything runs. Tunnelled clusters go through their tunnels.
+
+## Audit log
+
+tug records every write it lets through, in `<data>/audit/audit.jsonl`:
+writes by tug's own commands, by kubectl, helm or k9s through tugd, and
+kubectl writes on direct sessions, where tug sees only the command line. It
+keeps the cluster, session, method and path, the command with values
+masked, and whether the write was confirmed, unlocked or read-write; never a
+request body or a secret. A write that cannot be recorded is not sent.
+`tug audit [--cluster x] [--since 24h] [-o json|yaml]` lists them, newest
+first.
 
 ## Directory pins
 
