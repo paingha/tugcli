@@ -127,6 +127,7 @@ error.`,
 	// server-side.
 	f.BoolVar(&o.serverSide, "server-side", true, "diff with a server-side apply (always on)")
 	_ = f.MarkHidden("server-side")
+	_ = cmd.RegisterFlagCompletionFunc("against", a.completeClusters)
 	return diffCommand(cmd)
 }
 
@@ -548,6 +549,7 @@ on an error, so CI can gate on it; -o json gives the details.`,
 	f.BoolVarP(&o.allNamespaces, "all-namespaces", "A", false, "compare every namespace")
 	f.BoolVar(&o.allFields, "all-fields", false, "also compare the fields that only the clusters set themselves")
 	f.StringVarP(&o.output, "output", "o", "", "output format: table, json or yaml")
+	_ = cmd.RegisterFlagCompletionFunc("against", a.completeClusters)
 	return diffCommand(cmd)
 }
 
