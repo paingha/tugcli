@@ -3,7 +3,9 @@ package gitops
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -202,9 +204,24 @@ func (k *checker) existence(m Managed, err error) checked {
 	case apierrors.IsForbidden(err):
 		m.Health, m.Status = ops.HealthUnknown, "not allowed to read it"
 	default:
-		m.Health, m.Status = ops.HealthUnknown, "could not be read: "+firstLine(err.Error())
+		m.Health, m.Status = ops.HealthUnknown, unreadable(err)
 	}
 	return checked{managed: m}
+}
+
+// unreadable says why an object could not be read. It repeats only what the
+// API server said or why it could not be reached: an error from decoding an
+// answer may quote it, which for a Secret would be its data.
+func unreadable(err error) string {
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return "could not be read: " + firstLine(status.Status().Message)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return "could not be read: " + firstLine(netErr.Error())
+	}
+	return "could not be read"
 }
 
 // nested judges a Flux or Argo CD object that another manages, such as the

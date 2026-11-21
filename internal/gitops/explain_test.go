@@ -2,10 +2,16 @@ package gitops
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"testing"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/paingha/tugcli/internal/ops"
 )
@@ -240,5 +246,33 @@ func TestExplainChecksWhatItManages(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("Managed of application/guestbook =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestExplainRepeatsNoAnswerItCouldNotDecode(t *testing.T) {
+	c := shopCluster(t)
+	// A client that cannot decode an answer quotes it, which for a Secret
+	// is its data.
+	c.md.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New(`Object 'Kind' is missing in '{"data":{"tls.key":"aHVudGVyMg=="}}'`)
+	})
+	c.md.PrependReactor("get", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServiceUnavailable("etcd is unavailable")
+	})
+	s := load(t, c)
+	x := explain(t, c, s, KindKustomization, "flux-system", "storefront")
+	b, err := json.Marshal(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "aHVudGVyMg") {
+		t.Errorf("Explain repeated what a client could not decode, a Secret's data:\n%s", b)
+	}
+	got := map[string]string{}
+	for _, m := range x.Managed {
+		got[m.String()] = m.Status
+	}
+	if got["secret/checkout-tls"] != "could not be read" || got["configmap/checkout-config"] != "could not be read: etcd is unavailable" {
+		t.Errorf("statuses = %q, want only what the API server said", got)
 	}
 }
