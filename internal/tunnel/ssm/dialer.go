@@ -40,7 +40,7 @@ func NewDialer(cfg Config, opts ...Option) (*Dialer, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	o := options{dialer: websocket.DefaultDialer, log: slog.New(slog.DiscardHandler)}
+	o := options{dialer: websocket.DefaultDialer, log: slog.New(slog.DiscardHandler), resumeDelay: resumeDelay}
 	for _, opt := range opts {
 		opt(&o)
 	}
@@ -111,6 +111,7 @@ func (d *Dialer) startSession(ctx context.Context, cl *clients, address, host, p
 	token := awsv2.ToString(out.TokenValue)
 	log := d.o.log.With("session", sessionID, "target", d.cfg.Target, "address", address)
 	c := newConn(cl.api, sessionID, address, log)
+	c.resumeDelay = d.o.resumeDelay
 	if sessionID == "" || streamURL == "" || token == "" {
 		// Best effort: the session is unusable either way.
 		_ = c.terminate()

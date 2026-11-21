@@ -43,6 +43,10 @@ type fakeAgent struct {
 	// closeWith, when set, closes the channel after the handshake with
 	// this output.
 	closeWith *string
+	// dropOnData, when set, drops the WebSocket on the session's nth data
+	// message: the agent processes it but loses both its acknowledgement
+	// and the echo, as if the connection broke mid-flight.
+	dropOnData int
 
 	streamURL string
 
@@ -53,28 +57,33 @@ type fakeAgent struct {
 }
 
 // agentSession is one session on the agent's side. Its protocol state is
-// used by one connection's handler at a time.
+// used by one connection's handler at a time, under proto.
 type agentSession struct {
 	a    *fakeAgent
 	id   string
 	done chan struct{} // closed when the client ends the session
 
 	writeMu sync.Mutex // serialises writes to ws
+	proto   sync.Mutex // held by the connection being served
 
-	mu       sync.Mutex
-	ws       *websocket.Conn
-	header   http.Header
-	hellos   []openDataChannel
-	inputs   []message     // every input message, resends included
-	acks     map[int64]int // output sequence numbers the client acknowledged
-	sent     []int64       // output sequence numbers sent, duplicates included
-	response *handshakeResponse
-	flags    []flag
+	mu         sync.Mutex
+	ws         *websocket.Conn
+	header     http.Header
+	urls       []string // the request URI of each connection
+	hellos     []openDataChannel
+	inputs     []message     // every input message, resends included
+	acks       map[int64]int // output sequence numbers the client acknowledged
+	sent       []int64       // output sequence numbers sent, duplicates included
+	unackedOut map[int64]message
+	response   *handshakeResponse
+	flags      []flag
 
 	expected int64
 	held     map[int64]message
 	nextSeq  int64
 	dropped  bool
+	data     int // data messages processed
+	lost     bool
 }
 
 func (a *fakeAgent) problem(format string, args ...any) {
@@ -100,7 +109,7 @@ func (a *fakeAgent) issue() (id, token string) {
 	defer a.mu.Unlock()
 	n := len(a.sessions) + 1
 	s := &agentSession{a: a, id: fmt.Sprintf("%s-%d", testSessionID, n), done: make(chan struct{}),
-		acks: map[int64]int{}, held: map[int64]message{}}
+		acks: map[int64]int{}, held: map[int64]message{}, unackedOut: map[int64]message{}}
 	token = testToken
 	if n > 1 {
 		token = fmt.Sprintf("%s-%d", testToken, n)
@@ -111,6 +120,21 @@ func (a *fakeAgent) issue() (id, token string) {
 	}
 	a.byToken[token] = s
 	return s.id, token
+}
+
+// resumeToken returns a new token for a session, as ResumeSession does, or
+// "" for a session it does not know.
+func (a *fakeAgent) resumeToken(id string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, s := range a.sessions {
+		if s.id == id {
+			token := fmt.Sprintf("%s-resumed-%d", id, len(a.byToken))
+			a.byToken[token] = s
+			return token
+		}
+	}
+	return ""
 }
 
 // session returns the nth session issued, counting from zero.
@@ -155,9 +179,12 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		a.problem("unknown token %q", hello.TokenValue)
 		return
 	}
+	s.proto.Lock()
+	defer s.proto.Unlock()
 	s.mu.Lock()
 	s.ws = ws
 	s.header = r.Header.Clone()
+	s.urls = append(s.urls, r.URL.RequestURI())
 	s.hellos = append(s.hellos, hello)
 	first := len(s.hellos) == 1
 	s.mu.Unlock()
@@ -167,6 +194,20 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 // run speaks the agent's side of one connection of the session.
 func (s *agentSession) run(ws *websocket.Conn, first bool) {
 	a := s.a
+	if !first {
+		// A resumed connection: send again what the client has not
+		// acknowledged, as the agent's resend scheduler does.
+		s.mu.Lock()
+		var resend []message
+		for _, m := range s.unackedOut {
+			resend = append(resend, m)
+		}
+		s.mu.Unlock()
+		slices.SortFunc(resend, func(x, y message) int { return int(x.Sequence - y.Sequence) })
+		for _, m := range resend {
+			s.write(m)
+		}
+	}
 	if first && !a.silent {
 		actions := a.actions
 		if actions == nil {
@@ -196,7 +237,25 @@ func (s *agentSession) run(ws *websocket.Conn, first bool) {
 		default:
 			a.problem("client sent a %s message", m.Type)
 		}
+		if s.isLost() {
+			// Break the connection without a close frame.
+			_ = ws.NetConn().Close()
+			s.setLost(false)
+			return
+		}
 	}
+}
+
+func (s *agentSession) setLost(lost bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lost = lost
+}
+
+func (s *agentSession) isLost() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lost
 }
 
 // waitDone waits for the client to end the session's connection.
@@ -221,6 +280,7 @@ func (s *agentSession) acknowledged(m message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acks[a.Sequence]++
+	delete(s.unackedOut, a.Sequence)
 }
 
 // input handles an input message the way the agent's data channel does:
@@ -240,6 +300,17 @@ func (s *agentSession) input(m message) {
 		s.held[m.Sequence] = m
 		s.ack(m)
 	default:
+		if m.PayloadType == payloadOutput {
+			s.data++
+			if s.data == s.a.dropOnData {
+				// Process it, but lose the acknowledgement and the echo
+				// with the connection.
+				s.setLost(true)
+				s.process(m)
+				s.expected++
+				return
+			}
+		}
 		s.ack(m)
 		s.process(m)
 		s.expected++
@@ -331,9 +402,14 @@ func (s *agentSession) write(m message) {
 	s.mu.Lock()
 	if m.Type == typeOutput {
 		s.sent = append(s.sent, m.Sequence)
+		s.unackedOut[m.Sequence] = m
 	}
 	ws := s.ws
+	lost := s.lost
 	s.mu.Unlock()
+	if lost {
+		return
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	// A write can fail once the client has closed the WebSocket, as when
@@ -373,10 +449,46 @@ type fakeAPI struct {
 	agent     *fakeAgent
 	streamURL string
 	startErr  error
+	// resumeErrs fail ResumeSession calls in turn; once they run out, it
+	// succeeds.
+	resumeErrs []error
+	// noResumeToken makes ResumeSession return no token, as for a session
+	// that timed out.
+	noResumeToken bool
 
 	mu         sync.Mutex
 	starts     []*ssm.StartSessionInput
+	resumes    []string
 	terminated []string
+}
+
+func (f *fakeAPI) ResumeSession(_ context.Context, in *ssm.ResumeSessionInput, _ ...func(*ssm.Options)) (*ssm.ResumeSessionOutput, error) {
+	f.mu.Lock()
+	f.resumes = append(f.resumes, awsv2.ToString(in.SessionId))
+	var err error
+	if len(f.resumeErrs) > 0 {
+		err, f.resumeErrs = f.resumeErrs[0], f.resumeErrs[1:]
+	}
+	noToken := f.noResumeToken
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	token := f.agent.resumeToken(awsv2.ToString(in.SessionId))
+	if token == "" || noToken {
+		return &ssm.ResumeSessionOutput{SessionId: in.SessionId}, nil
+	}
+	return &ssm.ResumeSessionOutput{
+		SessionId:  in.SessionId,
+		StreamUrl:  awsv2.String(f.agent.streamURL + "&resumed=1"),
+		TokenValue: awsv2.String(token),
+	}, nil
+}
+
+func (f *fakeAPI) resumeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.resumes)
 }
 
 func (f *fakeAPI) StartSession(_ context.Context, in *ssm.StartSessionInput, _ ...func(*ssm.Options)) (*ssm.StartSessionOutput, error) {

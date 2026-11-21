@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,6 +23,7 @@ import (
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/smithy-go"
 	"github.com/gorilla/websocket"
 )
 
@@ -72,20 +75,40 @@ const (
 	lingerTimeout    = 2 * time.Second
 	flushTimeout     = time.Second
 	terminateTimeout = 5 * time.Second
+
+	// A dropped data channel is resumed with up to resumeRetries retries
+	// after the first try, waiting resumeDelay (plus up to as much again
+	// at random) and doubling up to maxResumeDelay, as the plugin's
+	// RepeatableExponentialRetryer does.
+	resumeRetries  = 5
+	resumeDelay    = 100 * time.Millisecond
+	maxResumeDelay = 5 * time.Second
 )
 
 // conn is a port session's data channel, presented as a net.Conn.
 //
 // Three goroutines run while it is open: the reader, which handles every
-// message from Session Manager; the writer, which owns writes to the
-// WebSocket; and the maintainer, which resends unacknowledged input and
-// pings. Close stops all three.
+// message from Session Manager and resumes the session when the WebSocket
+// drops; the writer, which owns writes to the WebSocket; and the
+// maintainer, which resends unacknowledged input and pings. Close stops all
+// three.
 type conn struct {
 	api       API
 	sessionID string
 	address   string
 	log       *slog.Logger
-	ws        *websocket.Conn
+	dialer    *websocket.Dialer
+	signer    *streamSigner
+	clientID  string
+	// resumeDelay is the first wait before retrying to resume.
+	resumeDelay time.Duration
+
+	// The WebSocket is replaced when a dropped channel is resumed.
+	wsMu      sync.Mutex
+	ws        *websocket.Conn // nil while reconnecting
+	wsChanged chan struct{}   // closed and replaced when ws changes
+	wsDone    bool            // Close has taken the last WebSocket
+	streamURL string
 
 	// out queues binary messages for the writer.
 	out chan []byte
@@ -136,66 +159,36 @@ type sentInput struct {
 
 func newConn(api API, sessionID, address string, log *slog.Logger) *conn {
 	return &conn{
-		api:       api,
-		sessionID: sessionID,
-		address:   address,
-		log:       log,
-		out:       make(chan []byte, outQueue),
-		rtt:       defaultRTT,
-		rto:       defaultRTO,
-		held:      map[int64]message{},
-		readable:  make(chan struct{}, 1),
-		space:     make(chan struct{}, 1),
-		acked:     make(chan struct{}, 1),
-		ready:     make(chan struct{}),
-		broken:    make(chan struct{}),
-		closed:    make(chan struct{}),
-		stop:      make(chan struct{}),
+		api:         api,
+		sessionID:   sessionID,
+		address:     address,
+		log:         log,
+		clientID:    newUUID().String(),
+		resumeDelay: resumeDelay,
+		wsChanged:   make(chan struct{}),
+		out:         make(chan []byte, outQueue),
+		rtt:         defaultRTT,
+		rto:         defaultRTO,
+		held:        map[int64]message{},
+		readable:    make(chan struct{}, 1),
+		space:       make(chan struct{}, 1),
+		acked:       make(chan struct{}, 1),
+		ready:       make(chan struct{}),
+		broken:      make(chan struct{}),
+		closed:      make(chan struct{}),
+		stop:        make(chan struct{}),
 	}
 }
 
 // open connects the data channel and waits for the agent's handshake.
 func (c *conn) open(ctx context.Context, dialer *websocket.Dialer, signer *streamSigner, streamURL, token string) error {
-	u, err := url.Parse(streamURL)
+	c.dialer, c.signer = dialer, signer
+	ws, err := c.dialSocket(ctx, streamURL, token)
 	if err != nil {
-		return fmt.Errorf("reading the stream URL: %w", err)
+		return err
 	}
-	if u.Scheme != "wss" {
-		return fmt.Errorf("the stream URL is %s://, not wss://", u.Scheme)
-	}
-	var header http.Header
-	if signer != nil && !presigned(u) {
-		if header, err = signer.header(ctx, streamURL, time.Now()); err != nil {
-			return fmt.Errorf("signing the data channel request: %w", err)
-		}
-	}
-	ws, resp, err := dialer.DialContext(ctx, streamURL, header)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
-	if err != nil {
-		if resp != nil {
-			return fmt.Errorf("opening the data channel on %s: %w (HTTP %d)", u.Host, err, resp.StatusCode)
-		}
-		return fmt.Errorf("opening the data channel on %s: %w", u.Host, err)
-	}
-	ws.SetReadLimit(maxMessageSize)
-	c.ws = ws
-
-	hello, err := json.Marshal(openDataChannel{
-		MessageSchemaVersion: "1.0",
-		RequestID:            newUUID().String(),
-		TokenValue:           token,
-		ClientID:             newUUID().String(),
-		ClientVersion:        clientVersion,
-	})
-	if err != nil {
-		return fmt.Errorf("encoding the open data channel request: %w", err)
-	}
-	// No goroutine writes yet, so this write needs no queue.
-	_ = ws.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if err := ws.WriteMessage(websocket.TextMessage, hello); err != nil {
-		return fmt.Errorf("sending the session token: %w", err)
+	if !c.installSocket(ws, streamURL) {
+		return net.ErrClosed
 	}
 	c.reader.Add(1)
 	go c.readLoop()
@@ -225,14 +218,139 @@ func (c *conn) open(ctx context.Context, dialer *websocket.Dialer, signer *strea
 	}
 }
 
+// dialSocket opens a WebSocket to the stream URL and hands over the token.
+func (c *conn) dialSocket(ctx context.Context, streamURL, token string) (*websocket.Conn, error) {
+	u, err := url.Parse(streamURL)
+	if err != nil {
+		return nil, fmt.Errorf("reading the stream URL: %w", err)
+	}
+	if u.Scheme != "wss" {
+		return nil, fmt.Errorf("the stream URL is %s://, not wss://", u.Scheme)
+	}
+	var header http.Header
+	if c.signer != nil && !presigned(u) {
+		if header, err = c.signer.header(ctx, streamURL, time.Now()); err != nil {
+			return nil, fmt.Errorf("signing the data channel request: %w", err)
+		}
+	}
+	ws, resp, err := c.dialer.DialContext(ctx, streamURL, header)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		if resp != nil {
+			return nil, fmt.Errorf("opening the data channel on %s: %w (HTTP %d)", u.Host, err, resp.StatusCode)
+		}
+		return nil, fmt.Errorf("opening the data channel on %s: %w", u.Host, err)
+	}
+	ws.SetReadLimit(maxMessageSize)
+	hello, err := json.Marshal(openDataChannel{
+		MessageSchemaVersion: "1.0",
+		RequestID:            newUUID().String(),
+		TokenValue:           token,
+		ClientID:             c.clientID,
+		ClientVersion:        clientVersion,
+	})
+	if err != nil {
+		_ = ws.Close()
+		return nil, fmt.Errorf("encoding the open data channel request: %w", err)
+	}
+	// The socket is not installed yet, so nothing else writes to it.
+	_ = ws.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if err := ws.WriteMessage(websocket.TextMessage, hello); err != nil {
+		_ = ws.Close()
+		return nil, fmt.Errorf("sending the session token: %w", err)
+	}
+	return ws, nil
+}
+
+// installSocket makes ws the channel's WebSocket. It refuses, closing ws,
+// once Close has started.
+func (c *conn) installSocket(ws *websocket.Conn, streamURL string) bool {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	if c.wsDone {
+		_ = ws.Close()
+		return false
+	}
+	c.ws, c.streamURL = ws, streamURL
+	c.socketChanged()
+	return true
+}
+
+// dropSocket closes ws and, if it is the channel's WebSocket, leaves the
+// channel without one until the session is resumed. Only the reader drops
+// a socket: others close one that fails, so that the reader's next read
+// fails and it resumes.
+func (c *conn) dropSocket(ws *websocket.Conn) {
+	c.wsMu.Lock()
+	if c.ws == ws {
+		c.ws = nil
+		c.socketChanged()
+	}
+	c.wsMu.Unlock()
+	_ = ws.Close()
+}
+
+// socketChanged wakes whoever waits for a different WebSocket. c.wsMu must
+// be held.
+func (c *conn) socketChanged() {
+	close(c.wsChanged)
+	c.wsChanged = make(chan struct{})
+}
+
+// takeSocket returns the WebSocket for Close to close, and keeps any later
+// one from being installed.
+func (c *conn) takeSocket() *websocket.Conn {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	c.wsDone = true
+	ws := c.ws
+	c.ws = nil
+	return ws
+}
+
+// socket returns the WebSocket, or nil while the channel reconnects.
+func (c *conn) socket() *websocket.Conn {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	return c.ws
+}
+
+// waitSocket returns the WebSocket, waiting while the channel reconnects
+// and while it is still failed, the socket a write last failed on.
+func (c *conn) waitSocket(failed *websocket.Conn) (*websocket.Conn, error) {
+	for {
+		c.wsMu.Lock()
+		ws, changed := c.ws, c.wsChanged
+		c.wsMu.Unlock()
+		if ws != nil && ws != failed {
+			return ws, nil
+		}
+		select {
+		case <-changed:
+		case <-c.stop:
+			return nil, net.ErrClosed
+		case <-c.broken:
+			return nil, c.writeErr()
+		}
+	}
+}
+
 // readLoop handles messages from Session Manager until the WebSocket fails
-// or the channel is closed.
+// for good or the channel is closed.
 func (c *conn) readLoop() {
 	defer c.reader.Done()
 	for {
-		kind, data, err := c.ws.ReadMessage()
+		ws, err := c.waitSocket(nil)
 		if err != nil {
-			c.readFailed(err)
+			return
+		}
+		kind, data, err := ws.ReadMessage()
+		if err != nil {
+			if c.lost(ws, err) {
+				continue
+			}
 			return
 		}
 		if kind != websocket.BinaryMessage && kind != websocket.TextMessage {
@@ -261,19 +379,162 @@ func (c *conn) readLoop() {
 	}
 }
 
-func (c *conn) readFailed(err error) {
+// lost handles the WebSocket failing with err. Once the session is up it
+// resumes the session and reports true; otherwise, or if resuming fails, it
+// records why the channel stopped.
+func (c *conn) lost(ws *websocket.Conn, err error) bool {
 	select {
 	case <-c.closed:
 		c.fail(net.ErrClosed, net.ErrClosed)
-		return
+		return false
 	default:
 	}
-	if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-		c.fail(io.EOF, ErrSessionClosed)
-		return
+	if !c.resumable() {
+		if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			c.fail(io.EOF, ErrSessionClosed)
+			return false
+		}
+		err = fmt.Errorf("reading the SSM data channel: %w", err)
+		c.fail(err, err)
+		return false
 	}
-	err = fmt.Errorf("reading the SSM data channel: %w", err)
-	c.fail(err, err)
+	if err := c.resume(ws, err); err != nil {
+		c.fail(err, err)
+		return false
+	}
+	return true
+}
+
+// resumable reports whether a dropped WebSocket should be resumed: the
+// handshake is done and nothing else has ended the channel.
+func (c *conn) resumable() bool {
+	select {
+	case <-c.ready:
+	default:
+		return false
+	}
+	select {
+	case <-c.broken:
+		return false
+	default:
+		return true
+	}
+}
+
+// permanentError marks a failure to resume that retrying cannot fix.
+type permanentError struct{ err error }
+
+func (e *permanentError) Error() string { return e.err.Error() }
+func (e *permanentError) Unwrap() error { return e.err }
+
+// resume replaces a dropped WebSocket the way the plugin does: it asks
+// ResumeSession for a new stream URL and token, reconnects, and resends the
+// input the agent has not acknowledged; the agent resends its own. It
+// retries with exponential backoff, but stops at once if Session Manager
+// no longer has the session.
+func (c *conn) resume(old *websocket.Conn, cause error) error {
+	c.dropSocket(old)
+	c.log.Info("the SSM data channel dropped; resuming the session", "error", cause)
+	ctx, cancel := untilClosed(context.Background(), c.closed)
+	defer cancel()
+	delay := c.resumeDelay + rand.N(c.resumeDelay)
+	var err error
+	for attempt := 0; ; attempt++ {
+		var ws *websocket.Conn
+		if ws, err = c.reconnect(ctx); err == nil {
+			if !c.installSocket(ws, c.currentStreamURL()) {
+				return net.ErrClosed
+			}
+			c.log.Info("resumed the SSM session", "attempts", attempt+1, "resent", c.resendUnacked())
+			return nil
+		}
+		var permanent *permanentError
+		if errors.As(err, &permanent) || attempt == resumeRetries || ctx.Err() != nil {
+			break
+		}
+		c.log.Debug("resuming the SSM session", "attempt", attempt+1, "error", err)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+		}
+		delay = min(delay*2, maxResumeDelay)
+	}
+	if ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	// The cause was logged when the channel dropped.
+	return fmt.Errorf("resuming SSM session %s after the data channel dropped: %w", c.sessionID, err)
+}
+
+// reconnect asks ResumeSession for a new token and opens a new WebSocket.
+func (c *conn) reconnect(ctx context.Context) (*websocket.Conn, error) {
+	out, err := c.api.ResumeSession(ctx, &ssm.ResumeSessionInput{SessionId: awsv2.String(c.sessionID)})
+	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) {
+			return nil, &permanentError{err}
+		}
+		return nil, err
+	}
+	token := awsv2.ToString(out.TokenValue)
+	if token == "" {
+		// The plugin takes a resume without a token to mean the session
+		// timed out.
+		return nil, &permanentError{fmt.Errorf("%w: it timed out", ErrSessionClosed)}
+	}
+	streamURL := awsv2.ToString(out.StreamUrl)
+	if streamURL == "" {
+		streamURL = c.currentStreamURL()
+	}
+	ws, err := c.dialSocket(ctx, streamURL, token)
+	if err != nil {
+		return nil, err
+	}
+	c.wsMu.Lock()
+	c.streamURL = streamURL
+	c.wsMu.Unlock()
+	return ws, nil
+}
+
+func (c *conn) currentStreamURL() string {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
+	return c.streamURL
+}
+
+// resendUnacked sends again every input message the agent has not
+// acknowledged, which may have been lost with the old WebSocket, and
+// returns how many there were.
+func (c *conn) resendUnacked() int {
+	now := time.Now()
+	c.mu.Lock()
+	raws := make([][]byte, len(c.unacked))
+	for i, s := range c.unacked {
+		s.last = now
+		s.resent = true
+		raws[i] = s.raw
+	}
+	c.mu.Unlock()
+	for _, raw := range raws {
+		if c.enqueue(raw) != nil {
+			break
+		}
+	}
+	return len(raws)
+}
+
+// untilClosed returns a context that is also cancelled when done is
+// closed. Its goroutine ends when the context does.
+func untilClosed(parent context.Context, done <-chan struct{}) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		select {
+		case <-done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
 }
 
 // handleOutput acknowledges an output message and processes output in
@@ -519,24 +780,38 @@ func (c *conn) enqueue(raw []byte) error {
 	}
 }
 
-// writeLoop writes queued messages to the WebSocket. When stopped it
+// writeLoop writes queued messages to the WebSocket, waiting while the
+// channel reconnects. A message whose write fails is dropped: input is
+// still unacknowledged and is resent once the session resumes, and the
+// agent resends output whose acknowledgement was lost. When stopped it
 // flushes what is queued, such as a TerminateSession flag, without waiting
 // long for a dead network.
 func (c *conn) writeLoop() {
 	defer c.workers.Done()
+	var failed *websocket.Conn
 	for {
 		select {
 		case raw := <-c.out:
-			if err := c.writeWS(raw, time.Now().Add(writeTimeout)); err != nil {
-				c.writeFailed(err)
+			ws, err := c.waitSocket(failed)
+			if err != nil {
 				return
 			}
+			if err := writeWS(ws, raw, time.Now().Add(writeTimeout)); err != nil {
+				if !c.writeFailed(ws, err) {
+					return
+				}
+				failed = ws
+			}
 		case <-c.stop:
+			ws := c.socket()
+			if ws == nil {
+				return
+			}
 			deadline := time.Now().Add(flushTimeout)
 			for {
 				select {
 				case raw := <-c.out:
-					if c.writeWS(raw, deadline) != nil {
+					if writeWS(ws, raw, deadline) != nil {
 						return
 					}
 				default:
@@ -547,19 +822,28 @@ func (c *conn) writeLoop() {
 	}
 }
 
-func (c *conn) writeWS(raw []byte, deadline time.Time) error {
-	_ = c.ws.SetWriteDeadline(deadline)
-	return c.ws.WriteMessage(websocket.BinaryMessage, raw)
+func writeWS(ws *websocket.Conn, raw []byte, deadline time.Time) error {
+	_ = ws.SetWriteDeadline(deadline)
+	return ws.WriteMessage(websocket.BinaryMessage, raw)
 }
 
-func (c *conn) writeFailed(err error) {
+// writeFailed handles a failed write to ws. If the session can be resumed
+// it closes ws, so that the reader's read fails too and it resumes, and
+// reports true; otherwise it records the failure.
+func (c *conn) writeFailed(ws *websocket.Conn, err error) bool {
 	select {
 	case <-c.closed:
-		return
+		return false
 	default:
+	}
+	if c.resumable() {
+		c.log.Debug("writing to the SSM data channel", "error", err)
+		_ = ws.Close()
+		return true
 	}
 	err = fmt.Errorf("writing to the SSM data channel: %w", err)
 	c.fail(err, err)
+	return false
 }
 
 // maintain resends the oldest unacknowledged input once its retransmission
@@ -579,8 +863,11 @@ func (c *conn) maintain() {
 		case now := <-resend.C:
 			c.resendOldest(now)
 		case <-ping.C:
-			if err := c.ws.WriteControl(websocket.PingMessage, []byte("keepalive"), time.Now().Add(writeTimeout)); err != nil {
-				c.writeFailed(err)
+			ws := c.socket()
+			if ws == nil {
+				continue
+			}
+			if err := ws.WriteControl(websocket.PingMessage, []byte("keepalive"), time.Now().Add(writeTimeout)); err != nil && !c.writeFailed(ws, err) {
 				return
 			}
 		}
@@ -589,8 +876,12 @@ func (c *conn) maintain() {
 
 // resendOldest resends the oldest unacknowledged input message if its
 // timeout has passed. The agent acknowledges messages that arrive early, so
-// only the oldest can be missing.
+// only the oldest can be missing. While the channel reconnects there is
+// nowhere to send it; resuming resends everything.
 func (c *conn) resendOldest(now time.Time) {
+	if c.socket() == nil {
+		return
+	}
 	c.mu.Lock()
 	if len(c.unacked) == 0 || now.Sub(c.unacked[0].last) <= c.rto {
 		c.mu.Unlock()
@@ -730,7 +1021,7 @@ func (c *conn) Close() error {
 
 func (c *conn) shutdown() error {
 	close(c.closed)
-	if c.ws != nil {
+	if c.socket() != nil {
 		c.linger()
 		if c.agentStopsOnFlag() {
 			payload := binary.BigEndian.AppendUint32(nil, uint32(flagTerminateSession))
@@ -744,13 +1035,13 @@ func (c *conn) shutdown() error {
 			case <-time.After(flushTimeout):
 			}
 		}
-		close(c.stop)
-		c.workers.Wait()
-		_ = c.ws.WriteControl(websocket.CloseMessage,
+	}
+	close(c.stop)
+	c.workers.Wait()
+	if ws := c.takeSocket(); ws != nil {
+		_ = ws.WriteControl(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(flushTimeout))
-		_ = c.ws.Close()
-	} else {
-		close(c.stop)
+		_ = ws.Close()
 	}
 	c.reader.Wait()
 	c.readDeadline.stop()
@@ -776,7 +1067,7 @@ func (c *conn) linger() {
 		c.mu.Lock()
 		n := len(c.unacked)
 		c.mu.Unlock()
-		if n == 0 {
+		if n == 0 || c.socket() == nil {
 			return
 		}
 		select {

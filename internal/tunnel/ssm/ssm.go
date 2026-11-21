@@ -8,7 +8,8 @@
 // binary agent messages, the handshake, acknowledgements and
 // retransmission. The session carries exactly one TCP connection from the
 // instance to the requested address, and the returned net.Conn is that
-// connection.
+// connection. If the WebSocket drops, the session is resumed with
+// ResumeSession on a new one, and unacknowledged data is sent again.
 //
 // tug asks the agent for basic port forwarding rather than the multiplexed
 // mode the current plugin uses (see clientVersion). In that mode the agent
@@ -29,6 +30,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
@@ -119,6 +121,7 @@ func (c Config) validate() error {
 // API is the part of the SSM client that Dial uses.
 type API interface {
 	StartSession(ctx context.Context, in *ssm.StartSessionInput, opts ...func(*ssm.Options)) (*ssm.StartSessionOutput, error)
+	ResumeSession(ctx context.Context, in *ssm.ResumeSessionInput, opts ...func(*ssm.Options)) (*ssm.ResumeSessionOutput, error)
 	TerminateSession(ctx context.Context, in *ssm.TerminateSessionInput, opts ...func(*ssm.Options)) (*ssm.TerminateSessionOutput, error)
 }
 
@@ -132,7 +135,12 @@ type options struct {
 	endpoint string
 	dialer   *websocket.Dialer
 	log      *slog.Logger
+	// resumeDelay is the first wait before retrying ResumeSession.
+	resumeDelay time.Duration
 }
+
+// withResumeDelay shortens the wait between attempts to resume, for tests.
+func withResumeDelay(d time.Duration) Option { return func(o *options) { o.resumeDelay = d } }
 
 // WithAPI replaces the SSM client that Dial builds from the AWS profile, for
 // tests. The data channel is then opened without request signing, which
