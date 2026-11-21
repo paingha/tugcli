@@ -434,6 +434,10 @@ func TestWASMTimeoutStopsBusyModule(t *testing.T) {
 				if elapsed := time.Since(start); elapsed > 5*time.Second {
 					t.Fatalf("the module ran for %s after a 500ms timeout", elapsed)
 				}
+				// The next call only shows that the runner still works, so
+				// it gets the default time: starting a module can take
+				// longer than 500ms on a slow machine running -race.
+				r.Timeouts = nil
 				if labels, err := probe(t, r, map[string]any{"env": "yes"}); err != nil || labels["env"] == "" {
 					t.Fatalf("a call after the timeout = %v, %v", labels, err)
 				}
