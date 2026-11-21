@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/paingha/tugcli/internal/passthrough"
+	"github.com/paingha/tugcli/internal/sandbox"
 )
 
 // testRoleEnv, when set, makes the test binary stand in for kubectl or for
@@ -24,6 +25,12 @@ import (
 const testRoleEnv = "TUG_CLI_TEST_ROLE"
 
 func TestMain(m *testing.M) {
+	// On Linux, tug starts a sandboxed plugin by running itself as
+	// `tug plugin-sandbox-exec`, in the plugin's scrubbed environment,
+	// which has no testRoleEnv.
+	if len(os.Args) > 1 && os.Args[1] == sandbox.ExecCommand {
+		os.Exit(Main())
+	}
 	switch os.Getenv(testRoleEnv) {
 	case "kubectl":
 		// The credential plugin this kubectl runs is tug.

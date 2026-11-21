@@ -41,6 +41,7 @@ import (
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/sandbox"
 	"github.com/paingha/tugcli/internal/session"
 	"github.com/paingha/tugcli/internal/tunnel"
 	"github.com/paingha/tugcli/internal/version"
@@ -217,12 +218,11 @@ func (a *app) registry() *registry.Registry {
 		a.log.Debug("skipping plugin", "location", prob.Location, "err", prob.Err)
 	}
 	for _, p := range plugins {
-		runner := a.pluginRunner(p)
 		kind := registry.KindPlugin
 		if p.Dev {
 			kind = registry.KindDevPlugin
 		}
-		if err := r.Add(plugin.NewProvider(p, runner), kind, p.Dir); err != nil {
+		if err := r.Add(plugin.NewProvider(p, a.pluginRunner(p)), kind, p.Dir); err != nil {
 			a.problems = append(a.problems, plugin.Problem{Location: p.Dir, Err: err})
 		}
 	}
@@ -231,8 +231,10 @@ func (a *app) registry() *registry.Registry {
 }
 
 // pluginRunner returns the runner for a plugin: a process for a native
-// build, or tug's sandbox for a WebAssembly one, whose compiled modules are
-// cached so that only the first run of each pays for compiling it.
+// build, in the operating system's sandbox unless plugins.sandbox in
+// config.yaml leaves the plugin out, or tug's own WebAssembly sandbox for a
+// WebAssembly build, whose compiled modules are cached so that only the
+// first run of each pays for compiling it.
 func (a *app) pluginRunner(p *plugin.Plugin) *plugin.Runner {
 	r := &plugin.Runner{
 		Bin:      p.Bin,
@@ -248,6 +250,21 @@ func (a *app) pluginRunner(p *plugin.Plugin) *plugin.Runner {
 			MemoryLimit: a.cfg.Plugins.WASM.MemoryLimit(),
 			CacheDir:    filepath.Join(a.paths.Cache, "wasm"),
 		}
+		return r
+	}
+	if !a.cfg.Plugins.Sandbox.Confines(p.Name()) {
+		a.log.Debug("plugin runs without the sandbox, as plugins.sandbox in config.yaml says", "plugin", p.Name())
+		return r
+	}
+	self, err := os.Executable()
+	if err != nil {
+		a.log.Debug("finding tug's executable for the sandbox", "err", err)
+	}
+	r.Sandbox = &sandbox.Sandbox{
+		Policy:   p.SandboxPolicy(),
+		Self:     self,
+		TempRoot: filepath.Join(a.paths.Runtime, "plugins"),
+		Log:      a.log,
 	}
 	return r
 }

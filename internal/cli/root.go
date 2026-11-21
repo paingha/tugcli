@@ -64,7 +64,7 @@ prefixed with its cluster:
 	add("discover", newImportCmd(a), newSyncCmd(a), newLsCmd(a), newLabelCmd(a), newForgetCmd(a), newPluginCmd(a))
 	add("safety", newUnlockCmd(a), newLockCmd(a), newAuditCmd(a))
 	add("other", newAuthCmd(a), newDaemonCmd(a), newVersionCmd(a))
-	root.AddCommand(newSessionCmd(a), newProviderExecCmd(a))
+	root.AddCommand(newSessionCmd(a), newProviderExecCmd(a), newPluginSandboxExecCmd(a))
 	root.SetHelpCommandGroupID("other")
 	root.SetCompletionCommandGroupID("other")
 	return root

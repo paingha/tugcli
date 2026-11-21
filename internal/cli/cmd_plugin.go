@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +19,7 @@ import (
 	"github.com/paingha/tugcli/internal/plugin"
 	"github.com/paingha/tugcli/internal/registry"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/sandbox"
 	"github.com/paingha/tugcli/internal/sigstore"
 	"github.com/paingha/tugcli/internal/version"
 	"github.com/paingha/tugcli/pkg/conformance"
@@ -280,7 +284,7 @@ func (a *app) printManifest(p *plugin.Plugin) {
 	if p.WASM {
 		fmt.Fprintf(a.stderr, "  runs as:       WebAssembly in tug's sandbox: https to the network hosts only, no files\n")
 	} else {
-		fmt.Fprintf(a.stderr, "  runs as:       a process with your user's access\n")
+		fmt.Fprintf(a.stderr, "  runs as:       %s\n", a.describeSandbox(m))
 	}
 	for i, s := range m.Settings() {
 		label := ""
@@ -289,6 +293,36 @@ func (a *app) printManifest(p *plugin.Plugin) {
 		}
 		fmt.Fprintf(a.stderr, "  %-15s%s\n", label, describeSetting(s))
 	}
+}
+
+// describeSandbox says how a native plugin runs: what it may reach in the
+// operating system's sandbox beyond its own directory, or why it runs
+// without one.
+func (a *app) describeSandbox(m *plugin.Manifest) string {
+	const unconfined = "a process with your user's access"
+	if !a.cfg.Plugins.Sandbox.Confines(m.Metadata.Name) {
+		return unconfined + ": plugins.sandbox in config.yaml turns the sandbox off for it"
+	}
+	if st := sandbox.Check(); !st.Any() {
+		return unconfined + ": there is no sandbox here; " + strings.TrimPrefix(st.Missing, "everything: ")
+	}
+	ports := []string{"443"}
+	for _, p := range m.SandboxPorts() {
+		if p != 443 {
+			ports = append(ports, strconv.Itoa(int(p)))
+		}
+	}
+	parts := []string{"TCP ports " + strings.Join(ports, ", ")}
+	s := m.Spec.Sandbox
+	for _, f := range []struct {
+		verb  string
+		items []string
+	}{{"runs", s.Tools}, {"reads", s.Read}, {"writes", s.Write}, {"connects to", s.Sockets}} {
+		if len(f.items) > 0 {
+			parts = append(parts, f.verb+" "+strings.Join(f.items, ", "))
+		}
+	}
+	return "a process in the operating system's sandbox: " + strings.Join(parts, "; ")
 }
 
 // describeSetting shows an account setting as `tug import --set` takes it.
@@ -566,7 +600,14 @@ func (a *app) testPlugin(ctx context.Context, name string, o pluginTestOptions) 
 				return err
 			}
 		} else {
-			target = conformance.Target{Command: pl.Bin, Env: a.pluginRunner(pl).Environ()}
+			// The plugin runs as it would for any other command: scrubbed
+			// environment and sandbox included.
+			c, err := a.pluginRunner(pl).Command()
+			if err != nil {
+				return err
+			}
+			defer c.Cleanup()
+			target = conformance.Target{Command: c.Path, Args: c.Args, Env: c.Env}
 		}
 	default:
 		// Built-ins run through the same process interface as plugins.
@@ -657,6 +698,32 @@ func (a *app) printReport(r conformance.Report) {
 	}
 	_ = render.Table(a.stdout, []string{"RESULT", "CHECK", "DETAIL"}, rows)
 	fmt.Fprintf(a.stdout, "\n%d passed, %d skipped, %d failed\n", counts[conformance.Pass], counts[conformance.Skip], counts[conformance.Fail])
+}
+
+// newPluginSandboxExecCmd confines its own process with the sandbox policy
+// tug passes in its environment, then runs the plugin in its place, so the
+// plugin starts restricted. tug starts plugins through it on Linux.
+func newPluginSandboxExecCmd(*app) *cobra.Command {
+	return &cobra.Command{
+		Use:    sandbox.ExecCommand + " <plugin> [args]",
+		Short:  "Run a plugin in tug's sandbox (tug runs this itself)",
+		Hidden: true,
+		Args:   cobra.MinimumNArgs(1),
+		// Everything after the command name is the plugin's.
+		DisableFlagParsing: true,
+		// The plugin's scrubbed environment has no TUG_HOME, so this command
+		// must not read config.yaml or anything else of tug's.
+		PersistentPreRunE: func(*cobra.Command, []string) error { return nil },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// The plugin decides what SIGINT and SIGTERM do; one that came
+			// before this point has already cancelled the context.
+			signal.Reset(os.Interrupt, syscall.SIGTERM)
+			if err := cmd.Context().Err(); err != nil {
+				return err
+			}
+			return sandbox.Exec(args)
+		},
+	}
 }
 
 // newProviderExecCmd serves a provider over the plugin protocol. It lets the

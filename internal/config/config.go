@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"time"
 
@@ -142,6 +143,9 @@ type PluginsConfig struct {
 	SigstoreTrustedRoot string `json:"sigstoreTrustedRoot,omitempty"`
 	// WASM controls plugins' WebAssembly builds.
 	WASM WASMConfig `json:"wasm,omitempty"`
+	// Sandbox confines plugins' native builds with the operating system's
+	// sandbox.
+	Sandbox SandboxConfig `json:"sandbox,omitzero"`
 }
 
 // WASMConfig controls the WebAssembly builds of plugins, which tug runs in
@@ -162,6 +166,21 @@ func (c WASMConfig) MemoryLimit() uint64 {
 		return 0
 	}
 	return uint64(c.MemoryLimitMiB) << 20
+}
+
+// SandboxConfig is plugins.sandbox. The sandbox is on unless it says
+// otherwise.
+type SandboxConfig struct {
+	// Enabled set to false runs every plugin without the sandbox.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Exclude lists plugins that run without the sandbox, for ones that
+	// need more than it allows.
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+// Confines reports whether the named plugin runs in the sandbox.
+func (s SandboxConfig) Confines(plugin string) bool {
+	return (s.Enabled == nil || *s.Enabled) && !slices.Contains(s.Exclude, plugin)
 }
 
 // PluginIndex is one signed plugin index.

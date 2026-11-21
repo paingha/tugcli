@@ -240,6 +240,7 @@ spec:
   platforms:
   - {os: GOOS, arch: GOARCH, bin: tug-provider-slow}
   hosts: [api.slow.example]
+  sandbox: {tools: [cat, sleep]}
   accountConfig:
     type: object
     properties:
@@ -321,6 +322,7 @@ spec:
   capabilities: [list, credential, rotate]
   platforms:
   - {os: GOOS, arch: GOARCH, bin: tug-provider-rot}
+  sandbox: {tools: [cat]}
 `
 
 func TestAuthRotate(t *testing.T) {

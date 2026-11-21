@@ -290,6 +290,37 @@ func TestLoadErrors(t *testing.T) {
 	}
 }
 
+func TestPluginSandbox(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		confines map[string]bool
+	}{
+		{"on by default", "", map[string]bool{"acme": true, "teleport": true}},
+		{"plugins left out", "plugins:\n  sandbox:\n    exclude: [teleport]\n", map[string]bool{"acme": true, "teleport": false}},
+		{"turned on", "plugins:\n  sandbox:\n    enabled: true\n", map[string]bool{"acme": true}},
+		{"turned off", "plugins:\n  sandbox:\n    enabled: false\n", map[string]bool{"acme": false, "teleport": false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			c, err := Load(writeConfig(t, tt.yaml))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for name, want := range tt.confines {
+				if got := c.Plugins.Sandbox.Confines(name); got != want {
+					t.Errorf("Plugins.Sandbox.Confines(%q) = %v, want %v", name, got, want)
+				}
+			}
+		})
+	}
+	clearConfigEnv(t)
+	if _, err := Load(writeConfig(t, "plugins:\n  sandbox:\n    exclud: [teleport]\n")); err == nil || !strings.Contains(err.Error(), "exclud") {
+		t.Errorf("Load with a misspelt sandbox field = %v, want it refused", err)
+	}
+}
+
 func TestLoadUnreadableFile(t *testing.T) {
 	clearConfigEnv(t)
 	dir := t.TempDir()
