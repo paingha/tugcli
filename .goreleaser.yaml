@@ -73,13 +73,15 @@ changelog:
 # Package managers. Each publishes to its own repository with TAP_TOKEN, a
 # token that can push to paingha/homebrew-tap, paingha/scoop-bucket and
 # paingha/krew-index. Without the secret they are skipped, so a release
-# still works before the repositories exist. The templates read TAP_TOKEN
-# with index, which gives "" for a variable that is not set at all, as in
-# snapshot builds; .Env.TAP_TOKEN would fail there.
+# still works before the repositories exist. skip_upload reads TAP_TOKEN
+# with index, which gives "" when the variable is not set at all, as in
+# snapshot builds, where .Env.TAP_TOKEN would fail. token must stay exactly
+# {{ .Env.TAP_TOKEN }}: GoReleaser reads the variable itself and refuses any
+# other template there.
 homebrew_casks:
   - name: tug
     binaries: [tug]
-    repository: {owner: paingha, name: homebrew-tap, token: '{{ index .Env "TAP_TOKEN" }}'}
+    repository: {owner: paingha, name: homebrew-tap, token: "{{ .Env.TAP_TOKEN }}"}
     homepage: https://github.com/paingha/tugcli
     description: Reach Kubernetes clusters across providers, one terminal at a time
     skip_upload: '{{ if not (index .Env "TAP_TOKEN") }}true{{ end }}'
@@ -94,7 +96,7 @@ homebrew_casks:
 
 scoops:
   - name: tug
-    repository: {owner: paingha, name: scoop-bucket, token: '{{ index .Env "TAP_TOKEN" }}'}
+    repository: {owner: paingha, name: scoop-bucket, token: "{{ .Env.TAP_TOKEN }}"}
     homepage: https://github.com/paingha/tugcli
     description: Reach Kubernetes clusters across providers, one terminal at a time
     license: MIT
@@ -103,7 +105,7 @@ scoops:
 # A custom krew index: kubectl krew index add tug https://github.com/paingha/krew-index
 krews:
   - name: tug
-    repository: {owner: paingha, name: krew-index, token: '{{ index .Env "TAP_TOKEN" }}'}
+    repository: {owner: paingha, name: krew-index, token: "{{ .Env.TAP_TOKEN }}"}
     homepage: https://github.com/paingha/tugcli
     short_description: Reach clusters across providers with sessions and guardrails
     description: |
