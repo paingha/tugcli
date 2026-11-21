@@ -106,12 +106,12 @@ Unlocked: writes allowed on prod-eu until 3:45PM
   longer one, unlocks for the limit when you give no duration and it is
   shorter than 15 minutes, and refuses `--read-write`, which would be an
   unlock without an end.
-- Your prompt turns **yellow** and says `(unlocked)`.
+- Your prompt turns **yellow** and says how long is left: `(unlocked 15m)`.
 - The unlock belongs to **this terminal only**. Other terminals connected to
   the same cluster stay read-only.
 - When the time runs out, the session is read-only again. The guard checks
-  the time on every request; the prompt catches up the next time you run a
-  tug command.
+  the time on every request, and the prompt turns red again by itself at the
+  next prompt, using the shell's own clock.
 
 Finished early? Lock it again straight away:
 

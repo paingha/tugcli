@@ -22,3 +22,7 @@ func (a *app) replaceProcess(path string, args, env []string) error {
 }
 
 func defaultShell() string { return "powershell.exe" }
+
+// defaultEditor is the editor tug profile edit runs when neither $VISUAL
+// nor $EDITOR names one.
+func defaultEditor() string { return "notepad.exe" }
