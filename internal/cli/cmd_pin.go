@@ -252,7 +252,7 @@ func (a *app) unpin(ctx context.Context, s *session.Session) error {
 			return nil
 		}
 	}
-	if err := s.Disconnect(); err != nil {
+	if err := a.disconnect(ctx, s); err != nil {
 		return err
 	}
 	fmt.Fprintln(a.stderr, a.colors().Dim("left the pinned directory: disconnected"))

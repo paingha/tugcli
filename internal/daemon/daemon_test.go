@@ -36,36 +36,51 @@ type fakeCluster struct {
 	srv     *httptest.Server
 	deletes atomic.Int32
 	sawAuth atomic.Value // last Authorization header
+	// valid is the token it accepts, upstreamToken unless set.
+	valid atomic.Value
 }
 
 func newFakeCluster(t *testing.T) *fakeCluster {
 	t.Helper()
 	f := &fakeCluster{}
+	f.valid.Store(upstreamToken)
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.sawAuth.Store(r.Header.Get("Authorization"))
-		if r.Header.Get("Authorization") != "Bearer "+upstreamToken {
+		if r.Header.Get("Authorization") != "Bearer "+f.valid.Load().(string) {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"Unauthorized","reason":"Unauthorized","code":401}`)
 			return
 		}
+		last := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		q := r.URL.Query()
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces" && q.Get("watch") == "":
+			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"kind":"NamespaceList","apiVersion":"v1","items":[{"metadata":{"name":"default"}}]}`)
 		case r.Method == http.MethodDelete:
 			f.deletes.Add(1)
 			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
-		case strings.HasSuffix(r.URL.Path, "/exec"):
-			// An upgraded connection that echoes what it is sent.
+		case r.Header.Get("Upgrade") != "" && (last == "exec" || last == "attach" || last == "portforward" ||
+			strings.Contains(r.URL.Path, "/proxy/exec/")):
+			// An upgraded connection, of the kind asked for, that echoes
+			// every line it is sent.
 			conn, buf, err := w.(http.Hijacker).Hijack()
 			if err != nil {
 				return
 			}
 			defer conn.Close()
-			fmt.Fprint(buf, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+			fmt.Fprintf(buf, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: %s\r\n\r\n", r.Header.Get("Upgrade"))
 			buf.Flush()
-			line, _ := buf.ReadString('\n')
-			fmt.Fprint(buf, "echo: "+line)
-			buf.Flush()
-		case r.URL.Path == "/stream":
+			for {
+				line, err := buf.ReadString('\n')
+				if err != nil {
+					return
+				}
+				fmt.Fprint(buf, "echo: "+line)
+				buf.Flush()
+			}
+		case r.URL.Path == "/stream", q.Get("watch") == "true", q.Get("follow") == "true":
 			fmt.Fprint(w, "first\n")
 			w.(http.Flusher).Flush()
 			select {
@@ -81,6 +96,7 @@ func newFakeCluster(t *testing.T) *fakeCluster {
 }
 
 type fixture struct {
+	cfg     Config
 	runtime string
 	sess    *session.Session
 	srv     *Server
@@ -89,6 +105,7 @@ type fixture struct {
 	token   string
 
 	upstreamCalls atomic.Int32
+	refreshes     atomic.Int32  // upstreams built with refresh
 	upstreamDelay time.Duration // how long building an upstream takes
 }
 
@@ -111,8 +128,11 @@ func setup(t *testing.T, opts ...func(*Config)) *fixture {
 	cfg := Config{
 		RuntimeDir: f.runtime,
 		Sessions:   mgr,
-		Upstream: func(context.Context, string) (*rest.Config, error) {
+		Upstream: func(_ context.Context, _ string, refresh bool) (*rest.Config, error) {
 			f.upstreamCalls.Add(1)
+			if refresh {
+				f.refreshes.Add(1)
+			}
 			time.Sleep(f.upstreamDelay)
 			return &rest.Config{Host: f.cluster.srv.URL, BearerToken: upstreamToken, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}, nil
 		},
@@ -120,6 +140,7 @@ func setup(t *testing.T, opts ...func(*Config)) *fixture {
 	for _, o := range opts {
 		o(&cfg)
 	}
+	f.cfg = cfg
 	f.srv = New(cfg)
 	if f.token, err = f.srv.Register(s.State.ID); err != nil {
 		t.Fatal(err)
@@ -233,29 +254,51 @@ func TestProxyRecordsTheWritesItForwards(t *testing.T) {
 		c.Audit = rec
 		c.Now = func() time.Time { return now }
 	})
-	f.do(t, http.MethodGet, "/api/v1/namespaces", f.token)
-	f.do(t, http.MethodDelete, "/api/v1/namespaces/payments", f.token) // refused: read-only
-	if got := rec.recorded(); len(got) != 0 {
-		t.Fatalf("recorded a read or a refused write: %+v", got)
+	base := audit.Entry{
+		Time: now, Source: audit.SourceProxy, Cluster: "prod", ClusterID: "kubeconfig/x/prod", Session: f.sess.State.ID,
+		Method: http.MethodDelete, Path: "/api/v1/namespaces/payments", Client: "Helm/3.16.2", Intent: "kubectl delete",
+	}
+	del := func() int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodDelete, f.proxy.URL+"/s/"+f.sess.State.ID+"/api/v1/namespaces/payments?propagationPolicy=Foreground", nil)
+		req.Header.Set("Authorization", "Bearer "+f.token)
+		req.Header.Set("User-Agent", "Helm/3.16.2")
+		req.Header.Set("Kubectl-Command", "kubectl delete")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
 	}
 
+	// A read is not recorded; a refused write is, as refused.
+	f.do(t, http.MethodGet, "/api/v1/namespaces", f.token)
+	if code := del(); code != http.StatusForbidden {
+		t.Fatalf("DELETE on a read-only session = %d", code)
+	}
+	refused := base
+	refused.Kind, refused.Status, refused.Reason = audit.KindRefused, http.StatusForbidden, audit.ReasonReadOnly
+	if got := rec.recorded(); len(got) != 1 || !reflect.DeepEqual(got[0], refused) {
+		t.Fatalf("recorded %+v, want only %+v", got, refused)
+	}
+
+	// An allowed write is recorded before it is sent, then its outcome.
 	if err := f.sess.Unlock(time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	req, _ := http.NewRequest(http.MethodDelete, f.proxy.URL+"/s/"+f.sess.State.ID+"/api/v1/namespaces/payments?propagationPolicy=Foreground", nil)
-	req.Header.Set("Authorization", "Bearer "+f.token)
-	req.Header.Set("User-Agent", "Helm/3.16.2")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	if code := del(); code != http.StatusOK {
+		t.Fatalf("DELETE after unlock = %d", code)
 	}
-	resp.Body.Close()
-	want := audit.Entry{
-		Time: now, Source: audit.SourceProxy, Cluster: "prod", ClusterID: "kubeconfig/x/prod", Session: f.sess.State.ID,
-		Allowed: audit.AllowedUnlocked, Method: http.MethodDelete, Path: "/api/v1/namespaces/payments", Client: "Helm/3.16.2",
+	got := rec.recorded()
+	if len(got) != 3 {
+		t.Fatalf("recorded %+v, want the refusal, the write and its result", got)
 	}
-	if got := rec.recorded(); resp.StatusCode != http.StatusOK || len(got) != 1 || !reflect.DeepEqual(got[0], want) {
-		t.Fatalf("DELETE = %d, recorded %+v; want %+v", resp.StatusCode, got, want)
+	write, result := base, base
+	write.Kind, write.Allowed, write.ID = audit.KindWrite, audit.AllowedUnlocked, got[1].ID
+	result.Kind, result.Status, result.ID = audit.KindResult, http.StatusOK, got[1].ID
+	if write.ID == "" || !reflect.DeepEqual(got[1], write) || !reflect.DeepEqual(got[2], result) {
+		t.Fatalf("recorded %+v and %+v; want %+v and %+v", got[1], got[2], write, result)
 	}
 
 	// A write that cannot be recorded is not forwarded.
