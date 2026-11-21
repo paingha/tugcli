@@ -97,6 +97,70 @@ func TestList(t *testing.T) {
 	}
 }
 
+// clusterInfoSample has exec users that ask for cluster information, one
+// of them on a cluster with an exec extension.
+const clusterInfoSample = `apiVersion: v1
+kind: Config
+clusters:
+- name: member
+  cluster:
+    server: https://member-1.example.com
+    extensions:
+    - name: client.authentication.k8s.io/exec
+      extension: {clusterName: member-1, audience: 06e3fbd18de8}
+- name: plain
+  cluster:
+    server: https://plain.example.com
+users:
+- name: reader
+  user:
+    exec: {apiVersion: client.authentication.k8s.io/v1, command: secretreader-plugin, provideClusterInfo: true, interactiveMode: Never}
+- name: no-info
+  user:
+    exec: {apiVersion: client.authentication.k8s.io/v1, command: cp-creds, interactiveMode: Never}
+contexts:
+- name: member
+  context: {cluster: member, user: reader}
+- name: plain
+  context: {cluster: plain, user: reader}
+- name: member-no-info
+  context: {cluster: member, user: no-info}
+current-context: member
+`
+
+func TestExecClusterInfo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(path, []byte(clusterInfoSample), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := New(WithHome(t.TempDir()))
+	acct := provider.Account{ID: "inventory", Config: map[string]any{ConfigPath: path}}
+	tests := []struct {
+		context    string
+		wantInfo   bool
+		wantConfig string // "" means none
+	}{
+		{"member", true, `{"audience":"06e3fbd18de8","clusterName":"member-1"}`},
+		{"plain", true, ""},
+		// kubectl passes the extension only to plugins that ask.
+		{"member-no-info", false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.context, func(t *testing.T) {
+			c, err := p.Credential(context.Background(), provider.CredentialRequest{Account: acct, ClusterID: tt.context})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Validate(); err != nil {
+				t.Fatalf("Credential(%s) = %+v, which is invalid: %v", tt.context, c.Exec, err)
+			}
+			if c.Exec.ProvideClusterInfo != tt.wantInfo || string(c.Exec.ClusterConfig) != tt.wantConfig {
+				t.Fatalf("Credential(%s) exec = %+v, want provideClusterInfo %t and cluster config %q", tt.context, c.Exec, tt.wantInfo, tt.wantConfig)
+			}
+		})
+	}
+}
+
 func TestCredentialRereadsFile(t *testing.T) {
 	path := writeSample(t)
 	p := New(WithHome(t.TempDir()))
