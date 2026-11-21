@@ -9,7 +9,6 @@ import (
 
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/credentials"
-	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/importer"
 	"github.com/paingha/tugcli/internal/oidc"
 	"github.com/paingha/tugcli/internal/plugin"
@@ -71,7 +70,7 @@ func (a *app) rotateCredential(ctx context.Context, args []string, yes bool) err
 		return fmt.Errorf("the %s provider cannot rotate credentials; `tug plugin ls` shows which providers can", cl.Provider)
 	}
 
-	readOnly := guard.ReadOnlyFor(cl.EffectiveLabels(), a.cfg.Guard.ReadOnlyLabels)
+	readOnly := a.limits(cl).ReadOnly
 	unlocked := connected && s.State.ClusterID == cl.ID && s.State.Writable(a.now())
 	question := fmt.Sprintf("Rotate the credential for %s? Anything still using the old one loses access.", cl.Name)
 	switch {

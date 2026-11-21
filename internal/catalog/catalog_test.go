@@ -347,3 +347,69 @@ func TestNormaliseLabels(t *testing.T) {
 		})
 	}
 }
+
+func TestTeamLayer(t *testing.T) {
+	t0 := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	src := Source{Provider: "aws", Account: "work"}
+	c := &Catalog{}
+	c.Merge(src, []provider.Cluster{{ID: "arn-1", Name: "arn-1", Labels: map[string]string{"env": "dev", "tier": "1"}}}, t0)
+	cl, err := c.Get("arn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.Name = "payments-prod"
+	cl.Team = &TeamEntry{
+		Provenance: Provenance{Team: "platform", Version: 3},
+		Name:       "payments-prod",
+		Aliases:    []string{"pay"},
+		Labels:     map[string]string{"env": "prod", "team": "payments"},
+	}
+	cl.UserLabels = map[string]string{"env": "staging"}
+
+	tests := []struct {
+		name string
+		got  map[string]string
+		want map[string]string
+	}{
+		{"EffectiveLabels", cl.EffectiveLabels(), map[string]string{"env": "staging", "team": "payments", "tier": "1"}},
+		{"TeamLabels", cl.TeamLabels(), map[string]string{"env": "prod", "team": "payments", "tier": "1"}},
+	}
+	for _, tt := range tests {
+		for k, v := range tt.want {
+			if tt.got[k] != v {
+				t.Errorf("%s()[%s] = %q, want %q", tt.name, k, tt.got[k], v)
+			}
+		}
+	}
+
+	if got, err := c.Get("pay"); err != nil || got.ID != cl.ID {
+		t.Fatalf(`Get("pay") = %v, %v; want the aliased cluster`, got, err)
+	}
+	// A sync keeps the team's entry and the name it gave.
+	c.Merge(src, []provider.Cluster{{ID: "arn-1", Name: "arn-1"}, {ID: "arn-2", Name: "pay"}}, t0.Add(time.Hour))
+	cl, _ = c.Get("aws/work/arn-1")
+	if cl.Name != "payments-prod" || cl.Team == nil || cl.Team.Version != 3 {
+		t.Fatalf("after merge: %+v", cl)
+	}
+	// A new cluster does not take a name another cluster answers to.
+	if other, _ := c.Get("aws/work/arn-2"); other.Name == "pay" {
+		t.Fatalf("new cluster took the alias pay as its name")
+	}
+
+	path := filepath.Join(t.TempDir(), FileName)
+	c.AddSource(Source{Provider: "aws", Account: "work", Team: &Provenance{Team: "platform", Version: 3}})
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Sources[0].Team, c.Sources[0].Team) {
+		t.Fatalf("source provenance after load = %+v", loaded.Sources[0].Team)
+	}
+	lcl, _ := loaded.Get("payments-prod")
+	if !reflect.DeepEqual(lcl.Team, cl.Team) {
+		t.Fatalf("team entry after load = %+v, want %+v", lcl.Team, cl.Team)
+	}
+}

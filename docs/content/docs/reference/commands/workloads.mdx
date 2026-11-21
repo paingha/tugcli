@@ -182,6 +182,36 @@ tug tree checkout
 tug tree cronjob/nightly-backup
 ```
 
+## tug watch
+
+Follow a workload's rollout, or any object's reconciliation, as it happens: one
+line for each meaningful change to the object and to everything it owns, as
+`tug tree` finds it. Lines report conditions changing status or reason, a new
+generation of the spec and the controller catching up with it, replica counts,
+pods' status, restarts and scheduling failures, and objects appearing, becoming
+ready or not ready, terminating and being deleted. `--events` adds new warning
+events about any of it. Ctrl-C ends it.
+
+`--until ready` exits 0 once the object is ready: a workload rolled out, a job
+complete, a pod ready, or any other object ready by its conditions. It exits 1
+when that cannot happen as things are, such as a failed job or a deployment
+past its progress deadline, and when `--timeout` passes first. `--until
+deleted` waits for the object to be gone. `-o json` writes one JSON object per
+change. It only reads, and never reads a Secret's data. See
+[Watch it change](/docs/guides/workloads#watch-it-change).
+
+```bash
+tug watch <target> [--events] [--until ready|deleted] [--timeout 5m] [-o table|json]
+```
+
+```bash
+tug watch api
+tug watch deploy/api --until ready --timeout 5m
+tug watch certificate/web-tls --events
+tug watch job/migrate --until ready -o json
+tug watch pod/api-7d9f-x2x4z --until deleted
+```
+
 ## tug support bundle
 
 Collect diagnostic evidence about an object, or with `namespace/<name>` a whole

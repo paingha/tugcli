@@ -98,8 +98,36 @@ type Config struct {
 	Plugins  PluginsConfig  `json:"plugins,omitempty"`
 	Sessions SessionsConfig `json:"sessions,omitempty"`
 	OIDC     OIDCConfig     `json:"oidc,omitempty"`
+	// Teams are the team catalogs tug follows, besides those added with
+	// tug team add.
+	Teams []TeamCatalog `json:"teams,omitempty"`
 
 	Intelligence IntelligenceConfig `json:"intelligence,omitzero"`
+}
+
+// TeamCatalog is where a team publishes its signed catalog: names and
+// labels for its clusters, provider account settings, plugin indexes and
+// safety policies. A team catalog never carries credentials.
+type TeamCatalog struct {
+	Name string `json:"name"`
+	// URL is the https URL of the catalog; its signature is at URL + ".sig".
+	URL string `json:"url,omitempty"`
+	// Git is a file in a git repository, instead of URL.
+	Git *TeamGit `json:"git,omitempty"`
+	// PublicKey is the base64 ed25519 key the catalog must be signed with.
+	PublicKey string `json:"publicKey"`
+}
+
+// TeamGit is a team catalog kept in a git repository.
+type TeamGit struct {
+	// Repo is what git clone takes: an https or ssh URL, or a path.
+	Repo string `json:"repo"`
+	// Path is the catalog's path in the repository, team.yaml by default;
+	// its signature is next to it, with ".sig" added.
+	Path string `json:"path,omitempty"`
+	// Ref is the branch or tag to read, the repository's default branch
+	// when empty.
+	Ref string `json:"ref,omitempty"`
 }
 
 // IntelligenceConfig turns on AI-assisted explanations, `tug why --deep`,
