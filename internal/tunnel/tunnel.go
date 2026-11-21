@@ -40,13 +40,13 @@ func Parse(spec string) (*url.URL, error) {
 		return nil, fmt.Errorf("tunnel %q: %w", spec, err)
 	}
 	if !slices.Contains(Kinds, u.Scheme) {
-		return nil, fmt.Errorf("tunnel %q: the scheme must be one of %s", spec, strings.Join(Kinds, ", "))
+		return nil, fmt.Errorf("tunnel %s: the scheme must be one of %s", u.Redacted(), strings.Join(Kinds, ", "))
 	}
 	if _, ok := builders[u.Scheme]; !ok && !slices.Contains(proxyKinds, u.Scheme) {
-		return nil, fmt.Errorf("tunnel %q: %s tunnels are not available in this build", spec, u.Scheme)
+		return nil, fmt.Errorf("tunnel %s: %s tunnels are not available in this build", u.Redacted(), u.Scheme)
 	}
 	if u.Host == "" && u.Scheme != "iap" {
-		return nil, fmt.Errorf("tunnel %q: name the host to go through", spec)
+		return nil, fmt.Errorf("tunnel %s: name the host to go through", u.Redacted())
 	}
 	return u, nil
 }

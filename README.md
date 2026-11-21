@@ -121,7 +121,9 @@ them and `tug pf stop <name>|--all` ends them.
 A cluster whose API server is not directly reachable gets a tunnel, kept in
 the catalog across syncs. tug's own commands go through it, and connecting
 to the cluster routes kubectl, helm and k9s through tugd, which keeps the
-tunnel open.
+tunnel open. A provider can list a cluster with a tunnel, as the Teleport
+plugin does for clusters that need `tsh proxy kube`; a tunnel you set wins
+over it, and `tug tunnel ls` shows where each one comes from.
 
 ```bash
 tug tunnel set eks-private ssm://i-0123456789abcdef0?region=eu-west-1

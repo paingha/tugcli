@@ -35,7 +35,8 @@ func (example) Info() provider.Info {
 	}
 }
 
-// List reads "name=url,name=url" from the account's clusters setting.
+// List reads "name=url,name=url" from the account's clusters setting. When
+// the account names a tunnel, every cluster is reached through it.
 func (example) List(_ context.Context, req provider.ListRequest) ([]provider.Cluster, error) {
 	if err := checkToken(req.Secrets); err != nil {
 		return nil, err
@@ -56,6 +57,7 @@ func (example) List(_ context.Context, req provider.ListRequest) ([]provider.Clu
 			Name:      name,
 			Endpoints: provider.Endpoints{Public: server},
 			Labels:    map[string]string{"example": "true"},
+			Tunnel:    req.Account.ConfigString("tunnel"),
 		})
 	}
 	return out, nil

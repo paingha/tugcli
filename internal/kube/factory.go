@@ -62,14 +62,14 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 		QPS:   50,
 		Burst: 100,
 	}
-	switch {
-	case cl.Tunnel != "":
+	switch tun := cl.EffectiveTunnel(); {
+	case tun != "":
 		// The tunnel is a proxy to client-go, so exec, attach and
 		// port-forward upgrades go through it too.
 		if f.Tunnels == nil {
 			return nil, fmt.Errorf("cluster %s is reached through a tunnel, which this command cannot open", cl.Name)
 		}
-		route, err := f.Tunnels.Route(ctx, cl.Tunnel)
+		route, err := f.Tunnels.Route(ctx, tun)
 		if err != nil {
 			return nil, fmt.Errorf("opening the tunnel to %s: %w", cl.Name, err)
 		}

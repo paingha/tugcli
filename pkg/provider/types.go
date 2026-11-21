@@ -158,6 +158,12 @@ type Cluster struct {
 	InsecureSkipTLSVerify bool      `json:"insecureSkipTLSVerify,omitempty"`
 	ProxyURL              string    `json:"proxyURL,omitempty"`
 	DefaultNamespace      string    `json:"defaultNamespace,omitempty"`
+	// Tunnel, when set, is how tug reaches an API server that kubectl
+	// cannot reach directly, written as for tug tunnel set, such as
+	// ssm://i-0123456789abcdef0?region=eu-west-1. A tunnel the user sets
+	// wins over it. It must not carry a password, since tug keeps it in
+	// its catalog.
+	Tunnel string `json:"tunnel,omitempty"`
 
 	Labels map[string]string `json:"labels,omitempty"`
 
