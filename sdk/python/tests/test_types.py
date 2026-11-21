@@ -97,6 +97,12 @@ class WireFormatTest(unittest.TestCase):
                 '"installHint":"install the AWS CLI"}}',
             ),
             (
+                "delegate with cluster info",
+                delegate("secretreader-plugin", provide_cluster_info=True, cluster_config={"z": [1], "clusterName": "member-1"}),
+                '{"type":"delegate","exec":{"command":"secretreader-plugin","provideClusterInfo":true,'
+                '"clusterConfig":{"clusterName":"member-1","z":[1]}}}',
+            ),
+            (
                 "account with nested config",
                 Account(id="work", description="café", config={"z": 1, "a": {"y": True, "b": [None, "x"]}}),
                 '{"id":"work","description":"café","config":{"a":{"b":[null,"x"],"y":true},"z":1}}',
@@ -117,7 +123,12 @@ class WireFormatTest(unittest.TestCase):
             credential=client_cert(b"C", b"K", EXPIRY),
         )
         self.assertEqual(Cluster.from_dict(json.loads(encode(cluster))), cluster)
-        for cred in (token("t", EXPIRY), oidc("https://i", "c", "openid"), delegate("x", "a", install_hint="h")):
+        for cred in (
+            token("t", EXPIRY),
+            oidc("https://i", "c", "openid"),
+            delegate("x", "a", install_hint="h"),
+            delegate("x", provide_cluster_info=True, cluster_config={"clusterName": "m", "n": [None, 1.5]}),
+        ):
             with self.subTest(cred.type):
                 self.assertEqual(Credential.from_dict(json.loads(encode(cred))), cred)
         req = AccessRequest(account=Account("w", config={"k": "v"}), cluster=cluster, egress_ip="198.51.100.9", secrets={"a": "1"})
@@ -170,6 +181,9 @@ class CredentialTest(unittest.TestCase):
             ("delegate", delegate("aws", "eks", "get-token"), ""),
             ("delegate without exec", Credential(type="delegate"), "exec.command"),
             ("delegate without command", delegate(""), "exec.command"),
+            ("delegate with cluster info", delegate("cp-creds", provide_cluster_info=True), ""),
+            ("delegate with cluster info and config", delegate("cp-creds", provide_cluster_info=True, cluster_config={"a": 1}), ""),
+            ("delegate with cluster config only", delegate("cp-creds", cluster_config={"a": 1}), "without exec.provideClusterInfo"),
             ("unknown type", Credential(type="password"), '"password"'),
             ("no type", Credential(type="", token="t"), "unknown credential type"),
         ]

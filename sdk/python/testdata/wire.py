@@ -122,6 +122,14 @@ class Wire(Provider):
                 interactive_mode="IfAvailable",
                 install_hint="install <aws> & co",
             )
+        if cid == "delegate-info":
+            return delegate(
+                "secretreader-plugin",
+                provide_cluster_info=True,
+                cluster_config={"tags": [True, None], "port": 6443, "clusterName": "member-1", "audience": "<a&b>"},
+            )
+        if cid == "delegate-config-only":
+            return delegate("secretreader-plugin", cluster_config={"clusterName": "member-1"})
         if cid == "invalid":
             return Credential(type="token")
         raise ProviderError(NOT_FOUND, 'no cluster "%s"' % cid)

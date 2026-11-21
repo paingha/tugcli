@@ -178,6 +178,18 @@ converted to UTC; pass `NO_EXPIRY` only for credentials that really do not
 expire. A naive `datetime` is refused, because it could be in any time zone.
 PEM may be `bytes` or `str`.
 
+For an exec plugin that reads its cluster from `KUBERNETES_EXEC_INFO`, as
+kubeconfig's `provideClusterInfo: true` arranges, pass
+`provide_cluster_info=True`: tug then gives it the cluster's server, CA data,
+TLS server name, insecure flag and proxy URL in `spec.cluster`.
+`cluster_config`, any JSON value, becomes `spec.cluster.config`, which a
+kubeconfig keeps in the cluster's `client.authentication.k8s.io/exec`
+extension; it needs `provide_cluster_info`:
+
+```python
+return delegate("acme-auth", "token", provide_cluster_info=True, cluster_config={"audience": request.cluster_id})
+```
+
 ### Errors
 
 Raise `ProviderError` with one of the codes; tug prints the code and message,
@@ -344,6 +356,9 @@ it out of the platforms.
   case, which tug never sends.
 - Numbers in free-form account config keep Python's formatting, so `1.0`
   stays `1.0` where Go writes `1`; both are the same JSON number.
+- `cluster_config` is a decoded value, written with its object keys sorted
+  as Go writes maps. Go's `ClusterConfig` is raw JSON, written as the
+  plugin gave it. A `null` cluster config is left out.
 
 ## Developing the SDK
 

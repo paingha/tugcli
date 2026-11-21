@@ -108,6 +108,15 @@ func (wirePlugin) Credential(_ context.Context, req provider.CredentialRequest) 
 		c.Exec.InteractiveMode = "IfAvailable"
 		c.Exec.InstallHint = "install <aws> & co"
 		return c, nil
+	case "delegate-info":
+		c := provider.Delegate("secretreader-plugin")
+		c.Exec.ProvideClusterInfo = true
+		c.Exec.ClusterConfig = json.RawMessage(`{"audience":"<a&b>","clusterName":"member-1","port":6443,"tags":[true,null]}`)
+		return c, nil
+	case "delegate-config-only":
+		c := provider.Delegate("secretreader-plugin")
+		c.Exec.ClusterConfig = json.RawMessage(`{"clusterName":"member-1"}`)
+		return c, nil
 	case "invalid":
 		return provider.Credential{Type: provider.CredentialToken}, nil
 	default:
@@ -231,6 +240,8 @@ func TestWireFormatMatchesGoSDK(t *testing.T) {
 		{"client cert", []string{"credential"}, credReq("cert")},
 		{"oidc", []string{"credential"}, credReq("oidc")},
 		{"delegate", []string{"credential"}, credReq("delegate")},
+		{"delegate with cluster info", []string{"credential"}, credReq("delegate-info")},
+		{"delegate with cluster config only", []string{"credential"}, credReq("delegate-config-only")},
 		{"invalid credential", []string{"credential"}, credReq("invalid")},
 		{"unknown cluster", []string{"credential"}, credReq("missing")},
 		{"rotate", []string{"rotate"}, `{"kind":"RotateRequest","clusterID":"dev","secrets":{"api_token":"old"}}`},
