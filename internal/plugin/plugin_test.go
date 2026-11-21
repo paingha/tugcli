@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/paingha/tugcli/internal/sandbox"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -49,51 +50,53 @@ func TestSDKPluginEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prov := NewProvider(p, &Runner{Bin: p.Bin, Name: p.Name()})
-	ctx := context.Background()
+	eachSandbox(t, p, func(t *testing.T, sb *sandbox.Sandbox) {
+		prov := NewProvider(p, &Runner{Bin: p.Bin, Name: p.Name(), Sandbox: sb})
+		ctx := context.Background()
 
-	d, err := prov.Describe(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d.Name != "example" || !d.Capabilities.Has(provider.CapList|provider.CapCredential) {
-		t.Fatalf("describe = %+v", d)
-	}
+		d, err := prov.Describe(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Name != "example" || !d.Capabilities.Has(provider.CapList|provider.CapCredential) {
+			t.Fatalf("describe = %+v", d)
+		}
 
-	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443,ci=https://ci:6443"}}
-	token := map[string]string{"api_token": "ex_t0k"}
-	clusters, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(clusters) != 2 || clusters[0].Endpoints.Public != "https://127.0.0.1:6443" {
-		t.Fatalf("clusters = %+v", clusters)
-	}
+		acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443,ci=https://ci:6443"}}
+		token := map[string]string{"api_token": "ex_t0k"}
+		clusters, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(clusters) != 2 || clusters[0].Endpoints.Public != "https://127.0.0.1:6443" {
+			t.Fatalf("clusters = %+v", clusters)
+		}
 
-	_, err = prov.List(ctx, provider.ListRequest{Account: provider.Account{ID: "empty"}, Secrets: token})
-	var pe *provider.Error
-	if provider.CodeOf(err) != provider.InvalidConfig {
-		t.Fatalf("want InvalidConfig, got %v", err)
-	}
-	if pe = provider.AsError(err); pe.Hint == "" {
-		t.Fatal("hint lost on the wire")
-	}
+		_, err = prov.List(ctx, provider.ListRequest{Account: provider.Account{ID: "empty"}, Secrets: token})
+		var pe *provider.Error
+		if provider.CodeOf(err) != provider.InvalidConfig {
+			t.Fatalf("want InvalidConfig, got %v", err)
+		}
+		if pe = provider.AsError(err); pe.Hint == "" || strings.Contains(pe.Hint, "sandbox") {
+			t.Fatalf("hint = %q, want the plugin's own", pe.Hint)
+		}
 
-	// Undeclared secrets are never sent.
-	cred, err := prov.Credential(ctx, provider.CredentialRequest{
-		Account: acct, ClusterID: "dev",
-		Secrets: map[string]string{"api_token": "ex_t0k", "other_plugin_secret": "nope"},
+		// Undeclared secrets are never sent.
+		cred, err := prov.Credential(ctx, provider.CredentialRequest{
+			Account: acct, ClusterID: "dev",
+			Secrets: map[string]string{"api_token": "ex_t0k", "other_plugin_secret": "nope"},
+		})
+		if err != nil || cred.Token != "ex_t0k" {
+			t.Fatalf("credential = %+v, %v", cred, err)
+		}
+		if got := prov.declared(map[string]string{"api_token": "a", "x": "b"}); len(got) != 1 {
+			t.Fatalf("declared = %v", got)
+		}
+
+		if _, err := prov.Accounts(ctx); provider.CodeOf(err) != provider.Unimplemented {
+			t.Fatalf("accounts: want Unimplemented, got %v", err)
+		}
 	})
-	if err != nil || cred.Token != "ex_t0k" {
-		t.Fatalf("credential = %+v, %v", cred, err)
-	}
-	if got := prov.declared(map[string]string{"api_token": "a", "x": "b"}); len(got) != 1 {
-		t.Fatalf("declared = %v", got)
-	}
-
-	if _, err := prov.Accounts(ctx); provider.CodeOf(err) != provider.Unimplemented {
-		t.Fatalf("accounts: want Unimplemented, got %v", err)
-	}
 }
 
 const scriptManifest = `apiVersion: tug.plugin/v1alpha1
@@ -591,46 +594,53 @@ func TestServeModeKeepsOneProcess(t *testing.T) {
 	if !p.Manifest.Spec.Capabilities.Has(provider.CapServe) {
 		t.Fatal("the example manifest should declare serve")
 	}
-	r := &Runner{Bin: p.Bin, Name: p.Name(), Serve: true}
-	prov := NewProvider(p, r)
-	t.Cleanup(func() { _ = prov.Close() })
-	ctx := context.Background()
-	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443"}}
-	token := map[string]string{"api_token": "ex_t0k"}
+	eachSandbox(t, p, func(t *testing.T, sb *sandbox.Sandbox) {
+		r := &Runner{Bin: p.Bin, Name: p.Name(), Serve: true, Sandbox: sb}
+		prov := NewProvider(p, r)
+		t.Cleanup(func() { _ = prov.Close() })
+		ctx := context.Background()
+		acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://127.0.0.1:6443"}}
+		token := map[string]string{"api_token": "ex_t0k"}
 
-	var wg sync.WaitGroup
-	errs := make([]error, 8)
-	for i := range errs {
-		wg.Go(func() {
-			if i%2 == 0 {
-				_, errs[i] = prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
-			} else {
-				_, errs[i] = prov.Credential(ctx, provider.CredentialRequest{Account: acct, ClusterID: "dev", Secrets: token})
+		var wg sync.WaitGroup
+		errs := make([]error, 8)
+		for i := range errs {
+			wg.Go(func() {
+				if i%2 == 0 {
+					_, errs[i] = prov.List(ctx, provider.ListRequest{Account: acct, Secrets: token})
+				} else {
+					_, errs[i] = prov.Credential(ctx, provider.CredentialRequest{Account: acct, ClusterID: "dev", Secrets: token})
+				}
+			})
+		}
+		wg.Wait()
+		if err := errors.Join(errs...); err != nil {
+			t.Fatal(err)
+		}
+		inst, done := r.srv.running()
+		if _, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: map[string]string{"api_token": "bad"}}); provider.CodeOf(err) != provider.Unauthenticated {
+			t.Fatalf("a provider error through serve mode = %v, want Unauthenticated", err)
+		}
+		if again, _ := r.srv.running(); again != inst {
+			t.Fatal("serve mode started a second process for a later call")
+		}
+
+		// The process dies; the next call starts a new one.
+		_ = inst.kill()
+		<-done
+		if _, err := prov.Describe(ctx); err != nil {
+			t.Fatalf("describe after the process died: %v", err)
+		}
+		if err := prov.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := prov.Describe(ctx); err == nil {
+			t.Fatal("a call after Close succeeded")
+		}
+		if sb != nil {
+			if left, _ := os.ReadDir(sb.TempRoot); len(left) != 0 {
+				t.Errorf("after Close, %d private temporary directories are left", len(left))
 			}
-		})
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		t.Fatal(err)
-	}
-	inst, done := r.srv.running()
-	if _, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: map[string]string{"api_token": "bad"}}); provider.CodeOf(err) != provider.Unauthenticated {
-		t.Fatalf("a provider error through serve mode = %v, want Unauthenticated", err)
-	}
-	if again, _ := r.srv.running(); again != inst {
-		t.Fatal("serve mode started a second process for a later call")
-	}
-
-	// The process dies; the next call starts a new one.
-	_ = inst.kill()
-	<-done
-	if _, err := prov.Describe(ctx); err != nil {
-		t.Fatalf("describe after the process died: %v", err)
-	}
-	if err := prov.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := prov.Describe(ctx); err == nil {
-		t.Fatal("a call after Close succeeded")
-	}
+		}
+	})
 }

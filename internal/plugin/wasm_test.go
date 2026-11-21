@@ -22,6 +22,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/paingha/tugcli/internal/sandbox"
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
 )
@@ -43,6 +44,13 @@ var wasmShared struct {
 }
 
 func TestMain(m *testing.M) {
+	// On Linux, tug starts a sandboxed plugin by running itself as
+	// sandbox.ExecCommand, and this test binary stands in for tug.
+	if len(os.Args) > 1 && os.Args[1] == sandbox.ExecCommand {
+		err := sandbox.Exec(os.Args[2:])
+		fmt.Fprintf(os.Stderr, "tug: %v\n", err)
+		os.Exit(1)
+	}
 	if dir := os.Getenv(wasmHostEnv); dir != "" {
 		os.Exit(wasmHostMain(dir))
 	}

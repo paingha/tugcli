@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/paingha/tugcli/internal/sandbox"
 	"github.com/paingha/tugcli/pkg/provider"
 )
 
@@ -53,6 +54,9 @@ type Runner struct {
 	// WASM, when set, runs Bin as a WebAssembly module inside tug rather
 	// than as a process. The module is compiled on the first call.
 	WASM *WASMOptions
+	// Sandbox, when set, confines every plugin process the runner starts. A
+	// WebAssembly plugin has no process; its runtime confines it instead.
+	Sandbox *sandbox.Sandbox
 
 	srvMu sync.Mutex
 	srv   *server
@@ -78,9 +82,10 @@ func (r *Runner) timeout(op string) time.Duration {
 }
 
 // Call runs the plugin for op with the request bytes and returns the
-// response bytes. The process gets a scrubbed environment, a timeout, and is
-// sent SIGTERM then SIGKILL when the context ends. A WebAssembly plugin gets
-// the same, and is stopped where it is when the context ends.
+// response bytes. The process gets a scrubbed environment, a timeout, its
+// sandbox when the runner has one, and is sent SIGTERM then SIGKILL when the
+// context ends. A WebAssembly plugin gets the environment and the timeout,
+// and is stopped where it is when the context ends.
 func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, error) {
 	if r.Serve {
 		return r.callServe(ctx, op, request)
@@ -91,8 +96,13 @@ func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, e
 	ctx, cancel := context.WithTimeout(ctx, r.timeout(op))
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, r.Bin, op)
-	cmd.Env = r.Environ()
+	c, err := r.Command(op)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Cleanup()
+	cmd := exec.CommandContext(ctx, c.Path, c.Args...)
+	cmd.Env = c.Env
 	cmd.Stdin = bytes.NewReader(request)
 	cmd.Cancel = func() error { return terminate(cmd.Process) }
 	cmd.WaitDelay = killGrace
@@ -103,7 +113,7 @@ func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, e
 	cmd.Stderr = stderr
 
 	start := time.Now()
-	err := cmd.Run()
+	err = cmd.Run()
 	stderr.flush()
 	r.logger().Debug("plugin call", "plugin", r.Name, "op", op, "duration", time.Since(start), "err", err)
 	return r.response(ctx, op, stdout, err)
@@ -140,13 +150,14 @@ func (r *Runner) response(ctx context.Context, op string, stdout *limitedBuffer,
 		return nil, ctxErr
 	}
 	// A non-zero exit with a JSON error on stdout is a normal provider error;
-	// the caller decodes it.
+	// the caller decodes it. A plugin that dies without one may have been
+	// stopped by its sandbox.
 	if err != nil && stdout.Len() == 0 {
 		var mle *memoryLimitError
 		if errors.As(err, &mle) {
 			return nil, provider.Errorf(provider.Internal, "plugin %s %s %v", r.Name, op, err).WithHint(memoryHint)
 		}
-		return nil, provider.Errorf(provider.Internal, "plugin %s %s: %v", r.Name, op, err)
+		return nil, r.withSandboxHint(provider.Errorf(provider.Internal, "plugin %s %s: %v", r.Name, op, err))
 	}
 	return stdout.Bytes(), nil
 }
@@ -191,12 +202,17 @@ func (r *Runner) Prepare() error {
 // `tug provider-exec`. The error is for a plugin that could not start.
 func (r *Runner) Exec(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	if r.WASM == nil {
-		cmd := exec.CommandContext(ctx, r.Bin, args...)
-		cmd.Env = r.Environ()
+		c, err := r.Command(args...)
+		if err != nil {
+			return 0, err
+		}
+		defer c.Cleanup()
+		cmd := exec.CommandContext(ctx, c.Path, c.Args...)
+		cmd.Env = c.Env
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 		cmd.Cancel = func() error { return terminate(cmd.Process) }
 		cmd.WaitDelay = killGrace
-		err := cmd.Run()
+		err = cmd.Run()
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			return max(ee.ExitCode(), provider.ExitError), nil // -1 when a signal ended it

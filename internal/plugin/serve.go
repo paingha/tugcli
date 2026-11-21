@@ -45,9 +45,18 @@ type instance interface {
 }
 
 // procInstance is a plugin process.
-type procInstance struct{ cmd *exec.Cmd }
+type procInstance struct {
+	cmd *exec.Cmd
+	// cleanup removes what the sandbox made for the process, once it has
+	// exited.
+	cleanup func()
+}
 
-func (p *procInstance) wait() error      { return p.cmd.Wait() }
+func (p *procInstance) wait() error {
+	err := p.cmd.Wait()
+	p.cleanup()
+	return err
+}
 func (p *procInstance) terminate() error { return terminate(p.cmd.Process) }
 func (p *procInstance) kill() error      { return p.cmd.Process.Kill() }
 
@@ -81,9 +90,9 @@ func (r *Runner) callServe(ctx context.Context, op string, request []byte) ([]by
 		e := provider.Errorf(provider.Internal, "plugin %s stopped while answering %s: %v", r.Name, op, err)
 		var mle *memoryLimitError
 		if errors.As(err, &mle) {
-			e = e.WithHint(memoryHint)
+			return nil, e.WithHint(memoryHint)
 		}
-		return nil, e
+		return nil, r.withSandboxHint(e)
 	case <-ctx.Done():
 		_ = s.send(provider.ServeRequest{ID: id, Cancel: true}) // best effort
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -108,6 +117,10 @@ func (s *server) register(op string) (string, chan []byte, instance, chan struct
 	}
 	if s.inst == nil {
 		if err := s.start(); err != nil {
+			var pe *provider.Error
+			if errors.As(err, &pe) {
+				return "", nil, nil, nil, pe
+			}
 			return "", nil, nil, nil, provider.Errorf(provider.Internal, "starting plugin %s in serve mode: %v", s.r.Name, err)
 		}
 	}
@@ -142,24 +155,32 @@ func (s *server) start() error {
 	return nil
 }
 
-// startProcess starts the plugin's executable in serve mode.
+// startProcess starts the plugin's executable in serve mode, in its sandbox
+// when the runner has one.
 func (r *Runner) startProcess(stderr io.Writer) (instance, io.WriteCloser, io.ReadCloser, error) {
-	cmd := exec.Command(r.Bin, provider.OpServe) //nolint:gosec // the plugin's own checked binary
-	cmd.Env = r.Environ()
+	c, err := r.Command(provider.OpServe)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cmd := exec.Command(c.Path, c.Args...) //nolint:gosec // the plugin's own checked binary, or tug's sandbox in front of it
+	cmd.Env = c.Env
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		c.Cleanup()
 		return nil, nil, nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		c.Cleanup()
 		return nil, nil, nil, err
 	}
 	cmd.Stderr = stderr
 	cmd.WaitDelay = killGrace
 	if err := cmd.Start(); err != nil {
+		c.Cleanup()
 		return nil, nil, nil, err
 	}
-	return &procInstance{cmd: cmd}, stdin, stdout, nil
+	return &procInstance{cmd: cmd, cleanup: c.Cleanup}, stdin, stdout, nil
 }
 
 // read delivers responses until the plugin's stdout ends, then reaps it and
