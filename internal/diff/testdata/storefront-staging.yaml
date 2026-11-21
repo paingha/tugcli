@@ -1,0 +1,87 @@
+# The same Deployment on staging: a newer image, fewer replicas from its
+# own autoscaler, no hand edits, and an older API server that does not
+# default terminationMessagePolicy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  namespace: shop
+  uid: 0a9b8c7d-0000-4000-8000-0000000stage
+  resourceVersion: "9031"
+  generation: 3
+  creationTimestamp: "2026-11-02T12:00:00Z"
+  labels:
+    app: storefront
+    team: web
+  annotations:
+    deployment.kubernetes.io/revision: "3"
+  managedFields:
+  - manager: kubectl
+    operation: Apply
+    apiVersion: apps/v1
+    time: "2026-11-21T09:00:00Z"
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:metadata:
+        f:labels:
+          f:app: {}
+          f:team: {}
+      f:spec:
+        f:selector: {}
+        f:template:
+          f:metadata:
+            f:labels:
+              f:app: {}
+          f:spec:
+            f:containers:
+              k:{"name":"web"}:
+                .: {}
+                f:args: {}
+                f:image: {}
+                f:name: {}
+                f:ports:
+                  k:{"containerPort":8080,"protocol":"TCP"}:
+                    .: {}
+                    f:containerPort: {}
+                    f:protocol: {}
+  - manager: kube-controller-manager
+    operation: Update
+    apiVersion: apps/v1
+    subresource: scale
+    time: "2026-11-21T09:10:00Z"
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:spec:
+        f:replicas: {}
+  - manager: kube-controller-manager
+    operation: Update
+    apiVersion: apps/v1
+    time: "2026-11-21T09:00:05Z"
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:metadata:
+        f:annotations:
+          .: {}
+          f:deployment.kubernetes.io/revision: {}
+spec:
+  replicas: 2
+  progressDeadlineSeconds: 600
+  selector:
+    matchLabels:
+      app: storefront
+  template:
+    metadata:
+      labels:
+        app: storefront
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: web
+        image: registry.example.com/storefront:1.5.0
+        args: ["--port=8080", "--cache=on"]
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        imagePullPolicy: IfNotPresent
+status:
+  replicas: 2
