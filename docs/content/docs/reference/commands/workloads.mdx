@@ -173,3 +173,47 @@ tug tree <target> [-o table|json|yaml]
 tug tree checkout
 tug tree cronjob/nightly-backup
 ```
+
+## tug support bundle
+
+Collect diagnostic evidence about an object, or with `namespace/<name>` a whole
+namespace, into a redacted `.tar.gz` archive: the object and what it owns as
+YAML, `tug why` and `tug tree` as JSON, events, container logs (current and
+previous), the conditions of the nodes its pods run on, the cluster's version
+and resources, `tug doctor`'s checks, a `manifest.json` of every file and where
+it came from, and a `README.md` that says what was redacted and how to review
+it. It only reads. See
+[Send it to someone who can help](/docs/guides/workloads#send-it-to-someone-who-can-help).
+
+```bash
+tug support bundle <target> [--since 1h] [--output <file>|-] [--preview]
+  [--include <kind>]... [--exclude <kind>]... [--logs-tail 1000]
+  [--redact-pattern <regex>]...
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-n`, `--namespace` | Namespace of the target (default: the session's). |
+| `--since` | How far back events and current logs go (default `1h`). |
+| `--output` | File to write, or `-` for stdout (default `./tug-bundle-<cluster>-<target>-<time>.tar.gz`). An existing file is never replaced. |
+| `--preview` | List the files that would be written, with their sizes and sources, and write nothing. |
+| `--include` | Collect only objects of this kind, as kubectl names it (repeatable). Events are kind `event` and nodes kind `node`. |
+| `--exclude` | Leave objects of this kind out (repeatable). |
+| `--logs-tail` | Most lines kept from the end of each log (default `1000`); `0` leaves logs out. |
+| `--redact-pattern` | Also redact whatever this regular expression matches (repeatable). |
+
+Redaction is always on: Secrets are copied as metadata only; environment
+variable values, ConfigMap values, fields named like a credential and the
+`kubectl.kubernetes.io/last-applied-configuration` annotation are replaced with
+`<redacted>`; and bearer and basic credentials, passwords in URLs, JSON Web
+Tokens, PEM private keys, AWS access key IDs, GitHub, GitLab and Slack tokens
+and `key=value` credentials are redacted in logs, events and every other text.
+The archive's mode is `0600`. The path goes to stdout, progress to stderr.
+
+```bash
+tug support bundle deploy/api
+tug support bundle certificate/web-tls -n ingress
+tug support bundle namespace/shop --since 6h
+tug support bundle api --preview
+tug support bundle api --exclude configmap --redact-pattern 'cust-[0-9]+'
+```
