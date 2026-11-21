@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -165,6 +166,42 @@ func TestVisibleWidth(t *testing.T) {
 	}
 }
 
+func TestWrap(t *testing.T) {
+	cyan := Colors{Enabled: true}.Cyan
+	tests := []struct {
+		name  string
+		in    string
+		width int
+		want  []string
+	}{
+		{"no width", "read its logs and check its events", 0, []string{"read its logs and check its events"}},
+		{"fits", "read its logs", 20, []string{"read its logs"}},
+		{"breaks at spaces", "read the crashed container's logs first", 16, []string{"read the crashed", "container's logs", "first"}},
+		{"long word alone", "see pod/billing-5d4f-x2x4z now", 10, []string{"see", "pod/billing-5d4f-x2x4z", "now"}},
+		{"colour does not count", "run " + cyan("tug sh api") + " now", 10, []string{"run \x1b[36mtug sh", "api\x1b[0m now"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Wrap(tt.in, tt.width); !slices.Equal(got, tt.want) {
+				t.Errorf("Wrap(%q, %d) = %q, want %q", tt.in, tt.width, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWidthNotTerminal(t *testing.T) {
+	file, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { file.Close() })
+	for _, w := range []io.Writer{&bytes.Buffer{}, file} {
+		if got := Width(w); got != 0 {
+			t.Errorf("Width(%T) = %d, want 0", w, got)
+		}
+	}
+}
+
 func TestColorsForDisabled(t *testing.T) {
 	file, err := os.Create(filepath.Join(t.TempDir(), "out"))
 	if err != nil {
@@ -206,6 +243,7 @@ func TestColors(t *testing.T) {
 		{"Green", Colors.Green, "32"},
 		{"Dim", Colors.Dim, "2"},
 		{"Bold", Colors.Bold, "1"},
+		{"Cyan", Colors.Cyan, "36"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

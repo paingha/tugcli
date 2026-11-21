@@ -228,7 +228,7 @@ func TestWhy(t *testing.T) {
 		"billing-5d4f-x2x4z   CrashLoopBackOff   0/1     7",
 		"error    pod/billing-5d4f-x2x4z, container main: CrashLoopBackOff",
 		"         keeps crashing and waits to restart; last exit code 1 (Error)",
-		"         next: read the crashed container's logs: `tug logs pod/billing-5d4f-x2x4z --previous -n shop`",
+		"         next: read the crashed container's logs:\n               tug logs pod/billing-5d4f-x2x4z --previous -n shop\n",
 		"Recent warning events:",
 		"pod/billing-5d4f-x2x4z   BackOff   Back-off restarting failed container main",
 	} {
@@ -267,7 +267,7 @@ func TestWhy(t *testing.T) {
 	for _, want := range []string{
 		"error    pvc/data-ledger-0: Pending",
 		`is Pending: no volume is bound to it: storageclass.storage.k8s.io "fast-ssd" not found`,
-		"next: check storage class fast-ssd and its provisioner: `tug describe pvc/data-ledger-0 -n shop`",
+		"next: check storage class fast-ssd and its provisioner:\n               tug describe pvc/data-ledger-0 -n shop\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("tug why sts/ledger lacks %q:\n%s", want, out)

@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -95,20 +96,10 @@ func (a *app) printWhy(d *ops.Diagnosis) error {
 		}
 	}
 
-	if len(d.Findings) > 0 {
-		fmt.Fprintln(w)
-	}
-	const indent = "         " // under the severity column
+	width := render.Width(w)
 	for _, f := range d.Findings {
-		subject := objectList(f.Objects)
-		if f.Container != "" {
-			subject += ", container " + f.Container
-		}
-		fmt.Fprintf(w, "%s %s: %s\n", severity(c, f.Severity), subject, c.Bold(f.Reason))
-		fmt.Fprintf(w, "%s%s\n", indent, f.Message)
-		if f.Next != "" {
-			fmt.Fprintf(w, "%s%s %s\n", indent, c.Dim("next:"), f.Next)
-		}
+		fmt.Fprintln(w)
+		printFinding(w, c, width, f)
 	}
 	if d.Healthy && len(d.Findings) == 0 {
 		fmt.Fprintf(w, "\n%s\n", c.Green("Nothing wrong found."))
@@ -127,6 +118,86 @@ func (a *app) printWhy(d *ops.Diagnosis) error {
 		return render.Table(w, []string{"LAST SEEN", "OBJECT", "REASON", "MESSAGE"}, rows)
 	}
 	return nil
+}
+
+// findingIndent lines a finding's message and next step up under the text
+// after its severity.
+const findingIndent = "         "
+
+// printFinding writes one finding: its severity, subject and reason, then
+// its message and next step beneath. On a terminal, the text wraps to the
+// window under its own indent. A command that ends the next step gets a line
+// of its own, without the backticks it has in JSON and YAML, so that it is
+// never broken across lines and copies straight into a shell.
+func printFinding(w io.Writer, c render.Colors, width int, f ops.Finding) {
+	subject := objectList(f.Objects)
+	if f.Container != "" {
+		subject += ", container " + f.Container
+	}
+	fmt.Fprintf(w, "%s %s: %s\n", severity(c, f.Severity), subject, c.Bold(f.Reason))
+	writeIndented(w, findingIndent, findingIndent, f.Message, width)
+	if f.Next == "" {
+		return
+	}
+	text, cmd := trailingCommand(f.Next)
+	label := findingIndent + c.Dim("next:") + " "
+	under := findingIndent + "      " // under the text after "next: "
+	if text == "" {
+		fmt.Fprintf(w, "%s%s\n", label, c.Cyan(cmd))
+		return
+	}
+	writeIndented(w, label, under, inlineCommands(c, text), width)
+	if cmd != "" {
+		fmt.Fprintf(w, "%s%s\n", under, c.Cyan(cmd))
+	}
+}
+
+// writeIndented writes s after first, wrapped to width with later lines
+// after rest. Both prefixes are the same width once colour is left out.
+func writeIndented(w io.Writer, first, rest, s string, width int) {
+	if width > 0 {
+		width -= len(rest)
+		width = max(width, 30) // a very narrow window gets long lines instead
+	}
+	for i, line := range render.Wrap(s, width) {
+		prefix := rest
+		if i == 0 {
+			prefix = first
+		}
+		fmt.Fprintf(w, "%s%s\n", prefix, line)
+	}
+}
+
+// trailingCommand splits a next step that ends with a command in backticks,
+// such as "read its logs: `tug logs pod/x`", into its text and the command.
+// A next step that does not end with one is all text.
+func trailingCommand(next string) (text, cmd string) {
+	if !strings.HasSuffix(next, "`") {
+		return next, ""
+	}
+	open := strings.LastIndexByte(next[:len(next)-1], '`')
+	if open < 0 {
+		return next, ""
+	}
+	return strings.TrimSpace(next[:open]), next[open+1 : len(next)-1]
+}
+
+// inlineCommands shows the commands in backticks inside a sentence in the
+// command colour, dropping the backticks, which then only get in the way.
+// Without colour, the backticks stay to mark where each command starts and
+// ends.
+func inlineCommands(c render.Colors, s string) string {
+	if !c.Enabled {
+		return s
+	}
+	parts := strings.Split(s, "`")
+	if len(parts)%2 == 0 {
+		return s // an unmatched backtick: leave the text as it is
+	}
+	for i := 1; i < len(parts); i += 2 {
+		parts[i] = c.Cyan(parts[i])
+	}
+	return strings.Join(parts, "")
 }
 
 // severity pads and colours a finding's severity for the column it starts.

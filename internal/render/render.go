@@ -144,6 +144,48 @@ func ColorsFor(w io.Writer) Colors {
 	return Colors{Enabled: ok && term.IsTerminal(int(f.Fd()))}
 }
 
+// Width returns the width of the terminal w writes to, in columns, or 0
+// when w is not a terminal, so that output to files and pipes is never
+// wrapped.
+func Width(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok || !term.IsTerminal(int(f.Fd())) {
+		return 0
+	}
+	cols, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return cols
+}
+
+// Wrap breaks s into lines of at most width visible characters, at spaces.
+// A word wider than width gets a line of its own rather than being split.
+// With a width of 0 or less, s is returned as one line.
+func Wrap(s string, width int) []string {
+	if width <= 0 || visibleWidth(s) <= width {
+		return []string{s}
+	}
+	var lines []string
+	var line strings.Builder
+	n := 0
+	for _, word := range strings.Fields(s) {
+		ww := visibleWidth(word)
+		if n > 0 && n+1+ww > width {
+			lines = append(lines, line.String())
+			line.Reset()
+			n = 0
+		}
+		if n > 0 {
+			line.WriteByte(' ')
+			n++
+		}
+		line.WriteString(word)
+		n += ww
+	}
+	return append(lines, line.String())
+}
+
 func (c Colors) wrap(code, s string) string {
 	if !c.Enabled {
 		return s
@@ -165,6 +207,9 @@ func (c Colors) Dim(s string) string { return c.wrap("2", s) }
 
 // Bold emphasises names.
 func (c Colors) Bold(s string) string { return c.wrap("1", s) }
+
+// Cyan marks commands to run, in the colour of the session prompt.
+func (c Colors) Cyan(s string) string { return c.wrap("36", s) }
 
 // palette holds distinguishable foreground colours for log prefixes.
 var palette = []string{"36", "33", "32", "35", "34", "96", "93", "92", "95", "94"}
