@@ -569,17 +569,16 @@ func TestServeModeKeepsOneProcess(t *testing.T) {
 	if err := errors.Join(errs...); err != nil {
 		t.Fatal(err)
 	}
-	cmd, done := r.srv.process()
-	pid := cmd.Process.Pid
+	inst, done := r.srv.running()
 	if _, err := prov.List(ctx, provider.ListRequest{Account: acct, Secrets: map[string]string{"api_token": "bad"}}); provider.CodeOf(err) != provider.Unauthenticated {
 		t.Fatalf("a provider error through serve mode = %v, want Unauthenticated", err)
 	}
-	if again, _ := r.srv.process(); again.Process.Pid != pid {
+	if again, _ := r.srv.running(); again != inst {
 		t.Fatal("serve mode started a second process for a later call")
 	}
 
 	// The process dies; the next call starts a new one.
-	_ = cmd.Process.Kill()
+	_ = inst.kill()
 	<-done
 	if _, err := prov.Describe(ctx); err != nil {
 		t.Fatalf("describe after the process died: %v", err)
