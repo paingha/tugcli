@@ -45,7 +45,7 @@ func TestUpstreamTable(t *testing.T) {
 
 func TestParseTableRejects(t *testing.T) {
 	tests := []struct{ name, yaml, want string }{
-		{"unknown field", "checked: \"2026-01-01\"\nreleses: []\n", "unknown field"},
+		{"unknown field", "checked: \"2026-01-01\"\nextra: []\n", "unknown field"},
 		{"bad checked date", "checked: \"soon\"\n", "checked"},
 		{"bad end of life", "checked: \"2026-01-01\"\nreleases:\n- {version: \"1.35\", endOfLife: \"2027-02\"}\n", "endOfLife"},
 		{"oldest first", "checked: \"2026-01-01\"\nreleases:\n- {version: \"1.34\", endOfLife: \"2026-10-27\"}\n- {version: \"1.35\", endOfLife: \"2027-02-28\"}\n", "newest first"},
