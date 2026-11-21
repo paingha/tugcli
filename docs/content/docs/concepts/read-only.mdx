@@ -101,12 +101,12 @@ Unlocked: writes allowed on prod-eu until 3:45PM
 ```
 
 - The default is 15 minutes. Use any duration such as `5m`, `1h` or `90s`.
-- Your prompt turns **yellow** and says `(unlocked)`.
+- Your prompt turns **yellow** and says how long is left: `(unlocked 15m)`.
 - The unlock belongs to **this terminal only**. Other terminals connected to
   the same cluster stay read-only.
 - When the time runs out, the session is read-only again. The guard checks
-  the time on every request; the prompt catches up the next time you run a
-  tug command.
+  the time on every request, and the prompt turns red again by itself at the
+  next prompt, using the shell's own clock.
 
 Finished early? Lock it again straight away:
 

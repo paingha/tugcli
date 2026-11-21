@@ -1,6 +1,6 @@
 ---
 title: Connect commands
-description: connect, disconnect, status, ns, shell, init, ui and doctor.
+description: connect, disconnect, status, ns, shell, init, ui, doctor, pin, profile and tunnel.
 ---
 
 ## tug connect
@@ -48,7 +48,10 @@ tug status [-o table|json|yaml|name]
 
 `-o name` prints just the cluster name, which is handy in prompts and scripts.
 JSON fields: `session`, `cluster`, `clusterID`, `namespace`, `readOnly`,
-`writable`, `unlockedUntil`, `kubeconfig`, `proxyURL`.
+`writable`, `unlockedUntil`, `kubeconfig`, `proxyURL`, `env` (the cluster's env
+label), `production` (its labels make it read-only, whatever the session's
+mode) and `profile` (the [profile](/docs/guides/profiles) it was connected
+with).
 
 ## tug ns
 
@@ -124,6 +127,26 @@ Pin a directory, and everything below it, to a cluster and namespace with a
 | `tug pin revoke [dir]` | Stop trusting it. Alias: `deny`. |
 
 Set `TUG_PIN_DISABLE=1` to turn pins off in a shell.
+
+## tug profile
+
+Switch a terminal to a saved working environment: a cluster, namespace, safety
+mode, command aliases and port-forwards, from a YAML file in tug's config
+folder. See [Profiles](/docs/guides/profiles).
+
+| Command | Meaning |
+| --- | --- |
+| `tug profile use <name>` | Connect this terminal as the profile says. |
+| `tug profile up <name>` | Connect, and start the profile's port-forwards through tugd. |
+| `tug profile down <name>` | Stop the profile's port-forwards. The terminal stays connected. |
+| `tug profile ls [-o table\|json\|yaml\|name]` | List profiles; `*` marks this terminal's. Alias: `list`. |
+| `tug profile show [name] [-o …]` | Show a profile, by default this terminal's, and how its forwards are doing. |
+| `tug profile edit <name>` | Write or change a profile in `$VISUAL` or `$EDITOR`; it is saved only once it parses. Without a terminal, reads the profile from stdin. |
+| `tug profile run <alias> [args...]` | Run an alias of this terminal's profile, held to the same guard as the command typed out. |
+
+A profile can make a session read-only (`safety: read-only`) but never
+read-write: a cluster whose labels make it read-only still needs confirmation
+or `tug unlock` for writes.
 
 ## tug tunnel
 

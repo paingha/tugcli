@@ -22,6 +22,9 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
 <Files>
   <Folder name="~/.config/tug" defaultOpen>
     <File name="config.yaml" />
+    <Folder name="profiles">
+      <File name="payments.yaml" />
+    </Folder>
   </Folder>
   <Folder name="~/.local/share/tug" defaultOpen>
     <File name="catalog.yaml" />
@@ -57,12 +60,13 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
 | File | What it is |
 | --- | --- |
 | `config.yaml` | Your [settings](/docs/reference/configuration). Optional. |
+| `profiles/<name>.yaml` | Your [profiles](/docs/guides/profiles): cluster, namespace, safety, aliases and port-forwards. |
 | `catalog.yaml` | Imported sources and their clusters, with labels and [tunnels](/docs/guides/tunnels). No secrets. |
 | `pins.yaml` | The [pin files](/docs/guides/pins) you've allowed, by path and content. |
 | `secrets.enc` | The encrypted secret store, only if you use the `file` backend. |
 | `plugins/<name>/<version>/` | Installed plugins. `links.yaml` lists linked ones. |
 | cache | API discovery data, to make commands faster. |
-| `sessions/<id>/` | One folder per terminal: its kubeconfig (no secrets), prompt text and state. |
+| `sessions/<id>/` | One folder per terminal: its kubeconfig (no secrets), prompt text (which the hook reads, with when an unlock ends) and state. |
 | `tugd.sock`, `tugd.log` | tugd's private control socket and its log. |
 
 ## Permissions

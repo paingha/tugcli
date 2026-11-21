@@ -3,23 +3,51 @@
 # Set TUG_PROMPT_DISABLE=1 to keep your prompt unchanged and use $TUG_PROMPT yourself.
 # Set TUG_PIN_DISABLE=1 to ignore .tug.yaml pin files.
 typeset -g _tug_bin={{.Bin}}
+# $EPOCHSECONDS lets the prompt end an unlock on time without a process.
+zmodload -F zsh/datetime p:EPOCHSECONDS 2>/dev/null
 
 if [[ "${TUG_SESSION_PID:-}" != "$$" ]]; then
   eval "$("$_tug_bin" session new --shell zsh --pid $$ --parent "${TUG_SESSION:-}")"
 fi
 
+# _tug_sync follows the session: KUBECONFIG, and the prompt from the
+# session's prompt file (see promptLines in internal/session).
 _tug_sync() {
-  local f="${TUG_SESSION_DIR:-}/kubeconfig" style text
+  local f="${TUG_SESSION_DIR:-}/kubeconfig" style text expiry label badge via flags colour
   if [[ -n "${TUG_SESSION_DIR:-}" && -f "$f" ]]; then
     export KUBECONFIG="$f"
     typeset -g TUG_PROMPT=""
-    if [[ -r "$TUG_SESSION_DIR/prompt" ]] && IFS=$'\t' read -r style text < "$TUG_SESSION_DIR/prompt"; then
-      text="${text//\%/%%}"
+    if [[ -r "$TUG_SESSION_DIR/prompt" ]]; then
+      { IFS=$'\t' read -r style text; IFS=$'\t' read -r expiry label badge via; } < "$TUG_SESSION_DIR/prompt"
+    fi
+    if [[ -n "$style" ]]; then
+      case "$expiry" in ''|*[!0-9]*) expiry=0 ;; esac
+      if [[ "$style" == unlocked && "$expiry" -gt 0 && -n "${EPOCHSECONDS:-}" ]]; then
+        if (( EPOCHSECONDS >= expiry )); then
+          style=prod
+        else
+          flags="unlocked $(( (expiry - EPOCHSECONDS + 59) / 60 ))m"
+        fi
+      fi
       case "$style" in
-        prod) TUG_PROMPT="%B%F{red}⎈ ${text} (read-only)%f%b " ;;
-        unlocked) TUG_PROMPT="%B%F{yellow}⎈ ${text} (unlocked)%f%b " ;;
-        *) TUG_PROMPT="%F{cyan}⎈ ${text}%f " ;;
+        prod) colour=red flags=read-only ;;
+        unlocked) colour=yellow flags="${flags:-unlocked}" ;;
+        *) colour=cyan ;;
       esac
+      [[ "$via" == proxy ]] && flags="${flags:+$flags, }proxy"
+      [[ "$badge" == - ]] && badge=""
+      [[ "$label" == - ]] && label=""
+      text="⎈ ${text}"
+      [[ -z "$badge" && -n "$label" ]] && text+=" [${label}]"
+      [[ -n "$flags" ]] && text+=" (${flags})"
+      text="${text//\%/%%}"
+      if [[ "$colour" == cyan ]]; then
+        TUG_PROMPT="%F{cyan}${text}%f "
+      else
+        TUG_PROMPT="%B%F{${colour}}${text}%f%b "
+      fi
+      # Production is marked whatever the mode, read-write included.
+      [[ -n "$badge" ]] && TUG_PROMPT="%B%K{red}%F{white} ${badge//\%/%%} %f%k%b ${TUG_PROMPT}"
     fi
   else
     if [[ "${KUBECONFIG:-}" == "$f" ]]; then
