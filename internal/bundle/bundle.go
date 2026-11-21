@@ -1127,7 +1127,7 @@ func objectPath(gr schema.GroupResource, ns, name string) string {
 func safe(name string) string {
 	b := []byte(name)
 	for i, c := range b {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_') {
+		if !pathByte(c) {
 			b[i] = '_'
 		}
 	}
@@ -1136,6 +1136,12 @@ func safe(name string) string {
 		return "_"
 	}
 	return s
+}
+
+// pathByte reports whether a byte may stay in a path part: ASCII letters,
+// digits, dots, dashes and underscores.
+func pathByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_'
 }
 
 // plural counts things: "1 pod", "3 pods".

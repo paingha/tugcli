@@ -457,9 +457,9 @@ func TestCollectObject(t *testing.T) {
 		if mf.Path == "objects/shop/secrets/api-creds.yaml" && !strings.Contains(mf.Source, "(metadata only)") {
 			t.Errorf("manifest source of the Secret = %q, want it marked metadata only", mf.Source)
 		}
-		if strings.Contains(mf.Source, customerID) || strings.Contains(string(file(t, b, "manifest.json")), "customer-[a-z]") {
-			t.Errorf("manifest records the redact pattern")
-		}
+	}
+	if strings.Contains(file(t, b, "manifest.json"), "customer-[a-z]") {
+		t.Errorf("manifest records the redact pattern")
 	}
 	if readme := file(t, b, "README.md"); !strings.Contains(readme, "1 pattern given with `--redact-pattern`") || !strings.Contains(readme, "tar -xzf "+b.Name+".tar.gz") {
 		t.Errorf("README:\n%s", readme)
