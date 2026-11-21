@@ -32,6 +32,9 @@ tug connect prod --read-write      # no guard at all (think twice)
 
 To change which labels mean "read-only", set
 [`guard.readOnlyLabels`](/docs/reference/configuration#guard) in `config.yaml`.
+A [team catalog](/docs/guides/teams#safety-policies) you follow can add
+policies of its own, such as production-read-only. Where both apply, the
+stricter wins: a cluster opens read-only when either says so.
 
 ## What "read-only" covers
 
@@ -101,6 +104,10 @@ Unlocked: writes allowed on prod-eu until 3:45PM
 ```
 
 - The default is 15 minutes. Use any duration such as `5m`, `1h` or `90s`.
+- A team policy can limit how long an unlock lasts. tug then refuses a
+  longer one, unlocks for the limit when you give no duration and it is
+  shorter than 15 minutes, and refuses `--read-write`, which would be an
+  unlock without an end.
 - Your prompt turns **yellow** and says how long is left: `(unlocked 15m)`.
 - The unlock belongs to **this terminal only**. Other terminals connected to
   the same cluster stay read-only.
@@ -121,7 +128,9 @@ tug lock
 
 The guard is a seatbelt for honest mistakes, not access control. Anyone can
 run `tug unlock` or `--read-write`, and on a normal session a direct `kubectl`
-isn't covered at all. What you're truly *allowed* to do is decided by the
+isn't covered at all. Team policies tighten the seatbelt, but they are not
+access control either, and publishing a team catalog grants no Kubernetes
+permission to anyone. What you're truly *allowed* to do is decided by the
 cluster's own RBAC. `tug doctor` shows what your identity may do in a
 namespace.
 

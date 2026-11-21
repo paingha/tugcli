@@ -63,7 +63,7 @@ prefixed with its cluster:
 		newWhyCmd(a), newTreeCmd(a), newDiffCmd(a), newDriftCmd(a), newSupportCmd(a),
 		newPickCmd(a), newBookmarkCmd(a), newOpenCmd(a),
 	)
-	add("discover", newImportCmd(a), newSyncCmd(a), newLsCmd(a), newLabelCmd(a), newForgetCmd(a), newPluginCmd(a))
+	add("discover", newImportCmd(a), newSyncCmd(a), newLsCmd(a), newLabelCmd(a), newForgetCmd(a), newPluginCmd(a), newTeamCmd(a))
 	add("safety", newUnlockCmd(a), newLockCmd(a), newAuditCmd(a))
 	add("other", newAuthCmd(a), newDaemonCmd(a), newVersionCmd(a), newAliasCmd(a))
 	root.AddCommand(newSessionCmd(a), newProviderExecCmd(a), newPluginSandboxExecCmd(a))

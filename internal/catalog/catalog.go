@@ -6,6 +6,7 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -50,6 +51,31 @@ type Source struct {
 	Config    map[string]any `json:"config,omitempty"`
 	LastSync  time.Time      `json:"lastSync,omitempty"`
 	LastError string         `json:"lastError,omitempty"`
+	// Team is set when a team catalog added the account rather than the
+	// user.
+	Team *Provenance `json:"team,omitempty"`
+}
+
+// Provenance says which team catalog, at which version, an entry comes
+// from.
+type Provenance struct {
+	Team    string `json:"team"`
+	Version int64  `json:"version"`
+}
+
+// TeamEntry is what a team catalog says about a cluster. Its labels sit
+// between the provider's and the user's: they win over the provider's, and
+// the user's own labels win over them.
+type TeamEntry struct {
+	Provenance
+	// Name is the name the team gives the cluster. It is the cluster's name
+	// unless another cluster already had that name when the entry was
+	// applied.
+	Name string `json:"name,omitempty"`
+	// Aliases are other names the cluster can be reached by, as far as no
+	// other cluster has them.
+	Aliases []string          `json:"aliases,omitempty"`
+	Labels  map[string]string `json:"labels,omitempty"`
 }
 
 // Key identifies a source.
@@ -92,6 +118,8 @@ type Cluster struct {
 	// the user and win over them.
 	Labels     map[string]string `json:"labels,omitempty"`
 	UserLabels map[string]string `json:"userLabels,omitempty"`
+	// Team is set when a team catalog describes the cluster.
+	Team *TeamEntry `json:"team,omitempty"`
 
 	Stale     bool      `json:"stale,omitempty"`
 	FirstSeen time.Time `json:"firstSeen"`
@@ -107,11 +135,13 @@ func (c *Cluster) EffectiveTunnel() string {
 	return c.ProviderTunnel
 }
 
-// EffectiveLabels merges provider and user labels.
+// EffectiveLabels merges provider, team and user labels, in that order, so
+// the user's own labels win.
 func (c *Cluster) EffectiveLabels() map[string]string {
 	out := make(map[string]string, len(c.Labels)+len(c.UserLabels))
-	for k, v := range c.Labels {
-		out[k] = v
+	maps.Copy(out, c.Labels)
+	if c.Team != nil {
+		maps.Copy(out, c.Team.Labels)
 	}
 	for k, v := range c.UserLabels {
 		if v == "" {
@@ -121,6 +151,25 @@ func (c *Cluster) EffectiveLabels() map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// TeamLabels merges the same labels with the team's winning over the
+// user's. Team policies see a cluster this way, so a label set by hand
+// cannot take a cluster out of a team's policy.
+func (c *Cluster) TeamLabels() map[string]string {
+	out := c.EffectiveLabels()
+	if c.Team != nil {
+		maps.Copy(out, c.Team.Labels)
+	}
+	return out
+}
+
+// Aliases returns the other names the cluster answers to.
+func (c *Cluster) Aliases() []string {
+	if c.Team == nil {
+		return nil
+	}
+	return c.Team.Aliases
 }
 
 // Matches reports whether the cluster has every label in sel.
@@ -211,17 +260,31 @@ func (c *Catalog) RemoveSource(providerName, account string) []Cluster {
 	return removed
 }
 
-// Get returns the cluster with the given ID or name.
+// Get returns the cluster with the given ID, name or alias.
 func (c *Catalog) Get(idOrName string) (*Cluster, error) {
 	if cl := c.byID(idOrName); cl != nil {
 		return cl, nil
 	}
-	for i := range c.Clusters {
-		if c.Clusters[i].Name == idOrName {
-			return &c.Clusters[i], nil
-		}
+	if cl := c.NameOwner(idOrName); cl != nil {
+		return cl, nil
 	}
 	return nil, fmt.Errorf("%w: %s", ErrNotFound, idOrName)
+}
+
+// NameOwner returns the cluster with the given name or, failing that,
+// alias, or nil when none has it.
+func (c *Catalog) NameOwner(name string) *Cluster {
+	for i := range c.Clusters {
+		if c.Clusters[i].Name == name {
+			return &c.Clusters[i]
+		}
+	}
+	for i := range c.Clusters {
+		if slices.Contains(c.Clusters[i].Aliases(), name) {
+			return &c.Clusters[i]
+		}
+	}
+	return nil
 }
 
 func (c *Catalog) byID(id string) *Cluster {
@@ -261,6 +324,7 @@ func (c *Catalog) Merge(src Source, listed []provider.Cluster, now time.Time) Me
 		if existing := c.byID(id); existing != nil {
 			next.Name = existing.Name
 			next.UserLabels = existing.UserLabels
+			next.Team = existing.Team
 			// A tunnel the user set wins; the provider's is replaced by
 			// what it lists now.
 			next.Tunnel = existing.Tunnel
@@ -341,9 +405,7 @@ func (c *Catalog) uniqueName(name string, src Source) string {
 	}
 }
 
-func (c *Catalog) nameTaken(name string) bool {
-	return slices.ContainsFunc(c.Clusters, func(cl Cluster) bool { return cl.Name == name })
-}
+func (c *Catalog) nameTaken(name string) bool { return c.NameOwner(name) != nil }
 
 // NormaliseLabels returns the provider's labels plus provider, account, region
 // and an env guessed from the cluster name when the provider does not set one.
@@ -374,6 +436,10 @@ var envAliases = map[string]string{
 	"dev": "dev", "development": "dev",
 	"test": "test", "qa": "test",
 }
+
+// NormaliseEnv returns the usual spelling of an environment, such as prod
+// for production.
+func NormaliseEnv(v string) string { return normaliseEnv(v) }
 
 func normaliseEnv(v string) string {
 	if n, ok := envAliases[strings.ToLower(v)]; ok {

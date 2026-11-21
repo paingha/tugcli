@@ -437,16 +437,9 @@ func (a *app) againstNotes(r *diff.Result) {
 			c.Dim("note:"), r.To, r.From)
 	}
 	if r.Omitted > 0 {
-		fmt.Fprintf(a.stderr, "%s left out %d %s that only the clusters set themselves; --all-fields shows them\n",
-			c.Dim("note:"), r.Omitted, plural(r.Omitted, "field", "fields"))
+		fmt.Fprintf(a.stderr, "%s left out %s that only the clusters set themselves; --all-fields shows them\n",
+			c.Dim("note:"), plural(r.Omitted, "field", "fields"))
 	}
-}
-
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return one
-	}
-	return many
 }
 
 // managedFieldsView is what tug diff --managed-fields prints with -o json
@@ -482,7 +475,7 @@ func (a *app) printManagedFields(ctx context.Context, c diff.Clients, o resolve.
 		fmt.Fprintf(w, "%s has no field managers on record\n", col.Bold(name))
 		return nil
 	}
-	fmt.Fprintf(w, "%s has %d field %s\n\n", col.Bold(name), len(mgrs), plural(len(mgrs), "manager", "managers"))
+	fmt.Fprintf(w, "%s has %s\n\n", col.Bold(name), plural(len(mgrs), "field manager", "field managers"))
 	rows := make([][]string, 0, len(mgrs))
 	for _, m := range mgrs {
 		updated := "-"
@@ -681,19 +674,19 @@ func (a *app) printDrift(d *diff.Drift) error {
 		resources = "no resources"
 	}
 	if d.Same {
-		fmt.Fprintf(w, "%s %d %s of %s, the CRDs and the API versions match\n",
-			c.Green("No drift:"), d.Compared, plural(d.Compared, "object", "objects"), resources)
+		fmt.Fprintf(w, "%s %s of %s, the CRDs and the API versions match\n",
+			c.Green("No drift:"), plural(d.Compared, "object", "objects"), resources)
 	} else {
-		fmt.Fprintf(w, "%s %d of %d %s of %s differ or are on one cluster only\n",
-			c.Red("Drift:"), len(d.Objects), d.Compared, plural(d.Compared, "object", "objects"), resources)
+		fmt.Fprintf(w, "%s %d of %s of %s differ or are on one cluster only\n",
+			c.Red("Drift:"), len(d.Objects), plural(d.Compared, "object", "objects"), resources)
 	}
 	ec := render.ColorsFor(a.stderr)
 	for _, p := range d.Problems {
 		fmt.Fprintf(a.stderr, "%s %s\n", ec.Yellow("warning:"), p)
 	}
 	if d.Omitted > 0 {
-		fmt.Fprintf(a.stderr, "%s left out %d %s that only the clusters set themselves; --all-fields shows them\n",
-			ec.Dim("note:"), d.Omitted, plural(d.Omitted, "field", "fields"))
+		fmt.Fprintf(a.stderr, "%s left out %s that only the clusters set themselves; --all-fields shows them\n",
+			ec.Dim("note:"), plural(d.Omitted, "field", "fields"))
 	}
 	if slices.ContainsFunc(d.Objects, func(o diff.ObjectDrift) bool { return o.State == diff.StateDiffers }) {
 		fmt.Fprintf(a.stderr, "%s `tug diff <kind>/<name> --against %s` shows an object's differences in full\n", ec.Dim("hint:"), d.There.Name)
