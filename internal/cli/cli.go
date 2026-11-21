@@ -59,11 +59,12 @@ func Main() int {
 // Run runs tug with explicit arguments and streams and returns the exit code.
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	a := &app{
-		stdin:  stdin,
-		in:     bufio.NewReader(stdin),
-		stdout: stdout,
-		stderr: stderr,
-		now:    time.Now,
+		stdin:         stdin,
+		in:            bufio.NewReader(stdin),
+		stdout:        stdout,
+		stderr:        stderr,
+		now:           time.Now,
+		expandAliases: true,
 	}
 	defer a.closeTunnels()
 	defer a.closePlugins()
@@ -81,6 +82,11 @@ func (a *app) execute(ctx context.Context, args []string) error {
 		return err
 	}
 	root := newRootCmd(a)
+	if a.expandAliases {
+		// Only the command line typed is expanded, never one tug runs itself.
+		a.expandAliases = false
+		args = a.expandAlias(root, args)
+	}
 	root.SetArgs(args)
 	root.SetIn(a.stdin)
 	root.SetOut(a.stdout)
@@ -116,6 +122,10 @@ type app struct {
 	// command is the tug command running, such as "tug restart", which
 	// audit entries give as the intent.
 	command string
+
+	// expandAliases is true until the command line typed has had its
+	// alias, if any, expanded.
+	expandAliases bool
 
 	paths config.Paths
 	cfg   *config.Config
