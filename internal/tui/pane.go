@@ -91,7 +91,11 @@ func (p *pane) title() string {
 
 // resize gives the viewport the body less the pane's status line.
 func (p *pane) resize(width, height int) {
-	p.vp.Width, p.vp.Height = width, max(height-1, 1)
+	height = max(height-1, 1)
+	if p.vp.Width == width && p.vp.Height == height {
+		return
+	}
+	p.vp.Width, p.vp.Height = width, height
 	p.show()
 }
 
@@ -287,7 +291,7 @@ func (m *model) paneKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, k.Quit):
 		return m.quit()
 	case key.Matches(msg, k.Help):
-		m.showHelp = true
+		m.openHelp()
 	case key.Matches(msg, k.Refresh):
 		if p.kind == paneLogs {
 			return m.openLogs(p.w)

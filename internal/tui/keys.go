@@ -22,9 +22,13 @@ type keyMap struct {
 	Connect    key.Binding
 	TypeToFind key.Binding
 
-	Logs key.Binding
-	Why  key.Binding
-	Tree key.Binding
+	Logs    key.Binding
+	Why     key.Binding
+	Tree    key.Binding
+	Shell   key.Binding
+	Forward key.Binding
+	Restart key.Binding
+	Scale   key.Binding
 
 	Namespace key.Binding
 	Clusters  key.Binding
@@ -45,16 +49,20 @@ func newKeyMap() keyMap {
 		PageUp:   b([]string{"pgup", "b", "ctrl+b"}, "pgup/b", "page up"),
 		PageDown: b([]string{"pgdown", "f", "ctrl+f", " "}, "pgdn/f", "page down"),
 		Top:      b([]string{"home", "g"}, "g/home", "top"),
-		Bottom:   b([]string{"end", "G"}, "G/end", "bottom"),
+		Bottom:   b([]string{"end", "G"}, "G/end", "bottom; in logs, follow new lines again"),
 		Filter:   b([]string{"/"}, "/", "filter by name"),
 		Refresh:  b([]string{"ctrl+r"}, "ctrl+r", "reload now"),
 
 		Connect:    b([]string{"enter"}, "enter", "connect this terminal to the cluster"),
-		TypeToFind: b([]string{"/"}, "type", "filter by name, label value or label=value; / first to type q or ?"),
+		TypeToFind: b([]string{"/"}, "type", "filter: names, label values, label=value; / to type q or ?"),
 
-		Logs: b([]string{"l"}, "l", "stream logs from every pod and container, following new pods"),
-		Why:  b([]string{"w"}, "w", "why it is not ready, and what to do next"),
-		Tree: b([]string{"t"}, "t", "what it is made of, with the health of each part"),
+		Logs:    b([]string{"l"}, "l", "stream logs from every pod, following new ones"),
+		Why:     b([]string{"w"}, "w", "why it is not ready, and what to do next"),
+		Tree:    b([]string{"t"}, "t", "what it is made of, and the health of each part"),
+		Shell:   b([]string{"s"}, "s", "shell in a running pod; the TUI comes back after"),
+		Forward: b([]string{"p"}, "p", "port-forward through tugd, as tug pf --name"),
+		Restart: b([]string{"r"}, "r", "rolling restart, after asking"),
+		Scale:   b([]string{"S"}, "S", "scale to a number of replicas"),
 
 		Namespace: b([]string{"n"}, "n", "switch the session's namespace"),
 		Clusters:  b([]string{"c"}, "c", "clusters"),
@@ -65,12 +73,13 @@ func newKeyMap() keyMap {
 var hintNames = map[string]string{
 	"q": "quit", "?": "help", "esc": "back", "enter": "choose", "/": "filter",
 	"n": "namespace", "c": "clusters", "l": "logs", "w": "why", "t": "tree",
+	"s": "shell", "p": "forward", "r": "restart", "S": "scale",
 }
 
 // actions are the bindings that act on a workload, from its row in the list
 // or from one of its panes.
 func (k keyMap) actions() []key.Binding {
-	return []key.Binding{k.Logs, k.Why, k.Tree}
+	return []key.Binding{k.Logs, k.Why, k.Tree, k.Shell, k.Forward, k.Restart, k.Scale}
 }
 
 // hints turns bindings into the title line's short hints.

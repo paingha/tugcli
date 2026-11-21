@@ -262,7 +262,7 @@ func (m *model) workloadsKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, k.Quit):
 		return m.quit()
 	case key.Matches(msg, k.Help):
-		m.showHelp = true
+		m.openHelp()
 	case key.Matches(msg, k.Back):
 		if l.filter != "" {
 			l.filter = ""

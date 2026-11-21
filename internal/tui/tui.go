@@ -1,9 +1,11 @@
 // Package tui is tug's full-screen terminal UI. It works on the shared core
 // rather than on kubectl: internal/ops lists the session's workloads,
-// streams their logs and explains them, and a Backend from internal/cli
-// connects the session and switches its namespace with the code the
-// commands run. It draws with Bubble Tea and Lip Gloss; its model is driven
-// by messages, so tests run it without a terminal.
+// streams their logs, explains them and restarts and scales them, and a
+// Backend from internal/cli connects the session, switches its namespace,
+// opens shells and starts named port-forwards with the code the commands
+// run. Writes go through the session's guard, which asks in the TUI on a
+// read-only session. It draws with Bubble Tea and Lip Gloss; its model is
+// driven by messages, so tests run it without a terminal.
 package tui
 
 import (
@@ -17,13 +19,15 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/paingha/tugcli/internal/catalog"
+	"github.com/paingha/tugcli/internal/daemon"
+	"github.com/paingha/tugcli/internal/resolve"
 	"github.com/paingha/tugcli/internal/session"
 )
 
 // Backend is what the TUI needs from the rest of tug. internal/cli provides
-// it with the code its commands run, so connecting and switching namespace
-// behave as tug connect and tug ns do. Its methods may be called from
-// several goroutines at once.
+// it with the code its commands run, so connecting, switching namespace,
+// shells and named forwards behave as tug connect, tug ns, tug sh and tug
+// pf --name do. Its methods may be called from several goroutines at once.
 type Backend interface {
 	// Catalog loads the cluster catalog.
 	Catalog() (*catalog.Catalog, error)
@@ -41,6 +45,26 @@ type Backend interface {
 	// agreed in the TUI; a client made with allowWrites is for that one
 	// action.
 	Kube(ctx context.Context, allowWrites bool) (kubernetes.Interface, error)
+	// Forward has tugd run a named port-forward to a running pod of t, as
+	// tug pf --name does. ports are tug pf's port arguments; none means
+	// every declared port.
+	Forward(ctx context.Context, t resolve.Target, name string, ports []string) (daemon.ForwardState, error)
+	// Shell runs a shell in a container on the terminal the TUI hands over
+	// while it is suspended, as tug sh does.
+	Shell(ctx context.Context, r ShellRequest, stdin io.Reader, stdout, stderr io.Writer) error
+}
+
+// ShellRequest says where Backend.Shell opens a shell.
+type ShellRequest struct {
+	Namespace string
+	Pod       string
+	Container string
+	// Debug opens the shell in an ephemeral debug container that shares
+	// Container's processes, for images without a shell.
+	Debug bool
+	// AllowWrites says the user agreed in the TUI to run a command, or to
+	// add a debug container, on a read-only session.
+	AllowWrites bool
 }
 
 // DefaultRefresh is how often the workloads view reloads.
@@ -125,6 +149,15 @@ func (t *tasks) cmd(fn func(ctx context.Context) tea.Msg) tea.Cmd {
 		defer t.wg.Done()
 		return fn(t.ctx)
 	}
+}
+
+// do runs fn now, with the program's context.
+func (t *tasks) do(fn func(ctx context.Context) error) error {
+	if !t.add() {
+		return context.Canceled
+	}
+	defer t.wg.Done()
+	return fn(t.ctx)
 }
 
 // start runs fn on a goroutine of its own, with a context that ends when

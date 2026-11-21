@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"k8s.io/client-go/kubernetes"
@@ -48,6 +49,9 @@ type model struct {
 	tasks   *tasks
 	now     func() time.Time
 	refresh time.Duration
+	// exec hands the terminal to a command while the TUI is suspended. It
+	// is tea.Exec; tests run the command themselves.
+	exec func(tea.ExecCommand, tea.ExecCallback) tea.Cmd
 
 	st   styles
 	keys keyMap
@@ -56,6 +60,7 @@ type model struct {
 	width, height int
 	view          view
 	showHelp      bool
+	helpVP        viewport.Model
 	flash         flash
 
 	// state is the session as last read.
@@ -73,6 +78,7 @@ type model struct {
 	picker    *picker
 	pane      *pane
 	panes     int // the last pane's ID
+	prompt    *prompt
 }
 
 func newModel(b Backend, t *tasks, st session.State, sty styles, opts ...Option) *model {
@@ -87,7 +93,7 @@ func newModel(b Backend, t *tasks, st session.State, sty styles, opts ...Option)
 	}
 	h.ShortSeparator = "  "
 	m := &model{
-		b: b, tasks: t, now: s.now, refresh: s.refresh,
+		b: b, tasks: t, now: s.now, refresh: s.refresh, exec: tea.Exec,
 		st: sty, keys: newKeyMap(), help: h,
 		state: st, view: viewClusters,
 	}
@@ -108,15 +114,19 @@ func (m *model) Init() tea.Cmd {
 
 // Update handles one message.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.resize()
-		return m, nil
 	case tea.KeyMsg:
-		return m, m.key(msg)
+		cmd = m.key(msg)
+	default:
+		cmd = m.handle(msg)
 	}
-	return m, m.handle(msg)
+	// A prompt or message that opened or closed changes the room the body
+	// has.
+	m.resize()
+	return m, cmd
 }
 
 // handle routes the messages that commands send back.
@@ -143,22 +153,31 @@ func (m *model) handle(msg tea.Msg) tea.Cmd {
 		return m.logs(msg)
 	case paneMsg:
 		m.paneLoaded(msg)
+	case shellPodMsg:
+		return m.shellPod(msg)
+	case shellDoneMsg:
+		return m.shellDone(msg)
+	case forwardMsg:
+		m.forwarded(msg)
+	case writeMsg:
+		return m.written(msg)
 	}
 	return nil
 }
 
-// key handles a key press: the open picker or help takes it first, then
-// the pane, then the view.
+// key handles a key press: the open prompt, picker or help takes it first,
+// then the pane, then the view.
 func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	if key.Matches(msg, m.keys.ForceQuit) {
 		return m.quit()
 	}
 	switch {
+	case m.prompt != nil:
+		return m.promptKey(msg)
 	case m.picker != nil:
 		return m.pickerKey(msg)
 	case m.showHelp:
-		m.showHelp = false // any key closes it
-		return nil
+		return m.helpKey(msg)
 	case m.pane != nil:
 		return m.paneKey(msg)
 	case m.view == viewClusters:
@@ -219,6 +238,9 @@ func (m *model) resize() {
 	h := m.bodyHeight()
 	m.clusters.scroll(h - 2)
 	m.workloads.scroll(h - 2)
+	if m.showHelp {
+		m.resizeHelp()
+	}
 	if m.pane != nil {
 		m.pane.resize(m.width, h)
 	}
@@ -250,7 +272,7 @@ func (m *model) View() string {
 	var body string
 	switch {
 	case m.showHelp:
-		body = m.helpView()
+		body = m.helpVP.View()
 	case m.picker != nil:
 		body = m.pickerView(h)
 	case m.pane != nil:
@@ -300,8 +322,11 @@ func (m *model) titleLine() string {
 	return title + strings.Repeat(" ", gap) + short
 }
 
-// footer is the flash message.
+// footer is the open prompt, or else the flash message.
 func (m *model) footer() string {
+	if m.prompt != nil {
+		return m.promptView()
+	}
 	if m.flash.text == "" {
 		return ""
 	}
@@ -387,30 +412,4 @@ func (m *model) route() string {
 		return "direct"
 	}
 	return strings.Join(parts, " ")
-}
-
-// helpView lists every key, grouped by where it works.
-func (m *model) helpView() string {
-	k := m.keys
-	groups := []struct {
-		title    string
-		bindings []key.Binding
-	}{
-		{"The selected workload, in the list or its panes", k.actions()},
-		{"Workloads", []key.Binding{k.Namespace, k.Clusters, k.Filter, k.Refresh}},
-		{"Clusters", []key.Binding{k.TypeToFind, k.Connect}},
-		{"Moving", []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom}},
-		{"Everywhere", []key.Binding{k.Back, k.Help, k.Quit, k.ForceQuit}},
-	}
-	var b strings.Builder
-	for i, g := range groups {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(m.st.header.Render(g.title) + "\n")
-		for _, kb := range g.bindings {
-			fmt.Fprintf(&b, "  %s  %s\n", m.st.key.Render(pad(kb.Help().Key, 8)), kb.Help().Desc)
-		}
-	}
-	return b.String()
 }

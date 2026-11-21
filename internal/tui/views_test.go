@@ -63,7 +63,7 @@ func TestClustersQuitHelpAndSlash(t *testing.T) {
 	h.waitFor("the catalog", func(m *model) bool { return m.clusters.loaded })
 
 	h.press("?")
-	if !h.m.showHelp || !strings.Contains(h.m.View(), "filter by name, label value or label=value") {
+	if !h.m.showHelp || !strings.Contains(h.m.View(), "filter: names, label values, label=value") {
 		t.Fatalf("? did not show help:\n%s", h.m.View())
 	}
 	h.press("x") // any key closes help

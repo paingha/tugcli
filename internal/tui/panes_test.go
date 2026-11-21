@@ -90,6 +90,12 @@ func TestLogsPaneFollowsUntilScrolledUp(t *testing.T) {
 	if !h.m.pane.follow || !strings.Contains(h.m.View(), "line 100") {
 		t.Fatalf("G did not follow again:\n%s", h.m.View())
 	}
+	// A prompt over the pane leaves the newest line in view.
+	h.press("S")
+	if v := h.m.View(); h.m.prompt == nil || !strings.Contains(v, "line 100") {
+		t.Fatalf("a prompt hid the newest line:\n%s", v)
+	}
+	h.press("esc")
 
 	// A warning from one container shows in the stream; an error ends it.
 	h.update(logsMsg{id: h.m.pane.id, events: []logEvent{{warn: "debug/main: unexpected EOF"}, {err: errNoCredentials}}, done: true})

@@ -20,7 +20,9 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/paingha/tugcli/internal/catalog"
+	"github.com/paingha/tugcli/internal/daemon"
 	"github.com/paingha/tugcli/internal/guard"
+	"github.com/paingha/tugcli/internal/resolve"
 	"github.com/paingha/tugcli/internal/session"
 )
 
@@ -46,6 +48,15 @@ func newHarness(t *testing.T, b *fakeBackend, opts ...Option) *harness {
 	h := &harness{t: t, tasks: tk, msgs: make(chan tea.Msg, 64), done: make(chan struct{})}
 	// The ticker stays off unless a test turns it on.
 	h.m = newModel(b, tk, st, newStyles(io.Discard), append([]Option{WithRefresh(0)}, opts...)...)
+	// Bubble Tea would hand the command the terminal; here it gets none.
+	h.m.exec = func(c tea.ExecCommand, fn tea.ExecCallback) tea.Cmd {
+		return func() tea.Msg {
+			c.SetStdin(strings.NewReader(""))
+			c.SetStdout(io.Discard)
+			c.SetStderr(io.Discard)
+			return fn(c.Run())
+		}
+	}
 	t.Cleanup(h.stop)
 	h.update(tea.WindowSizeMsg{Width: 140, Height: 30})
 	h.run(h.m.Init())
@@ -184,6 +195,12 @@ type fakeBackend struct {
 	kubeCalls  []bool
 	lastAllow  bool
 	sessionErr error
+
+	forwards   []forwardCall
+	forwardErr error
+	shells     []ShellRequest
+	// shellErr, when set, says how a shell ends.
+	shellErr func(ShellRequest) error
 }
 
 var testClusters = []catalog.Cluster{
@@ -285,6 +302,60 @@ func (b *fakeBackend) Kube(_ context.Context, allowWrites bool) (kubernetes.Inte
 		return nil, b.kubeErr
 	}
 	return b.cs, nil
+}
+
+// forwardCall is one call of Forward.
+type forwardCall struct {
+	target, name string
+	ports        []string
+}
+
+func (b *fakeBackend) Forward(_ context.Context, t resolve.Target, name string, ports []string) (daemon.ForwardState, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.forwards = append(b.forwards, forwardCall{target: t.String(), name: name, ports: ports})
+	if b.forwardErr != nil {
+		return daemon.ForwardState{}, b.forwardErr
+	}
+	return daemon.ForwardState{
+		Forward: daemon.Forward{Name: name, Target: t.String(), Ports: ports},
+		State:   daemon.ForwardUp, Bound: []string{"8080:8080", "9000:8080"}, Pod: t.Name + "-7d9f-aaaaa",
+	}, nil
+}
+
+func (b *fakeBackend) Shell(_ context.Context, r ShellRequest, _ io.Reader, _, _ io.Writer) error {
+	b.mu.Lock()
+	b.shells = append(b.shells, r)
+	end := b.shellErr
+	b.mu.Unlock()
+	if end != nil {
+		return end(r)
+	}
+	return nil
+}
+
+func (b *fakeBackend) shellCalls() []ShellRequest {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]ShellRequest(nil), b.shells...)
+}
+
+func (b *fakeBackend) forwardCalls() []forwardCall {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]forwardCall(nil), b.forwards...)
+}
+
+// patches lists the patches that reached the fake cluster, as
+// resource/name.
+func (b *fakeBackend) patches() []string {
+	var out []string
+	for _, a := range b.cs.Actions() {
+		if p, ok := a.(k8stesting.PatchAction); ok {
+			out = append(out, p.GetResource().Resource+"/"+p.GetName()+" "+string(p.GetPatch()))
+		}
+	}
+	return out
 }
 
 func (b *fakeBackend) calls() (connects, setNS []string, kube []bool) {

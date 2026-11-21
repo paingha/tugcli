@@ -218,7 +218,7 @@ func (m *model) clustersKey(msg tea.KeyMsg) tea.Cmd {
 	case l.filter == "" && !l.filtering && key.Matches(msg, m.keys.Quit):
 		return m.quit()
 	case l.filter == "" && !l.filtering && key.Matches(msg, m.keys.Help):
-		m.showHelp = true
+		m.openHelp()
 	case l.filter == "" && !l.filtering && key.Matches(msg, m.keys.Filter):
 		l.filtering = true
 	case edit(&l.filter, msg):
