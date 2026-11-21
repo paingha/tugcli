@@ -98,6 +98,49 @@ type Config struct {
 	Plugins  PluginsConfig  `json:"plugins,omitempty"`
 	Sessions SessionsConfig `json:"sessions,omitempty"`
 	OIDC     OIDCConfig     `json:"oidc,omitempty"`
+
+	Intelligence IntelligenceConfig `json:"intelligence,omitzero"`
+}
+
+// IntelligenceConfig turns on AI-assisted explanations, `tug why --deep`,
+// which send redacted evidence about an object to a model provider. They are
+// off unless Enabled is set; the intelligence package fills in the defaults
+// and checks the rest. API keys never go here: they live in the credential
+// store or TUG_SECRET_<PROVIDER>_API_KEY.
+type IntelligenceConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Provider is anthropic, openai, mistral or custom (any OpenAI-compatible
+	// endpoint). Default anthropic.
+	Provider string `json:"provider,omitempty"`
+	// Model is any model id the provider serves. Each provider but custom
+	// has a default.
+	Model string `json:"model,omitempty"`
+	// BaseURL is the provider's API address, for a gateway or a custom
+	// endpoint. It must be https unless it is on this machine.
+	BaseURL string `json:"baseURL,omitempty"`
+	// Timeout bounds one request. Default 5m.
+	Timeout Duration `json:"timeout,omitzero"`
+	// MaxOutputTokens bounds the answer, thinking included. Default 16000.
+	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	// MonthlySpendCapUSD refuses a call that could take this calendar
+	// month's (UTC) spend past it. Zero means no cap.
+	MonthlySpendCapUSD float64 `json:"monthlySpendCapUSD,omitempty"`
+	// Effort is how hard an Anthropic model works on its answer: low,
+	// medium, high, xhigh or max. Default high.
+	Effort string `json:"effort,omitempty"`
+	// Prices add to or override the built-in price table, matched by the
+	// longest model id prefix.
+	Prices []ModelPrice `json:"prices,omitempty"`
+}
+
+// ModelPrice is a model's price in US dollars per million tokens.
+type ModelPrice struct {
+	// Model is a model id or the start of one: "gpt-6.2" covers
+	// "gpt-6.2-astra" and "gpt-6.2-sol".
+	Model     string  `json:"model"`
+	Input     float64 `json:"input"`
+	Output    float64 `json:"output"`
+	CacheRead float64 `json:"cacheRead,omitempty"`
 }
 
 // OIDCConfig controls signing in to OpenID Connect issuers.
