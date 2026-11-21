@@ -126,6 +126,37 @@ if kubectl delete ns default --wait=false 2> "$work/delete-proxy.err"; then
   exit 1
 fi
 grep -q "read-only" "$work/delete-proxy.err" || { echo "FAIL: unexpected refusal"; cat "$work/delete-proxy.err"; exit 1; }
+
+echo "--- tugd on a read-only session: port-forward works, exec does not"
+if kubectl exec deploy/web -- true 2> "$work/exec-proxy.err"; then
+  echo "FAIL: kubectl exec allowed through tugd on a read-only session" >&2
+  exit 1
+fi
+grep -q "read-only" "$work/exec-proxy.err" || { echo "FAIL: unexpected exec refusal"; cat "$work/exec-proxy.err"; exit 1; }
+kubectl port-forward deploy/web 18084:80 > "$work/pf-ro.log" 2>&1 &
+pf_ro=$!
+for _ in $(seq 1 30); do
+  curl -fsS http://localhost:18084 > "$work/page-ro.html" 2>/dev/null && break
+  sleep 1
+done
+kill "$pf_ro" 2>/dev/null || true
+grep -q "Welcome to nginx" "$work/page-ro.html" || { echo "FAIL: port-forward through tugd on a read-only session"; cat "$work/pf-ro.log"; exit 1; }
+
+echo "--- a session survives tugd restarting, and never goes around it"
+tug daemon stop
+kubectl get ns default -o name   # the credential plugin starts tugd again
+tug daemon status | grep -q "sessions:  1" || { echo "FAIL: tugd did not come back for the session"; tug daemon status; exit 1; }
+
+echo "--- the audit log has the session, its refusals and tugd's writes"
+tug audit -o json > "$work/audit.json"
+grep -Eq '"intent": *"kubectl exec"' "$work/audit.json" || { echo "FAIL: no kubectl exec in the audit log"; cat "$work/audit.json"; exit 1; }
+grep -Eq '"status": *101' "$work/audit.json" || { echo "FAIL: no upgraded exec in the audit log"; cat "$work/audit.json"; exit 1; }
+test "$(tug audit --event refused -o json | grep -c '"reason": "read-only"')" -ge 2 || { echo "FAIL: refusals not recorded"; tug audit; exit 1; }
+tug audit --event session-start -o json | grep -q '"proxy": true' || { echo "FAIL: proxied session start not recorded"; tug audit; exit 1; }
+if grep -q "nginx -v" "$work/audit.json"; then
+  echo "FAIL: the audit log holds an exec's command" >&2
+  exit 1
+fi
 tug daemon stop
 
 echo "--- read-only guard"

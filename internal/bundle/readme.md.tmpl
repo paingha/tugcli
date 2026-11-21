@@ -1,0 +1,82 @@
+# tug support bundle
+
+Diagnostic evidence about `{{.Target}}`{{if and .Namespace (not .IsNamespace)}} in namespace `{{.Namespace}}`{{end}} on cluster
+`{{.Cluster}}`, collected by tug {{.Version}} at {{.Created}}. Events and
+current logs cover the {{.Since}} before that{{if .LogsTail}}; each log keeps at most its last
+{{.LogsTail}} lines{{end}}.
+
+**Review it before you share it.** Redaction removes the credentials tug can
+recognise. It cannot know everything your applications treat as private.
+{{- if .Problems}}
+
+Some things could not be collected: `manifest.json` lists them under
+`problems`.
+{{- end}}
+
+## What is in it
+
+| Path | What it is |
+| --- | --- |
+| `manifest.json` | Every other file, its size, where it came from and how many values were redacted from it; how the bundle was collected; and anything tug could not collect. |
+| `why/` | `tug why` of {{if .IsNamespace}}each workload in the namespace{{else}}the target{{end}}, as JSON: findings, pods, conditions and recent warnings. |
+| `tree/` | `tug tree` of the same, as JSON: what it owns, with the health of each part. |
+| `objects/<namespace>/<resource>/<name>.yaml` | {{if .IsNamespace}}Everything in the namespace{{else}}The target and what it owns{{end}}, as the API server returned it, redacted. Cluster-scoped objects are under `_cluster`. |
+| `events.json` | Events about those objects in the window, oldest first. |
+| `logs/<namespace>/<pod>/<container>.log` | Each container's log over the window, with timestamps. `<container>.previous.log` is the end of its previous run, when it has restarted. Up to {{.MaxLogPods}} pods, those not ready first. |
+| `nodes/<node>.yaml` | The conditions, capacity, taints and versions of the nodes the pods run on. |
+| `cluster/version.json` | The API server's version. |
+| `cluster/api-resources.json` | The resources the API server serves, custom resources included. |
+| `doctor.json` | `tug doctor`'s checks of tug's setup and of the cluster. |
+{{- if or .Include .Exclude}}
+
+Only some kinds of object were collected:{{if .Include}} those of `--include {{range $i, $k := .Include}}{{if $i}}, {{end}}{{$k}}{{end}}`{{end}}{{if .Exclude}}{{if .Include}}, and{{end}} not those of `--exclude {{range $i, $k := .Exclude}}{{if $i}}, {{end}}{{$k}}{{end}}`{{end}}.
+{{- end}}
+
+## What was redacted
+
+Every redacted value reads `<redacted>`.
+
+- **Secrets**: metadata only. tug copies each Secret from the metadata API,
+  which serves no data, so no Secret's data is in this bundle.
+- **Environment variables**: the `value` of every variable in an `env` list,
+  in pods, pod templates and custom resources. Names and `valueFrom`
+  references, which say where a value comes from, are kept.
+- **ConfigMaps**: every value under `data` and `binaryData`. The keys are kept.
+- **The `kubectl.kubernetes.io/last-applied-configuration` annotation** on
+  every object: it is a copy of the object as it was applied, a Secret's data
+  included.
+- **Fields named like a credential**, such as `password`, `token` or `apiKey`,
+  and the values of name and value pairs named so, such as Helm parameters.
+  Fields that only name or point to one, such as `secretName`, are kept.
+- **In logs, events and every other string**: bearer and basic credentials,
+  passwords in URLs, JSON Web Tokens, PEM private keys, AWS access key IDs,
+  GitHub, GitLab and Slack tokens, and assignments such as `password=...`,
+  `--api-token=...` or `"apiKey": "..."`.
+{{- if .Patterns}}
+- **{{.Patterns}} pattern{{if gt .Patterns 1}}s{{end}} given with `--redact-pattern`**, wherever {{if gt .Patterns 1}}they match{{else}}it matches{{end}}. The
+  patterns themselves are not in the bundle.
+{{- end}}
+
+`metadata.managedFields`, which only says which client set which field, is
+left out.
+
+Not redacted: names, namespaces, labels, other annotations, images, IP
+addresses and host names, and the rest of each log line. File names come from
+object names.
+
+## How to review it
+
+Unpack it, which makes the directory `{{.Name}}`, and search it:
+
+```sh
+tar -xzf {{.Archive}}
+grep -rniE 'passw|secret|token|bearer|api.?key|://[^/ ]+:[^/ ]+@' {{.Name}}
+```
+
+Read the logs above all: applications log in formats of their own, and a
+credential in a format tug does not know is left as it is. `manifest.json`
+counts the redactions in each file.
+
+To leave more out, collect the bundle again with `--redact-pattern '<regex>'`,
+or without whole kinds with `--exclude <kind>`. `--preview` lists the files
+that would be written, with their sizes, and writes nothing.

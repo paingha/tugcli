@@ -46,6 +46,7 @@ tug sh api                      # shell into a pod (bash, else sh; a debug conta
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -59,7 +60,7 @@ tug profile up payments         # a saved environment: cluster, namespace, safet
 tug plugin install digitalocean # from a signed plugin index
 tug ui                          # full-screen: clusters, workloads, logs, why, tree, shells, forwards
 tug get pods --cluster-selector env=staging   # any read, on every matching cluster at once
-tug audit --since 24h           # the writes tug let through, per cluster
+tug audit --since 24h           # what tug let through and refused, per cluster
 tug team add platform https://teams.example.com/platform/team.yaml --public-key <key>  # shared names, labels and policies
 ```
 
@@ -131,6 +132,17 @@ per-session token that exists only in tugd's memory, fetched through
 port-forward, `logs -f` and watches pass through. tugd stops after 30 minutes
 without a live session or a named port-forward.
 
+A proxied session fails closed: its kubeconfig names only tugd, so when tugd
+is down clients fail rather than reach the cluster directly, and a restarted
+tugd refuses the old tokens until clients fetch new ones. Expiring
+credentials are replaced mid-session; one the cluster refuses is reported as
+such, and tugd asks the provider for a new one. After the machine wakes from
+sleep, tugd drops its idle connections to clusters. tugd is a safety rail, not
+a security boundary: it sees only clients that use the session's kubeconfig
+and only the credential tug keeps, so RBAC, cloud IAM, admission control and
+the API server's audit log remain the enforcement (see
+[What tugd protects](docs/content/docs/concepts/proxy-limits.mdx)).
+
 tugd also keeps named port-forwards open: `tug pf <target> <ports> --name
 <name>` hands one to tugd, which keeps the same local ports and starts the
 forward again on a running pod when the old one goes away. `tug pf ls` lists
@@ -195,14 +207,20 @@ anything runs. Tunnelled clusters go through their tunnels.
 
 ## Audit log
 
-tug records every write it lets through, in `<data>/audit/audit.jsonl`:
-writes by tug's own commands, by kubectl, helm or k9s through tugd, and
-kubectl writes on direct sessions, where tug sees only the command line. It
-keeps the cluster, session, method and path, the command with values
-masked, and whether the write was confirmed, unlocked or read-write; never a
-request body or a secret. A write that cannot be recorded is not sent.
-`tug audit [--cluster x] [--since 24h] [-o json|yaml]` lists them, newest
-first.
+tug records in `<data>/audit/audit.jsonl` what it lets through and what it
+refuses: writes by tug's own commands, by kubectl, helm or k9s through tugd,
+and kubectl writes on direct sessions, where tug sees only the command line;
+writes the guard refuses; sessions starting and ending on a cluster, with
+the namespace, read-only or read-write, and whether they go through tugd;
+and unlocks starting, being locked and running out. A write keeps apart the
+intent (the tug or kubectl command, which kubectl names in a header), the
+request tug or tugd saw (method and path), and the outcome (the HTTP status,
+or kubectl's exit code). Entries never hold a request body, a query string, a
+token or a command-line value that could be a secret. A write that cannot be
+recorded is not sent, and an unlock that cannot be recorded is taken back.
+`tug audit [--cluster x] [--session id] [-n ns] [--event write|refused|...]
+[--since 24h] [-o json|yaml]` lists them, newest first. The log is a local
+record kept with your own permissions, not evidence that nobody changed it.
 
 ## Team catalogs
 
@@ -314,6 +332,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Team catalogs: signing, fetching, merging, policies | [internal/team](internal/team) |
 | Working-environment profiles | [internal/profile](internal/profile) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |

@@ -1,11 +1,13 @@
-// Package guard enforces read-only sessions and records the writes it lets
-// through. It sits in the HTTP transport of every client tug builds, so tug
-// commands cannot skip it.
+// Package guard enforces read-only sessions and records in the audit log the
+// writes it lets through, how each was answered, and the ones it refuses. It
+// sits in the HTTP transport of every client tug builds, so tug commands
+// cannot skip it.
 package guard
 
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -17,7 +19,8 @@ import (
 	"github.com/paingha/tugcli/internal/audit"
 )
 
-// Recorder notes a write the guard lets through, before it is sent.
+// Recorder notes a write the guard lets through, before it is sent, its
+// outcome, and a write it refuses.
 type Recorder interface {
 	Record(ctx context.Context, e audit.Entry) error
 }
@@ -36,9 +39,15 @@ type Policy struct {
 	// Confirm, when set, is asked once before the first write on a read-only
 	// session. Returning true allows writes for the rest of the command.
 	Confirm func(action string) bool
-	// Audit, when set, records every write the guard lets through. A write
-	// that cannot be recorded is not sent.
+	// Audit, when set, records every write the guard lets through and
+	// refuses. A write that cannot be recorded is not sent.
 	Audit Recorder
+	// Intent is the command the writes come from, such as "tug restart",
+	// for audit entries.
+	Intent string
+	// Log, when set, hears about outcomes and refusals the audit log could
+	// not take.
+	Log *slog.Logger
 }
 
 // ReadOnlyFor reports whether a cluster with these labels should open
@@ -125,38 +134,83 @@ func (g *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 		action := Describe(req.Method, u)
 		if !g.allowedByConfirm(action) {
 			closeBody(req)
+			g.note(req.Context(), g.entry(audit.KindRefused, req, u, func(e *audit.Entry) { e.Reason = audit.ReasonReadOnly }))
 			return nil, &DeniedError{Cluster: g.policy.Cluster, Action: action}
 		}
 		allowed = audit.AllowedConfirmed
 	}
-	if err := g.record(req, u, allowed); err != nil {
+	id, err := g.record(req, u, allowed)
+	if err != nil {
 		closeBody(req)
 		return nil, err
 	}
-	return g.next.RoundTrip(req)
+	resp, err := g.next.RoundTrip(req)
+	if id != "" {
+		g.note(req.Context(), g.entry(audit.KindResult, req, u, func(e *audit.Entry) {
+			e.ID = id
+			if err != nil {
+				e.Reason = audit.ReasonNoResponse
+			} else {
+				e.Status = resp.StatusCode
+			}
+		}))
+	}
+	return resp, err
 }
 
-// record notes a write in the policy's audit log: the method and the API
-// path u, below any base path, never the query string or the body.
-func (g *roundTripper) record(req *http.Request, u *url.URL, allowed string) error {
+// entry is an audit entry of a kind about request req to API path u, which
+// set finishes.
+func (g *roundTripper) entry(kind string, req *http.Request, u *url.URL, set func(*audit.Entry)) audit.Entry {
 	p := g.policy
-	if p.Audit == nil {
-		return nil
-	}
-	err := p.Audit.Record(req.Context(), audit.Entry{
+	e := audit.Entry{
 		Time:      p.now(),
+		Kind:      kind,
 		Source:    audit.SourceTug,
 		Cluster:   p.Cluster,
 		ClusterID: p.ClusterID,
 		Session:   p.Session,
-		Allowed:   allowed,
+		Namespace: audit.NamespaceOf(u.Path),
+		Intent:    p.Intent,
 		Method:    req.Method,
 		Path:      u.Path,
-	})
-	if err != nil {
-		return fmt.Errorf("not sending %s, since it could not be recorded in the audit log: %w", Describe(req.Method, u), err)
 	}
-	return nil
+	set(&e)
+	return e
+}
+
+// record notes a write in the policy's audit log before it is sent: the
+// method and the API path u, below any base path, never the query string
+// or the body. It returns the write's ID, or "" without an audit log.
+func (g *roundTripper) record(req *http.Request, u *url.URL, allowed string) (string, error) {
+	if g.policy.Audit == nil {
+		return "", nil
+	}
+	id := audit.NewID()
+	err := g.policy.Audit.Record(req.Context(), g.entry(audit.KindWrite, req, u, func(e *audit.Entry) {
+		e.ID, e.Allowed = id, allowed
+	}))
+	if err != nil {
+		return "", fmt.Errorf("not sending %s, since it could not be recorded in the audit log: %w", Describe(req.Method, u), err)
+	}
+	return id, nil
+}
+
+// noteTimeout bounds how long recording an outcome or a refusal waits for
+// the audit log.
+const noteTimeout = 5 * time.Second
+
+// note records an outcome or a refusal. The request has been sent or
+// refused either way, so a failure is only logged; a cancelled request
+// still has its outcome recorded.
+func (g *roundTripper) note(ctx context.Context, e audit.Entry) {
+	if g.policy.Audit == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), noteTimeout)
+	defer cancel()
+	if err := g.policy.Audit.Record(ctx, e); err != nil && g.policy.Log != nil {
+		g.policy.Log.Warn("recording in the audit log", "kind", e.Kind, "err", err)
+	}
 }
 
 // closeBody closes the body of a request that is not sent, as a
