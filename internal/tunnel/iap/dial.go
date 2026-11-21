@@ -35,8 +35,8 @@ const (
 	origin = "bot:iap-tunneler"
 	// scope is the OAuth scope of the access token.
 	scope = "https://www.googleapis.com/auth/cloud-platform"
-	// openTimeout bounds the WebSocket handshake and the wait for the
-	// relay's first frame.
+	// openTimeout bounds getting a token, the WebSocket handshake and the
+	// wait for the relay's first frame.
 	openTimeout = 60 * time.Second
 	// reconnectWait and maxReconnectWait shape the back-off between
 	// attempts to resume; each wait is 1.1 times the one before.
@@ -63,6 +63,9 @@ const (
 // DATA frames of at most 16 KiB; this leaves room in case the relay's are
 // larger.
 const maxMessage = 1 << 20
+
+// refreshTimeout bounds each token refresh of the default token source.
+const refreshTimeout = 30 * time.Second
 
 // Option configures Dial.
 type Option func(*options)
@@ -122,9 +125,21 @@ func withReconnectBackoff(first, most time.Duration) Option {
 }
 
 // DefaultTokenSource returns access tokens from Application Default
-// Credentials with the cloud-platform scope. ctx is used for refreshing
-// tokens later too, so it should outlive the tunnels that use them.
+// Credentials with the cloud-platform scope, to share between tunnels.
+// The source refreshes tokens with ctx's values, such as an
+// oauth2.HTTPClient, long after the call, so ctx's cancellation does not
+// reach it; each refresh gives up after refreshTimeout instead. Dial stops
+// waiting for a token when its tunnel closes.
 func DefaultTokenSource(ctx context.Context) (oauth2.TokenSource, error) {
+	return defaultTokenSource(context.WithoutCancel(ctx))
+}
+
+// defaultTokenSource returns ADC tokens refreshed with ctx, which bounds
+// them along with refreshTimeout.
+func defaultTokenSource(ctx context.Context) (oauth2.TokenSource, error) {
+	if ctx.Value(oauth2.HTTPClient) == nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Timeout: refreshTimeout})
+	}
 	ts, err := googleauth.DefaultTokenSource(ctx, scope)
 	if err != nil {
 		return nil, noCredentials(err)
@@ -148,6 +163,8 @@ type client struct {
 	maxReconnectWait time.Duration
 }
 
+// newClient applies opts. ctx is the tunnel's context, which lasts until
+// Close.
 func newClient(ctx context.Context, opts []Option) (*client, error) {
 	o := options{
 		relayURL:         DefaultRelayURL,
@@ -164,9 +181,10 @@ func newClient(ctx context.Context, opts []Option) (*client, error) {
 		return nil, err
 	}
 	if o.tokens == nil {
-		// The token source refreshes with the context it was made with,
-		// long after Dial returns, so it must not end with Dial's.
-		if o.tokens, err = DefaultTokenSource(context.WithoutCancel(ctx)); err != nil {
+		// A token source made for this tunnel alone refreshes with the
+		// tunnel's context, so that Close also ends a refresh in
+		// progress.
+		if o.tokens, err = defaultTokenSource(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -232,15 +250,45 @@ func Dial(ctx context.Context, cfg Config, address string, opts ...Option) (net.
 	if err != nil {
 		return nil, err
 	}
-	cl, err := newClient(ctx, opts)
+	// The tunnel's own context keeps ctx's values but not its
+	// cancellation, which is Close's.
+	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	cl, err := newClient(life, opts)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("opening an IAP tunnel to %s: %w", t, err)
 	}
 	ws, f, err := cl.open(ctx, cl.endpoint("connect", t.connectQuery()), t, tagConnectSuccessSID)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("opening an IAP tunnel to %s: %w", t, err)
 	}
-	return newConn(ctx, cl, t, ws, string(f.data)), nil
+	return newConn(life, cancel, cl, t, ws, string(f.data)), nil
+}
+
+// token gets an access token, giving up when ctx ends. A TokenSource takes
+// no context, so the call runs on a goroutine of its own, which ends when
+// the source returns: a refresh that hangs keeps it until the source gives
+// up, as the default source does after refreshTimeout or at Close.
+func (cl *client) token(ctx context.Context) (*oauth2.Token, error) {
+	type result struct {
+		tok *oauth2.Token
+		err error
+	}
+	got := make(chan result, 1)
+	go func() {
+		tok, err := cl.tokens.Token()
+		got <- result{tok, err}
+	}()
+	select {
+	case r := <-got:
+		if r.err != nil {
+			return nil, tokenError(r.err)
+		}
+		return r.tok, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for a Google access token: %w", ctx.Err())
+	}
 }
 
 // open dials the relay endpoint and waits for its first frame, which must
@@ -248,9 +296,9 @@ func Dial(ctx context.Context, cfg Config, address string, opts ...Option) (net.
 func (cl *client) open(ctx context.Context, endpoint string, t target, want uint16) (*websocket.Conn, frame, error) {
 	ctx, cancel := context.WithTimeout(ctx, openTimeout)
 	defer cancel()
-	tok, err := cl.tokens.Token()
+	tok, err := cl.token(ctx)
 	if err != nil {
-		return nil, frame{}, tokenError(err)
+		return nil, frame{}, err
 	}
 	if tok.AccessToken == "" {
 		return nil, frame{}, noCredentials(errors.New("the token source gave an empty access token"))

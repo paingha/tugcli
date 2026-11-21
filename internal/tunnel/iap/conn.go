@@ -52,7 +52,7 @@ var errRelayClosed = errors.New("the IAP relay closed the tunnel")
 type conn struct {
 	cl     *client
 	t      target
-	cancel context.CancelFunc // ends a resume in progress
+	cancel context.CancelFunc // ends a resume, and a wait for a token, in progress
 
 	closing   chan struct{} // closed by Close
 	closeOnce sync.Once
@@ -89,10 +89,9 @@ type conn struct {
 
 var _ net.Conn = (*conn)(nil)
 
-// newConn starts the session that ws opened. ctx gives the session's
-// context its values but not its cancellation, which is Close's.
-func newConn(ctx context.Context, cl *client, t target, ws *websocket.Conn, sid string) *conn {
-	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+// newConn starts the session that ws opened. ctx is the tunnel's context,
+// which cancel ends at Close.
+func newConn(ctx context.Context, cancel context.CancelFunc, cl *client, t target, ws *websocket.Conn, sid string) *conn {
 	c := &conn{
 		cl:       cl,
 		t:        t,
