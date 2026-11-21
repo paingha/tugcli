@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/client-go/rest"
 
 	"github.com/paingha/tugcli/internal/audit"
@@ -26,7 +28,10 @@ import (
 
 // upstream is a reverse proxy to one cluster's API server.
 type upstream struct {
-	proxy   *httputil.ReverseProxy
+	proxy *httputil.ReverseProxy
+	// rt is the proxy's transport, whose idle connections are closed when
+	// the upstream is replaced or the machine wakes.
+	rt      http.RoundTripper
 	created time.Time
 	// refreshed says its credential was asked anew of the provider after
 	// the cluster refused the one before.
@@ -192,9 +197,14 @@ func (s *Server) upstream(ctx context.Context, clusterID string) (*upstream, err
 	}
 	up.refreshed = refresh
 	s.mu.Lock()
+	old := s.upstreams[clusterID]
 	s.upstreams[clusterID] = up
 	delete(s.refresh, clusterID)
 	s.mu.Unlock()
+	if old != nil {
+		// Its streams carry on; new requests use the new upstream.
+		utilnet.CloseIdleConnectionsFor(old.rt)
+	}
 	return up, nil
 }
 
@@ -230,6 +240,30 @@ func (s *Server) credentialRefused(clusterID string, up *upstream) bool {
 	return true
 }
 
+// dropUpstreams forgets every cluster's upstream and closes their idle
+// connections, which the network they were opened on may no longer carry:
+// after the machine slept, a pooled connection can look open and never
+// answer.
+func (s *Server) dropUpstreams() {
+	s.mu.Lock()
+	ups := s.upstreams
+	s.upstreams = map[string]*upstream{}
+	s.mu.Unlock()
+	for _, up := range ups {
+		utilnet.CloseIdleConnectionsFor(up.rt)
+	}
+}
+
+// upstreamDialer opens tugd's connections to clusters. It probes idle
+// connections often, so that one whose network has gone (a VPN that
+// dropped, another Wi-Fi network) fails within about half a minute rather
+// than the several minutes TCP's defaults take, and the client sees its
+// watch or stream end and starts again.
+var upstreamDialer = &net.Dialer{
+	Timeout:         30 * time.Second,
+	KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: 15 * time.Second, Interval: 5 * time.Second, Count: 3},
+}
+
 func (s *Server) newUpstream(clusterID string, cfg *rest.Config) (*upstream, error) {
 	target, err := url.Parse(cfg.Host)
 	if err != nil {
@@ -239,11 +273,14 @@ func (s *Server) newUpstream(clusterID string, cfg *rest.Config) (*upstream, err
 	// Exec, attach and port-forward upgrade the connection; HTTP/2 cannot
 	// carry SPDY upgrades, so keep the upstream on HTTP/1.1.
 	cfg.NextProtos = []string{"http/1.1"}
+	if cfg.Dial == nil {
+		cfg.Dial = upstreamDialer.DialContext
+	}
 	rt, err := rest.TransportFor(cfg)
 	if err != nil {
 		return nil, err
 	}
-	up := &upstream{created: s.cfg.Now()}
+	up := &upstream{rt: rt, created: s.cfg.Now()}
 	up.proxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
@@ -259,8 +296,13 @@ func (s *Server) newUpstream(clusterID string, cfg *rest.Config) (*upstream, err
 			}
 			return nil
 		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeStatus(w, http.StatusBadGateway, metav1.StatusReasonServiceUnavailable, "tug proxy: "+err.Error())
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			name := "the cluster"
+			if pr, ok := r.Context().Value(proxyRequestKey{}).(*proxyRequest); ok {
+				name = pr.sess.State.ClusterName
+			}
+			writeStatus(w, http.StatusBadGateway, metav1.StatusReasonServiceUnavailable,
+				fmt.Sprintf("tug proxy: cannot reach %s: %v", name, err))
 		},
 	}
 	return up, nil

@@ -1,10 +1,13 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,6 +25,29 @@ import (
 	"github.com/paingha/tugcli/internal/kube"
 	sdk "github.com/paingha/tugcli/pkg/provider"
 )
+
+// stream starts a streaming GET through the proxy and returns its status
+// and first line, which must arrive while the stream is still open.
+func (f *fixture) stream(t *testing.T, path string) (int, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, f.proxy.URL+"/s/"+f.sess.State.ID+path, nil)
+	req.Header.Set("Authorization", "Bearer "+f.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, ""
+	}
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	if err != nil {
+		t.Fatalf("reading the stream: %v", err)
+	}
+	return resp.StatusCode, line
+}
 
 // clock is a time that tests move.
 type clock struct {
@@ -164,6 +190,201 @@ func (f *fixture) clientset(t *testing.T) kubernetes.Interface {
 		t.Fatal(err)
 	}
 	return cs
+}
+
+// Connections the cluster drops, as a load balancer does or a network that
+// changes underneath, are opened again for the next request; a stream on
+// one ends, so the client starts it again; and a cluster that cannot be
+// reached is named in the error.
+func TestProxyRecoversFromDroppedConnections(t *testing.T) {
+	f := setup(t)
+	if code, body := f.do(t, http.MethodGet, "/api/v1/namespaces", f.token); code != http.StatusOK {
+		t.Fatalf("GET = %d %s", code, body)
+	}
+	f.cluster.srv.CloseClientConnections()
+	if code, body := f.do(t, http.MethodGet, "/api/v1/namespaces", f.token); code != http.StatusOK {
+		t.Fatalf("GET after the cluster dropped the connection = %d %s", code, body)
+	}
+
+	// A watch whose upstream connection drops ends, rather than hanging.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, f.proxy.URL+"/s/"+f.sess.State.ID+"/api/v1/namespaces?watch=true", nil)
+	req.Header.Set("Authorization", "Bearer "+f.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	r := bufio.NewReader(resp.Body)
+	if line, err := r.ReadString('\n'); err != nil || line != "first\n" {
+		t.Fatalf("watch: %q %v", line, err)
+	}
+	f.cluster.srv.CloseClientConnections()
+	ended := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, r)
+		ended <- err
+	}()
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the watch kept going after its upstream connection dropped")
+	}
+	if code, line := f.stream(t, "/api/v1/namespaces?watch=true"); code != http.StatusOK || line != "first\n" {
+		t.Fatalf("watching again = %d %q", code, line)
+	}
+
+	// The cluster goes away altogether.
+	if err := f.sess.Unlock(time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	f.cluster.srv.Close()
+	f.srv.dropUpstreams()
+	code, body := f.do(t, http.MethodDelete, "/api/v1/namespaces/scratch", f.token)
+	if code != http.StatusBadGateway || !strings.Contains(body, "cannot reach prod") {
+		t.Fatalf("DELETE with the cluster gone = %d %s", code, body)
+	}
+}
+
+// relay is a TCP relay to a cluster whose connections can be made to stop
+// carrying anything while staying open, as a connection does when the
+// machine sleeps or its network changes and nothing tells either end.
+type relay struct {
+	ln     net.Listener
+	target string
+	mu     sync.Mutex
+	stuck  []*atomic.Bool
+	conns  []net.Conn
+	opened atomic.Int32
+}
+
+func newRelay(t *testing.T, target string) *relay {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &relay{ln: ln, target: target}
+	var conns sync.WaitGroup
+	t.Cleanup(func() {
+		ln.Close()
+		r.mu.Lock()
+		for _, c := range r.conns {
+			c.Close()
+		}
+		r.mu.Unlock()
+		conns.Wait()
+	})
+	go func() {
+		for {
+			in, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			out, err := net.Dial("tcp", target)
+			if err != nil {
+				in.Close()
+				continue
+			}
+			r.opened.Add(1)
+			stuck := &atomic.Bool{}
+			r.mu.Lock()
+			r.stuck = append(r.stuck, stuck)
+			r.conns = append(r.conns, in, out)
+			r.mu.Unlock()
+			conns.Add(2)
+			pipe := func(dst, src net.Conn) {
+				defer conns.Done()
+				defer dst.Close()
+				buf := make([]byte, 32<<10)
+				for {
+					n, err := src.Read(buf)
+					if n > 0 && !stuck.Load() {
+						if _, err := dst.Write(buf[:n]); err != nil {
+							return
+						}
+					}
+					if err != nil {
+						return
+					}
+				}
+			}
+			go pipe(out, in)
+			go pipe(in, out)
+		}
+	}()
+	return r
+}
+
+// stall makes every connection open now stop carrying anything.
+func (r *relay) stall() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.stuck {
+		s.Store(true)
+	}
+}
+
+// After the machine wakes, tugd stops reusing connections to clusters made
+// before it slept, which may look open and never answer.
+func TestProxyDropsIdleConnectionsOnWake(t *testing.T) {
+	var r *relay
+	f := setup(t, func(c *Config) {
+		upstream := c.Upstream
+		c.Upstream = func(ctx context.Context, id string, refresh bool) (*rest.Config, error) {
+			cfg, err := upstream(ctx, id, refresh)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Host = "https://" + r.ln.Addr().String()
+			return cfg, nil
+		}
+	})
+	r = newRelay(t, strings.TrimPrefix(f.cluster.srv.URL, "https://"))
+	if code, body := f.do(t, http.MethodGet, "/api/v1/namespaces", f.token); code != http.StatusOK {
+		t.Fatalf("GET = %d %s", code, body)
+	}
+	r.stall()
+	f.srv.dropUpstreams() // what Run does when it notices a wake
+
+	done := make(chan int, 1)
+	go func() {
+		code, _ := f.do(t, http.MethodGet, "/api/v1/namespaces", f.token)
+		done <- code
+	}()
+	select {
+	case code := <-done:
+		if code != http.StatusOK {
+			t.Fatalf("GET after waking = %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("GET after waking hung on a connection made before the machine slept")
+	}
+	if n := r.opened.Load(); n != 2 {
+		t.Fatalf("opened %d connections to the cluster, want a new one after waking", n)
+	}
+}
+
+func TestSleptFor(t *testing.T) {
+	tests := []struct {
+		wall, monotonic time.Duration
+		want            bool
+	}{
+		{30 * time.Second, 30 * time.Second, false},
+		{31 * time.Second, 30 * time.Second, false}, // a clock adjusted a little
+		{2 * time.Hour, 30 * time.Second, true},     // asleep for most of two hours
+		{20 * time.Second, 30 * time.Second, false}, // a clock set back
+	}
+	for _, tt := range tests {
+		if got := sleptFor(tt.wall, tt.monotonic); got != tt.want {
+			t.Errorf("sleptFor(%s, %s) = %v, want %v", tt.wall, tt.monotonic, got, tt.want)
+		}
+	}
+	prev := time.Now()
+	if slept(prev, time.Now()) {
+		t.Error("slept between two readings in a row")
+	}
 }
 
 // A provider's hint for a credential it cannot give reaches the client.

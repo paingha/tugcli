@@ -38,6 +38,9 @@ const (
 	// upstreamTTL bounds how long a cluster's proxy is reused, so catalog
 	// changes (a new CA, a moved endpoint) are picked up.
 	upstreamTTL = time.Minute
+	// wakeGap is how far the wall clock may run ahead of the monotonic
+	// clock between two ticks before tugd takes it that the machine slept.
+	wakeGap = 10 * time.Second
 )
 
 // Config is what tugd needs from its host.
@@ -235,6 +238,19 @@ func (s *Server) idle() bool {
 	return len(s.tokens) == 0 && len(s.forwards) == 0 && s.cfg.Now().Sub(s.lastActive) > s.cfg.IdleTimeout
 }
 
+// slept reports whether the machine seems to have slept between two
+// readings of the clock, prev and now: the wall clock, which counts time
+// asleep, ran ahead of the monotonic clock, which on most systems does not,
+// by more than wakeGap. A clock set forwards looks the same, which costs
+// only a few new connections.
+func slept(prev, now time.Time) bool {
+	return sleptFor(now.Round(0).Sub(prev.Round(0)), now.Sub(prev))
+}
+
+// sleptFor is slept for the time that passed on the wall clock and on the
+// monotonic clock.
+func sleptFor(wall, monotonic time.Duration) bool { return wall-monotonic > wakeGap }
+
 // Run listens on the control socket and the proxy address and serves until
 // ctx ends, Shutdown is called, or tugd has been idle for IdleTimeout.
 func (s *Server) Run(ctx context.Context) error {
@@ -311,6 +327,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	tick := time.NewTicker(min(s.cfg.IdleTimeout/2, 30*time.Second))
 	defer tick.Stop()
+	lastTick := time.Now()
 	var runErr error
 loop:
 	for {
@@ -320,6 +337,12 @@ loop:
 		case <-s.shutdown:
 			break loop
 		case <-tick.C:
+			now := time.Now()
+			if slept(lastTick, now) {
+				s.cfg.Log.Info("the machine woke from sleep; closing idle connections to clusters")
+				s.dropUpstreams()
+			}
+			lastTick = now
 			if s.idle() {
 				s.cfg.Log.Info("tugd idle; stopping")
 				break loop
