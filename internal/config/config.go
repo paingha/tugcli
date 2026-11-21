@@ -98,6 +98,7 @@ type Config struct {
 	Plugins  PluginsConfig  `json:"plugins,omitempty"`
 	Sessions SessionsConfig `json:"sessions,omitempty"`
 	OIDC     OIDCConfig     `json:"oidc,omitempty"`
+	Policy   PolicyConfig   `json:"policy,omitzero"`
 }
 
 // OIDCConfig controls signing in to OpenID Connect issuers.
