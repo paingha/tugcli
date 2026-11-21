@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	authnv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -121,9 +122,13 @@ func TestTunnelEndpoint(t *testing.T) {
 	if v.GitVersion != "v1.35.1" {
 		t.Fatalf("ServerVersion = %s, want v1.35.1 from the local proxy", v.GitVersion)
 	}
-	// The guard still applies.
+	// The guard still applies, to the API's paths below the local proxy's.
 	err = cs.CoreV1().Namespaces().Delete(context.Background(), "payments", metav1.DeleteOptions{})
-	if denied := (*guard.DeniedError)(nil); !errors.As(err, &denied) {
+	if denied := (*guard.DeniedError)(nil); !errors.As(err, &denied) || denied.Action != "DELETE namespaces/payments" {
 		t.Fatalf("delete through the tunnel = %v, want the read-only guard to refuse it", err)
+	}
+	_, err = cs.AuthenticationV1().SelfSubjectReviews().Create(context.Background(), &authnv1.SelfSubjectReview{}, metav1.CreateOptions{})
+	if denied := (*guard.DeniedError)(nil); errors.As(err, &denied) {
+		t.Fatalf("a self-subject review through the tunnel = %v, want it let through as a read", err)
 	}
 }

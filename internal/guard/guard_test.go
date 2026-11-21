@@ -89,6 +89,39 @@ func TestRoundTripper(t *testing.T) {
 	}
 }
 
+func TestRoundTripperBelowABasePath(t *testing.T) {
+	const base = "/k8s/clusters/c-1"
+	tests := []struct {
+		method, path string
+		allowed      bool
+		action       string
+	}{
+		{http.MethodPost, base + "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews", true, ""},
+		{http.MethodDelete, base + "/api/v1/namespaces/default/pods/x", false, "DELETE pods/x"},
+		{http.MethodPost, base + "/api/v1/namespaces/default/pods/x/exec", false, "POST pods/x/exec"},
+		// A path that only starts with the same characters is not below
+		// the base.
+		{http.MethodPost, base + "0/apis/authorization.k8s.io/v1/selfsubjectaccessreviews", false, "POST k8s/clusters/c-10/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			req, _ := http.NewRequest(tt.method, "https://rancher.example.com"+tt.path, nil)
+			next := &okTransport{}
+			resp, err := WrapBase(next, &Policy{Cluster: "prod-eu", ReadOnly: true}, base+"/").RoundTrip(req)
+			if resp != nil {
+				resp.Body.Close()
+			}
+			var denied *DeniedError
+			switch {
+			case tt.allowed && (err != nil || next.calls != 1):
+				t.Fatalf("RoundTrip = %v (calls %d), want it allowed", err, next.calls)
+			case !tt.allowed && (!errors.As(err, &denied) || denied.Action != tt.action || next.calls != 0):
+				t.Fatalf("RoundTrip = %v (calls %d), want %q denied", err, next.calls, tt.action)
+			}
+		})
+	}
+}
+
 func TestConfirmAskedOncePerCommand(t *testing.T) {
 	asked := 0
 	p := &Policy{ReadOnly: true, Confirm: func(string) bool { asked++; return true }}

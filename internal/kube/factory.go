@@ -110,11 +110,17 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 }
 
 // wrapGuard puts the factory's guard, when it has one, in front of cfg's
-// requests.
+// requests. The guard judges paths below the server's own path, where the
+// Kubernetes API starts.
 func (f *Factory) wrapGuard(cfg *rest.Config) {
-	if f.Guard != nil {
-		cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper { return guard.Wrap(rt, f.Guard) })
+	if f.Guard == nil {
+		return
 	}
+	var base string
+	if u, err := url.Parse(cfg.Host); err == nil {
+		base = u.Path
+	}
+	cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper { return guard.WrapBase(rt, f.Guard, base) })
 }
 
 // Clientset returns a typed client.
