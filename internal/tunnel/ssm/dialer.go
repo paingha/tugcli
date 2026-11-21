@@ -9,6 +9,7 @@ import (
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/gorilla/websocket"
 
@@ -31,6 +32,9 @@ type Dialer struct {
 // clients are what a Dialer shares between sessions.
 type clients struct {
 	api API
+	// kms sets up KMS-encrypted sessions; nil when the API was injected
+	// without one.
+	kms KMSAPI
 	// signer signs the data channel request; nil when the API was injected.
 	signer *streamSigner
 }
@@ -112,6 +116,7 @@ func (d *Dialer) startSession(ctx context.Context, cl *clients, address, host, p
 	log := d.o.log.With("session", sessionID, "target", d.cfg.Target, "address", address)
 	c := newConn(cl.api, sessionID, address, log)
 	c.resumeDelay = d.o.resumeDelay
+	c.kms, c.target = cl.kms, d.cfg.Target
 	if sessionID == "" || streamURL == "" || token == "" {
 		// Best effort: the session is unusable either way.
 		_ = c.terminate()
@@ -130,7 +135,7 @@ func (d *Dialer) startSession(ctx context.Context, cl *clients, address, host, p
 // signs the data channel's WebSocket request.
 func (o *options) newClients(ctx context.Context, cfg Config) (*clients, error) {
 	if o.api != nil {
-		return &clients{api: o.api}, nil
+		return &clients{api: o.api, kms: o.kms}, nil
 	}
 	awsCfg, err := loadConfig(ctx, cfg.Profile, cfg.Region)
 	if err != nil {
@@ -147,8 +152,13 @@ func (o *options) newClients(ctx context.Context, cfg Config) (*clients, error) 
 		endpoint := o.endpoint
 		ssmOpts = append(ssmOpts, func(so *ssm.Options) { so.BaseEndpoint = &endpoint })
 	}
+	kmsAPI := o.kms
+	if kmsAPI == nil {
+		kmsAPI = kms.NewFromConfig(awsCfg)
+	}
 	return &clients{
 		api:    ssm.NewFromConfig(awsCfg, ssmOpts...),
+		kms:    kmsAPI,
 		signer: &streamSigner{creds: awsCfg.Credentials, region: awsCfg.Region},
 	}, nil
 }

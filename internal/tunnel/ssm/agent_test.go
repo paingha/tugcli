@@ -1,10 +1,16 @@
 package ssm
 
 import (
+	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,6 +19,7 @@ import (
 	"time"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/gorilla/websocket"
 )
@@ -47,6 +54,10 @@ type fakeAgent struct {
 	// message: the agent processes it but loses both its acknowledgement
 	// and the echo, as if the connection broke mid-flight.
 	dropOnData int
+	// kmsKeyID, when set, asks for KMS encryption with this key, whose data
+	// keys the agent gets from kms.
+	kmsKeyID string
+	kms      *fakeKMS
 
 	streamURL string
 
@@ -84,6 +95,12 @@ type agentSession struct {
 	dropped  bool
 	data     int // data messages processed
 	lost     bool
+
+	// With KMS encryption: the agent seals with the first half of the data
+	// key and opens what the client sealed with the second.
+	agentSeal, clientOpen cipher.AEAD
+	challenge             []byte
+	sealedInput           [][]byte // data payloads as they arrived
 }
 
 func (a *fakeAgent) problem(format string, args ...any) {
@@ -216,6 +233,12 @@ func (s *agentSession) run(ws *websocket.Conn, first bool) {
 				ActionParameters: json.RawMessage(`{"SessionType":"Port","Properties":{"portNumber":"443","type":"LocalPortForwarding","host":"10.0.0.1","localPortNumber":"0"}}`),
 			}}
 		}
+		if a.kmsKeyID != "" {
+			actions = append(actions, requestedAction{
+				ActionType:       actionKMSEncryption,
+				ActionParameters: mustJSON(map[string]string{"KMSKeyId": a.kmsKeyID, "Challenge": "cmFuZG9tIGNoYWxsZW5nZQ=="}),
+			})
+		}
 		s.sendJSON(payloadHandshakeRequest, handshakeRequest{AgentVersion: a.agentVersion, RequestedClientActions: actions})
 	}
 	for {
@@ -341,16 +364,34 @@ func (s *agentSession) process(m message) {
 			if action.ActionStatus != actionSuccess {
 				return // the agent cancels the session
 			}
+			if action.ActionType == actionKMSEncryption {
+				s.startEncryption(action)
+				return // the handshake completes once the challenge is answered
+			}
 		}
-		s.sendJSON(payloadHandshakeComplete, handshakeComplete{HandshakeTimeToComplete: time.Second})
-		s.greet()
-		if s.a.closeWith != nil {
-			s.write(newMessage(typeChannelClosed, 0, flagsAck, 0, mustJSON(channelClosed{
-				MessageType: typeChannelClosed, SessionID: s.id, SchemaVersion: 1, Output: *s.a.closeWith,
-			}), time.Now()))
+		s.complete()
+	case payloadEncChallengeResponse:
+		var resp encryptionChallenge
+		_ = json.Unmarshal(m.Payload, &resp)
+		got, err := agentOpen(s.clientOpen, resp.Challenge)
+		if err != nil || !bytes.Equal(got, s.challenge) {
+			s.a.problem("the encryption challenge came back as %x (%v), want %x", got, err, s.challenge)
+			return
 		}
+		s.complete()
 	case payloadOutput:
-		s.send(payloadOutput, m.Payload)
+		payload := m.Payload
+		if s.clientOpen != nil {
+			s.mu.Lock()
+			s.sealedInput = append(s.sealedInput, bytes.Clone(payload))
+			s.mu.Unlock()
+			var err error
+			if payload, err = agentOpen(s.clientOpen, payload); err != nil {
+				s.a.problem("decrypting input %d: %v", m.Sequence, err)
+				return
+			}
+		}
+		s.send(payloadOutput, payload)
 	case payloadFlag:
 		s.mu.Lock()
 		s.flags = append(s.flags, flag(binary.BigEndian.Uint32(m.Payload)))
@@ -358,6 +399,65 @@ func (s *agentSession) process(m message) {
 	default:
 		s.a.problem("unexpected input payload type %d", m.PayloadType)
 	}
+}
+
+// complete ends the handshake and sends what the test asked for after it.
+func (s *agentSession) complete() {
+	s.sendJSON(payloadHandshakeComplete, handshakeComplete{HandshakeTimeToComplete: time.Second})
+	s.greet()
+	if s.a.closeWith != nil {
+		s.write(newMessage(typeChannelClosed, 0, flagsAck, 0, mustJSON(channelClosed{
+			MessageType: typeChannelClosed, SessionID: s.id, SchemaVersion: 1, Output: *s.a.closeWith,
+		}), time.Now()))
+	}
+}
+
+// startEncryption does what the agent does with the client's KMS result:
+// it decrypts the data key with KMS, under the session's encryption
+// context, and challenges the client to prove it holds the key too.
+func (s *agentSession) startEncryption(action processedAction) {
+	var result kmsEncryptionResponse
+	if err := json.Unmarshal(mustJSON(action.ActionResult), &result); err != nil {
+		s.a.problem("KMS action result %v: %v", action.ActionResult, err)
+		return
+	}
+	key, err := s.a.kms.decrypt(result.KMSCipherTextKey, map[string]string{contextSessionID: s.id, contextTargetID: testTarget})
+	if err != nil {
+		s.a.problem("decrypting the data key: %v", err)
+		return
+	}
+	s.agentSeal, s.clientOpen = agentGCM(key[:32]), agentGCM(key[32:])
+	s.challenge = make([]byte, 64)
+	_, _ = rand.Read(s.challenge)
+	s.sendJSON(payloadEncChallengeRequest, encryptionChallenge{Challenge: agentSeal(s.agentSeal, s.challenge)})
+}
+
+// agentGCM, agentSeal and agentOpen are AES-GCM as the agent and the
+// plugin use it, written apart from the code under test: a random 12-byte
+// nonce in front of the sealed data.
+func agentGCM(key []byte) cipher.AEAD {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(err)
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		panic(err)
+	}
+	return aead
+}
+
+func agentSeal(aead cipher.AEAD, plain []byte) []byte {
+	nonce := make([]byte, 12)
+	_, _ = rand.Read(nonce)
+	return append(nonce, aead.Seal(nil, nonce, plain, nil)...)
+}
+
+func agentOpen(aead cipher.AEAD, sealed []byte) ([]byte, error) {
+	if aead == nil || len(sealed) < 12 {
+		return nil, errors.New("nothing to open")
+	}
+	return aead.Open(nil, sealed[:12], sealed[12:], nil)
 }
 
 // greet sends the greeting last part first, then the second part again.
@@ -381,8 +481,12 @@ func (s *agentSession) ack(m message) {
 	}), time.Now()))
 }
 
-// next numbers an output message.
+// next numbers an output message, encrypting stream data once the session
+// is encrypted.
 func (s *agentSession) next(pt payloadType, payload []byte) message {
+	if pt == payloadOutput && s.agentSeal != nil {
+		payload = agentSeal(s.agentSeal, payload)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var f uint64
@@ -433,6 +537,47 @@ func (s *agentSession) flagsSent() []flag {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.flags)
+}
+
+// fakeKMS generates data keys and, for the fake agent, decrypts them under
+// the encryption context they were generated with.
+type fakeKMS struct {
+	err error
+
+	mu       sync.Mutex
+	calls    []*kms.GenerateDataKeyInput
+	keys     map[string][]byte
+	contexts map[string]map[string]string
+}
+
+func (f *fakeKMS) GenerateDataKey(_ context.Context, in *kms.GenerateDataKeyInput, _ ...func(*kms.Options)) (*kms.GenerateDataKeyOutput, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, in)
+	if f.err != nil {
+		return nil, f.err
+	}
+	key := make([]byte, awsv2.ToInt32(in.NumberOfBytes))
+	_, _ = rand.Read(key)
+	blob := fmt.Sprintf("encrypted-data-key-%d", len(f.calls))
+	if f.keys == nil {
+		f.keys, f.contexts = map[string][]byte{}, map[string]map[string]string{}
+	}
+	f.keys[blob], f.contexts[blob] = bytes.Clone(key), maps.Clone(in.EncryptionContext)
+	return &kms.GenerateDataKeyOutput{CiphertextBlob: []byte(blob), Plaintext: key, KeyId: in.KeyId}, nil
+}
+
+func (f *fakeKMS) decrypt(blob []byte, context map[string]string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key, ok := f.keys[string(blob)]
+	if !ok {
+		return nil, fmt.Errorf("unknown ciphertext %q", blob)
+	}
+	if !maps.Equal(f.contexts[string(blob)], context) {
+		return nil, fmt.Errorf("encryption context %v, generated with %v", context, f.contexts[string(blob)])
+	}
+	return key, nil
 }
 
 func mustJSON(v any) []byte {

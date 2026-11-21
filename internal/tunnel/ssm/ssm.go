@@ -9,7 +9,9 @@
 // retransmission. The session carries exactly one TCP connection from the
 // instance to the requested address, and the returned net.Conn is that
 // connection. If the WebSocket drops, the session is resumed with
-// ResumeSession on a new one, and unacknowledged data is sent again.
+// ResumeSession on a new one, and unacknowledged data is sent again. When
+// the Session Manager preferences name a KMS key, the session's data is
+// encrypted with a KMS data key as the plugin does it (see crypto.go).
 //
 // tug asks the agent for basic port forwarding rather than the multiplexed
 // mode the current plugin uses (see clientVersion). In that mode the agent
@@ -51,11 +53,10 @@ type Config struct {
 	Profile string // optional AWS profile
 }
 
-// ErrKMSEncryption is returned by Dial when the account's Session Manager
-// preferences require KMS encryption of session data, which tug does not
-// support.
-var ErrKMSEncryption = errors.New("the Session Manager preferences require KMS encryption, which tug does not support; " +
-	"turn off KMS encryption in the Session Manager preferences to tunnel through SSM")
+// ErrKMSEncryption is returned by Dial, wrapped with the cause, when the
+// account's Session Manager preferences require KMS encryption of session
+// data and it cannot be set up, as when KMS refuses GenerateDataKey.
+var ErrKMSEncryption = errors.New("the Session Manager preferences require KMS encryption, which could not be set up")
 
 // ErrSessionClosed is returned by Read and Write once Session Manager has
 // closed the session, wrapped with the reason it gave if there was one.
@@ -132,6 +133,7 @@ type Option func(*options)
 
 type options struct {
 	api      API
+	kms      KMSAPI
 	endpoint string
 	dialer   *websocket.Dialer
 	log      *slog.Logger
@@ -146,6 +148,10 @@ func withResumeDelay(d time.Duration) Option { return func(o *options) { o.resum
 // tests. The data channel is then opened without request signing, which
 // relies on the session token alone, as older Session Manager plugins do.
 func WithAPI(api API) Option { return func(o *options) { o.api = api } }
+
+// WithKMS replaces the KMS client that sets up KMS-encrypted sessions, for
+// tests. Without it, a Dialer given WithAPI refuses encrypted sessions.
+func WithKMS(api KMSAPI) Option { return func(o *options) { o.kms = api } }
 
 // WithEndpoint sends SSM API requests to endpoint, such as an interface VPC
 // endpoint, instead of the regional one.

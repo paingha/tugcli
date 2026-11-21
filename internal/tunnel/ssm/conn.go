@@ -102,6 +102,14 @@ type conn struct {
 	clientID  string
 	// resumeDelay is the first wait before retrying to resume.
 	resumeDelay time.Duration
+	// kms and target set up KMS encryption when the agent asks for it.
+	kms    KMSAPI
+	target string
+
+	// handshakes and challenges carry handshake messages from the reader to
+	// open.
+	handshakes chan message
+	challenges chan message
 
 	// The WebSocket is replaced when a dropped channel is resumed.
 	wsMu      sync.Mutex
@@ -124,7 +132,8 @@ type conn struct {
 	rtt, rttVar  time.Duration
 	rto          time.Duration
 	agentVersion string
-	byService    bool // Session Manager closed the channel, so the session is over
+	byService    bool           // Session Manager closed the channel, so the session is over
+	enc          *sessionCipher // set when the session is KMS-encrypted
 
 	// Owned by the reader goroutine.
 	expected  int64
@@ -166,6 +175,8 @@ func newConn(api API, sessionID, address string, log *slog.Logger) *conn {
 		clientID:    newUUID().String(),
 		resumeDelay: resumeDelay,
 		wsChanged:   make(chan struct{}),
+		handshakes:  make(chan message),
+		challenges:  make(chan message),
 		out:         make(chan []byte, outQueue),
 		rtt:         defaultRTT,
 		rto:         defaultRTO,
@@ -198,24 +209,41 @@ func (c *conn) open(ctx context.Context, dialer *websocket.Dialer, signer *strea
 
 	timer := time.NewTimer(handshakeTimeout)
 	defer timer.Stop()
-	select {
-	case <-c.ready:
-		c.log.Debug("SSM data channel open", "agent", c.agentVersionString())
-		return nil
-	case <-c.broken:
+	for {
 		select {
+		case m := <-c.handshakes:
+			if err := c.answerHandshake(ctx, m); err != nil {
+				return err
+			}
+		case m := <-c.challenges:
+			if err := c.answerChallenge(m); err != nil {
+				return err
+			}
 		case <-c.ready:
-			// The session opened and ended at once; Read and Write
-			// report how, after any output it carried.
+			c.log.Debug("SSM data channel open", "agent", c.agentVersionString(), "encrypted", c.encrypted())
 			return nil
-		default:
+		case <-c.broken:
+			select {
+			case <-c.ready:
+				// The session opened and ended at once; Read and Write
+				// report how, after any output it carried.
+				return nil
+			default:
+			}
+			return c.writeErr()
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for the agent's handshake: %w", ctx.Err())
+		case <-timer.C:
+			return fmt.Errorf("the agent did not complete the handshake within %s; check that the instance's SSM agent is up to date", handshakeTimeout)
 		}
-		return c.writeErr()
-	case <-ctx.Done():
-		return fmt.Errorf("waiting for the agent's handshake: %w", ctx.Err())
-	case <-timer.C:
-		return fmt.Errorf("the agent did not complete the handshake within %s; check that the instance's SSM agent is up to date", handshakeTimeout)
 	}
+}
+
+// encrypted reports whether session data is encrypted with KMS.
+func (c *conn) encrypted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.enc != nil
 }
 
 // dialSocket opens a WebSocket to the stream URL and hands over the token.
@@ -570,9 +598,23 @@ func (c *conn) handleOutput(m message) {
 func (c *conn) process(m message) {
 	switch m.PayloadType {
 	case payloadOutput:
-		c.deliver(m.Payload)
+		c.mu.Lock()
+		enc := c.enc
+		c.mu.Unlock()
+		payload := m.Payload
+		if enc != nil {
+			var err error
+			if payload, err = enc.decrypt(payload); err != nil {
+				err = fmt.Errorf("reading output %d: %w", m.Sequence, err)
+				c.fail(err, err)
+				return
+			}
+		}
+		c.deliver(payload)
 	case payloadHandshakeRequest:
-		c.handleHandshakeRequest(m)
+		c.toHandshake(c.handshakes, m)
+	case payloadEncChallengeRequest:
+		c.toHandshake(c.challenges, m)
 	case payloadHandshakeComplete:
 		c.handleHandshakeComplete(m)
 	case payloadFlag:
@@ -580,10 +622,20 @@ func (c *conn) process(m message) {
 			err := fmt.Errorf("the instance could not connect to %s", c.address)
 			c.fail(err, err)
 		}
-	case payloadEncChallengeRequest:
-		// Follows only a KMS encryption action, which tug refuses.
 	default:
 		c.log.Debug("ignoring output", "payloadType", m.PayloadType, "sequence", m.Sequence)
+	}
+}
+
+// toHandshake hands a handshake message to open, which answers it with the
+// context of Dial: answering may call KMS. A message that arrives once the
+// handshake is over is dropped.
+func (c *conn) toHandshake(ch chan message, m message) {
+	select {
+	case <-c.ready:
+		c.log.Debug("ignoring a handshake message after the handshake", "payloadType", m.PayloadType)
+	case ch <- m:
+	case <-c.closed:
 	}
 }
 
@@ -609,15 +661,13 @@ func (c *conn) deliver(p []byte) {
 	}
 }
 
-// handleHandshakeRequest answers the agent's handshake. tug accepts a Port
-// session and nothing else: it refuses KMS encryption, which it does not
-// implement, and any action it does not know.
-func (c *conn) handleHandshakeRequest(m message) {
+// answerHandshake answers the agent's handshake request. tug accepts a Port
+// session, with KMS encryption if the agent asks for it, and refuses any
+// action it does not know. The error says why the session cannot go on.
+func (c *conn) answerHandshake(ctx context.Context, m message) error {
 	var req handshakeRequest
 	if err := json.Unmarshal(m.Payload, &req); err != nil {
-		err = fmt.Errorf("reading the agent's handshake request: %w", err)
-		c.fail(err, err)
-		return
+		return fmt.Errorf("reading the agent's handshake request: %w", err)
 	}
 	c.mu.Lock()
 	c.agentVersion = req.AgentVersion
@@ -642,9 +692,17 @@ func (c *conn) handleHandshakeRequest(m message) {
 			_ = json.Unmarshal(st.Properties, &props)
 			c.log.Debug("port session", "agent", req.AgentVersion, "type", props.Type)
 		case actionKMSEncryption:
-			done.ActionStatus = actionFailed
-			done.Error = "KMS encryption is not supported by this client"
-			refused = ErrKMSEncryption
+			var kr kmsEncryptionRequest
+			_ = json.Unmarshal(action.ActionParameters, &kr)
+			key, err := c.setUpEncryption(ctx, kr.KMSKeyID)
+			if err != nil {
+				done.ActionStatus = actionFailed
+				done.Error = "setting up KMS encryption: " + err.Error()
+				refused = fmt.Errorf("%w: %w", ErrKMSEncryption, err)
+				break
+			}
+			done.ActionResult = kmsEncryptionResponse{KMSCipherTextKey: key}
+			c.log.Debug("KMS encryption", "key", kr.KMSKeyID)
 		default:
 			done.ActionStatus = actionUnsupported
 			done.Error = "unsupported action " + action.ActionType
@@ -656,13 +714,9 @@ func (c *conn) handleHandshakeRequest(m message) {
 		resp.ProcessedClientActions = append(resp.ProcessedClientActions, done)
 	}
 	if err := c.queueJSON(payloadHandshakeResponse, resp); err != nil {
-		err = fmt.Errorf("answering the agent's handshake: %w", err)
-		c.fail(err, err)
-		return
+		return fmt.Errorf("answering the agent's handshake: %w", err)
 	}
-	if refused != nil {
-		c.fail(refused, refused)
-	}
+	return refused
 }
 
 func (c *conn) handleHandshakeComplete(m message) {
@@ -759,6 +813,9 @@ func (c *conn) queueInput(pt payloadType, payload []byte) error {
 		err := c.werr
 		c.mu.Unlock()
 		return err
+	}
+	if pt == payloadOutput && c.enc != nil {
+		payload = c.enc.encrypt(payload)
 	}
 	m := newMessage(typeInput, c.nextSeq, flagsNone, pt, payload, now)
 	raw := m.marshal()
