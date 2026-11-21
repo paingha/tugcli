@@ -840,9 +840,10 @@ func (a *app) printReport(r conformance.Report) {
 	fmt.Fprintf(a.stdout, "\n%d passed, %d skipped, %d failed\n", counts[conformance.Pass], counts[conformance.Skip], counts[conformance.Fail])
 }
 
-// newPluginSandboxExecCmd confines its own process with the sandbox policy
-// tug passes in its environment, then runs the plugin in its place, so the
-// plugin starts restricted. tug starts plugins through it on Linux.
+// newPluginSandboxExecCmd confines and limits its own process with the
+// sandbox policy and limits tug passes in its environment, then runs the
+// plugin in its place, so the plugin starts restricted. tug starts plugins
+// through it on Linux, and on macOS when they have limits.
 func newPluginSandboxExecCmd(*app) *cobra.Command {
 	return &cobra.Command{
 		Use:    sandbox.ExecCommand + " <plugin> [args]",

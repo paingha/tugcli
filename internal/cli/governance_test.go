@@ -306,6 +306,10 @@ func TestPluginInspect(t *testing.T) {
 	if !strings.Contains(out, "revoked:       REVOKED by index test: leaks tokens") || !strings.Contains(out, "pinned:        2.0.0 in config.yaml, so tug plugin install refuses 1.0.0") {
 		t.Fatalf("plugin inspect of a revoked version pinned to another: %s", out)
 	}
+	// With the pinned version not installed, the name means the pin.
+	if out := mustTug(t, "plugin", "inspect", "idx"); !strings.Contains(out, "idx 2.0.0") || !strings.Contains(out, "pinned:        2.0.0 in config.yaml\n") {
+		t.Fatalf("plugin inspect of a plugin pinned to a version that is not installed: %s", out)
+	}
 
 	if r := tug(t, "plugin", "inspect", "kubeconfig"); r.code == 0 || !strings.Contains(r.stderr, "built into tug") {
 		t.Fatalf("plugin inspect of a built-in: %+v", r)

@@ -270,6 +270,9 @@ func (a *app) inspectNamed(ctx context.Context, ref string, loaded []plugin.Load
 		}
 		return nil, fmt.Errorf("no plugin %s is installed or linked, and %w", name, errNoIndex)
 	}
+	if pin, ok := a.cfg.Plugins.PluginPin(name); ok && version == "" {
+		ref = name + "@" + pin // the version install would fetch
+	}
 	m, v, err := lookupIndexed(loaded, errs, ref)
 	if err != nil {
 		return nil, err
