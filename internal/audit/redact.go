@@ -120,3 +120,29 @@ func redactWord(w string) string {
 	}
 	return w
 }
+
+// CommandNamespace returns the namespace a kubectl command line acts in:
+// the value of its -n or --namespace flag, "" when it acts in every
+// namespace (-A), or def, the session's namespace, when it names none.
+func CommandNamespace(args []string, def string) string {
+	ns := def
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			return ns
+		case arg == "-A", arg == "--all-namespaces":
+			ns = ""
+		case arg == "-n", arg == "--namespace":
+			if i+1 < len(args) {
+				i++
+				ns = args[i]
+			}
+		case strings.HasPrefix(arg, "--namespace="):
+			ns = strings.TrimPrefix(arg, "--namespace=")
+		case strings.HasPrefix(arg, "-n") && !strings.HasPrefix(arg, "--"):
+			ns = strings.TrimPrefix(strings.TrimPrefix(arg, "-n"), "=")
+		}
+	}
+	return ns
+}

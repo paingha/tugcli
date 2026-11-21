@@ -211,3 +211,143 @@ func TestRedactCommand(t *testing.T) {
 		})
 	}
 }
+
+func TestEntriesJoinResultsToWrites(t *testing.T) {
+	ctx := context.Background()
+	l := New(filepath.Join(t.TempDir(), "audit"))
+	exit := 1
+	for _, e := range []Entry{
+		// Recorded before kinds and namespaces existed.
+		{Time: base, Source: SourceTug, Cluster: "prod", Allowed: AllowedReadWrite, Method: "DELETE", Path: "/api/v1/namespaces/web/pods/a"},
+		{Time: base.Add(time.Minute), Kind: KindWrite, ID: "w1", Source: SourceProxy, Cluster: "prod", Session: "s1", Namespace: "web",
+			Allowed: AllowedUnlocked, Intent: "kubectl delete", Method: "DELETE", Path: "/api/v1/namespaces/web/pods/b"},
+		{Time: base.Add(2 * time.Minute), Kind: KindWrite, ID: "w2", Source: SourceKubectl, Cluster: "prod", Session: "s1", Namespace: "web",
+			Allowed: AllowedUnlocked, Command: []string{"apply", "-f", "x.yaml"}},
+		{Time: base.Add(3 * time.Minute), Kind: KindWrite, ID: "w3", Source: SourceTug, Cluster: "prod", Session: "s1", Namespace: "web",
+			Allowed: AllowedUnlocked, Method: "PATCH", Path: "/apis/apps/v1/namespaces/web/deployments/api"},
+		{Time: base.Add(4 * time.Minute), Kind: KindResult, ID: "w1", Source: SourceProxy, Cluster: "prod", Status: 200},
+		{Time: base.Add(5 * time.Minute), Kind: KindResult, ID: "w2", Source: SourceKubectl, Cluster: "prod", Exit: &exit},
+		{Time: base.Add(6 * time.Minute), Kind: KindResult, ID: "nosuchwrite", Source: SourceTug, Cluster: "prod", Status: 500},
+		{Time: base.Add(7 * time.Minute), Kind: KindRefused, Source: SourceProxy, Cluster: "prod", Session: "s2", Namespace: "kube-system",
+			Method: "DELETE", Path: "/api/v1/namespaces/kube-system/pods/c", Status: 403, Reason: ReasonReadOnly},
+	} {
+		if err := l.Record(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := l.Entries(ctx, Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("Entries = %+v, want 5 entries without the results", got)
+	}
+	refused, w3, w2, w1, old := got[0], got[1], got[2], got[3], got[4]
+	if old.Kind != KindWrite || old.Namespace != "web" {
+		t.Errorf("an entry from before kinds = %+v, want a write in web", old)
+	}
+	if w1.Status != 200 || w1.Exit != nil {
+		t.Errorf("tugd write = %+v, want status 200", w1)
+	}
+	if w2.Exit == nil || *w2.Exit != 1 || w2.Status != 0 {
+		t.Errorf("kubectl write = %+v, want exit 1", w2)
+	}
+	if w3.Status != 0 || w3.Exit != nil || w3.Reason != "" {
+		t.Errorf("a write without a result = %+v, want no outcome", w3)
+	}
+	if refused.Kind != KindRefused || refused.Status != 403 || refused.Reason != ReasonReadOnly {
+		t.Errorf("refused = %+v", refused)
+	}
+
+	kinds := func(entries []Entry) []string {
+		out := make([]string, len(entries))
+		for i, e := range entries {
+			out[i] = e.Kind + "/" + e.Session
+		}
+		return out
+	}
+	tests := []struct {
+		name   string
+		filter Filter
+		want   []string
+	}{
+		{"by session", Filter{Session: "s1"}, []string{"write/s1", "write/s1", "write/s1"}},
+		{"by namespace", Filter{Namespace: "kube-system"}, []string{"refused/s2"}},
+		{"by namespace of an old entry", Filter{Namespace: "web", Session: ""}, []string{"write/s1", "write/s1", "write/s1", "write/"}},
+		{"by kind", Filter{Kinds: []string{KindRefused}}, []string{"refused/s2"}},
+		{"results are not a kind to choose", Filter{Kinds: []string{KindResult}}, []string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := l.Entries(ctx, tt.filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(kinds(got), tt.want) {
+				t.Errorf("Entries(%+v) = %v, want %v", tt.filter, kinds(got), tt.want)
+			}
+		})
+	}
+
+	// A filter on time keeps a write's outcome, recorded later.
+	if got, _ := l.Entries(ctx, Filter{Since: base.Add(time.Minute), Session: "s1"}); len(got) != 3 || got[2].Status != 200 {
+		t.Errorf("Entries since the first write = %+v, want its status", got)
+	}
+}
+
+func TestEntriesJoinResultsAcrossRotation(t *testing.T) {
+	ctx := context.Background()
+	l := New(filepath.Join(t.TempDir(), "audit"), WithMaxSize(300), WithKeep(3))
+	write := Entry{Time: base, Kind: KindWrite, ID: "w1", Source: SourceTug, Cluster: "prod", Allowed: AllowedReadWrite,
+		Method: "DELETE", Path: "/api/v1/namespaces/" + strings.Repeat("x", 150)}
+	if err := l.Record(ctx, write); err != nil {
+		t.Fatal(err)
+	}
+	// Big enough that the result goes in a new file.
+	result := Entry{Time: base.Add(time.Second), Kind: KindResult, ID: "w1", Source: SourceTug, Cluster: "prod" + strings.Repeat("y", 200), Status: 204}
+	if err := l.Record(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(l.rotated(1)); err != nil {
+		t.Fatalf("the log was not rotated: %v", err)
+	}
+	got, err := l.Entries(ctx, Filter{})
+	if err != nil || len(got) != 1 || got[0].Status != 204 {
+		t.Fatalf("Entries = %+v, %v; want the write with status 204", got, err)
+	}
+}
+
+func TestNamespaceOf(t *testing.T) {
+	tests := []struct{ path, want string }{
+		{"/api/v1/namespaces/web/pods/api-0", "web"},
+		{"/apis/apps/v1/namespaces/web/deployments/api/scale", "web"},
+		{"/api/v1/namespaces/web", ""},
+		{"/apis/rbac.authorization.k8s.io/v1/clusterroles/admin", ""},
+		{"/api/v1/nodes/namespaces/x", ""},
+	}
+	for _, tt := range tests {
+		if got := NamespaceOf(tt.path); got != tt.want {
+			t.Errorf("NamespaceOf(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestCommandNamespace(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"delete", "pod", "x"}, "default"},
+		{[]string{"delete", "pod", "x", "-n", "web"}, "web"},
+		{[]string{"delete", "pod", "x", "--namespace=web"}, "web"},
+		{[]string{"delete", "pod", "x", "--namespace", "web"}, "web"},
+		{[]string{"delete", "pod", "x", "-nweb"}, "web"},
+		{[]string{"delete", "pods", "--all", "-A"}, ""},
+		{[]string{"exec", "x", "--", "kubectl", "-n", "other"}, "default"},
+	}
+	for _, tt := range tests {
+		if got := CommandNamespace(tt.args, "default"); got != tt.want {
+			t.Errorf("CommandNamespace(%q, default) = %q, want %q", tt.args, got, tt.want)
+		}
+	}
+}

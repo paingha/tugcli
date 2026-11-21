@@ -1,8 +1,10 @@
 package guard
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -67,11 +69,20 @@ func TestDescribe(t *testing.T) {
 	}
 }
 
-type okTransport struct{ calls int }
+// okTransport answers every request with status, 200 by default, or fails
+// with err.
+type okTransport struct {
+	calls  int
+	status int
+	err    error
+}
 
 func (o *okTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	o.calls++
-	return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+	if o.err != nil {
+		return nil, o.err
+	}
+	return &http.Response{StatusCode: cmp.Or(o.status, 200), Body: http.NoBody}, nil
 }
 
 func TestRoundTripper(t *testing.T) {
@@ -84,22 +95,24 @@ func TestRoundTripper(t *testing.T) {
 		policy  Policy
 		req     *http.Request
 		allowed bool
-		// recorded is how the audit entry says the write was allowed, or ""
-		// when nothing should be recorded.
+		// recorded is how the audit entry says the write was allowed, ""
+		// when it should be refused, and "-" when nothing should be
+		// recorded.
 		recorded string
 	}{
-		{"read on read-only", Policy{ReadOnly: true}, get, true, ""},
+		{"read on read-only", Policy{ReadOnly: true}, get, true, "-"},
 		{"write on read-write", Policy{}, del, true, audit.AllowedReadWrite},
 		{"write on read-only", Policy{ReadOnly: true}, del, false, ""},
 		{"write while unlocked", Policy{ReadOnly: true, UnlockedUntil: now.Add(time.Minute)}, del, true, audit.AllowedUnlocked},
 		{"write after unlock expired", Policy{ReadOnly: true, UnlockedUntil: now.Add(-time.Minute)}, del, false, ""},
+		{"write as unlock expires", Policy{ReadOnly: true, UnlockedUntil: now}, del, false, ""},
 		{"write confirmed", Policy{ReadOnly: true, Confirm: func(string) bool { return true }}, del, true, audit.AllowedConfirmed},
 		{"write declined", Policy{ReadOnly: true, Confirm: func(string) bool { return false }}, del, false, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := tt.policy
-			p.Cluster, p.ClusterID, p.Session = "prod-eu", "aws/1/prod-eu", "a1b2c3d4e5f6"
+			p.Cluster, p.ClusterID, p.Session, p.Intent = "prod-eu", "aws/1/prod-eu", "a1b2c3d4e5f6", "tug restart"
 			p.Now = func() time.Time { return now }
 			rec := &recorder{}
 			p.Audit = rec
@@ -115,21 +128,106 @@ func TestRoundTripper(t *testing.T) {
 			if !tt.allowed && (!errors.As(err, &denied) || next.calls != 0) {
 				t.Fatalf("want DeniedError, got %v (calls %d)", err, next.calls)
 			}
-			if tt.recorded == "" {
-				if len(rec.entries) != 0 {
-					t.Fatalf("recorded %+v, want nothing", rec.entries)
-				}
-				return
-			}
-			want := audit.Entry{
+			base := audit.Entry{
 				Time: now, Source: audit.SourceTug, Cluster: "prod-eu", ClusterID: "aws/1/prod-eu", Session: "a1b2c3d4e5f6",
-				Allowed: tt.recorded, Method: http.MethodDelete, Path: "/api/v1/namespaces/default/pods/x",
+				Namespace: "default", Intent: "tug restart", Method: http.MethodDelete, Path: "/api/v1/namespaces/default/pods/x",
 			}
-			if len(rec.entries) != 1 || !reflect.DeepEqual(rec.entries[0], want) {
+			var want []audit.Entry
+			switch tt.recorded {
+			case "-":
+			case "":
+				refused := base
+				refused.Kind, refused.Reason = audit.KindRefused, audit.ReasonReadOnly
+				want = []audit.Entry{refused}
+			default:
+				write, result := base, base
+				write.Kind, write.Allowed = audit.KindWrite, tt.recorded
+				result.Kind, result.Status = audit.KindResult, 200
+				if len(rec.entries) == 2 {
+					write.ID, result.ID = rec.entries[0].ID, rec.entries[0].ID
+				}
+				want = []audit.Entry{write, result}
+				if write.ID == "" {
+					t.Errorf("the write has no ID: %+v", rec.entries)
+				}
+			}
+			if !reflect.DeepEqual(rec.entries, want) {
 				t.Fatalf("recorded %+v, want %+v", rec.entries, want)
 			}
 		})
 	}
+}
+
+func TestRoundTripperRecordsOutcomes(t *testing.T) {
+	refused := errors.New("connection refused")
+	tests := []struct {
+		name   string
+		next   *okTransport
+		status int
+		reason string
+	}{
+		{"forbidden by RBAC", &okTransport{status: http.StatusForbidden}, http.StatusForbidden, ""},
+		{"exec upgraded", &okTransport{status: http.StatusSwitchingProtocols}, http.StatusSwitchingProtocols, ""},
+		{"no answer", &okTransport{err: refused}, 0, audit.ReasonNoResponse},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			del, _ := http.NewRequestWithContext(ctx, http.MethodDelete, "https://k8s/api/v1/namespaces/default/pods/x", nil)
+			rec := &recorder{}
+			resp, err := Wrap(tt.next, &Policy{Cluster: "dev", Audit: rec}).RoundTrip(del)
+			cancel()
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if (tt.next.err != nil) != (err != nil) {
+				t.Fatalf("RoundTrip = %v, want the transport's answer", err)
+			}
+			if len(rec.entries) != 2 {
+				t.Fatalf("recorded %+v, want the write and its result", rec.entries)
+			}
+			res := rec.entries[1]
+			if res.Kind != audit.KindResult || res.ID != rec.entries[0].ID || res.Status != tt.status || res.Reason != tt.reason {
+				t.Fatalf("result = %+v, want status %d, reason %q", res, tt.status, tt.reason)
+			}
+		})
+	}
+}
+
+// A refusal or an outcome the audit log cannot take changes nothing: the
+// write was refused, or has been sent, already.
+func TestRoundTripperLogsWhatItCannotRecord(t *testing.T) {
+	var logged strings.Builder
+	log := slog.New(slog.NewTextHandler(&logged, nil))
+	rec := &failAfter{n: 1}
+	del, _ := http.NewRequest(http.MethodDelete, "https://k8s/api/v1/namespaces/default/pods/x", nil)
+	resp, err := Wrap(&okTransport{}, &Policy{Cluster: "dev", Audit: rec, Log: log}).RoundTrip(del)
+	if err != nil {
+		t.Fatalf("RoundTrip = %v, want the write sent once it was recorded", err)
+	}
+	resp.Body.Close()
+	resp, err = Wrap(&okTransport{}, &Policy{Cluster: "dev", ReadOnly: true, Audit: &failAfter{}, Log: log}).RoundTrip(del)
+	if resp != nil {
+		resp.Body.Close()
+	}
+	var denied *DeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("RoundTrip on read-only = %v, want DeniedError", err)
+	}
+	if n := strings.Count(logged.String(), "recording in the audit log"); n != 2 {
+		t.Fatalf("logged %d failures, want 2:\n%s", n, logged.String())
+	}
+}
+
+// failAfter records n entries and then fails.
+type failAfter struct{ n int }
+
+func (f *failAfter) Record(context.Context, audit.Entry) error {
+	if f.n == 0 {
+		return errors.New("no space left on device")
+	}
+	f.n--
+	return nil
 }
 
 func TestRoundTripperBelowABasePath(t *testing.T) {
@@ -190,7 +288,7 @@ func TestWritesAreRecordedOrNotSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if len(rec.entries) != 1 || rec.entries[0].Path != "/api/v1/namespaces/default/pods/x/exec" {
+	if len(rec.entries) != 2 || rec.entries[0].Path != "/api/v1/namespaces/default/pods/x/exec" {
 		t.Fatalf("recorded %+v, want the path without its query", rec.entries)
 	}
 
@@ -212,7 +310,7 @@ func TestWritesAreRecordedOrNotSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if len(rec.entries) != 1 || rec.entries[0].Path != "/api/v1/namespaces/default/pods/x" {
+	if len(rec.entries) != 2 || rec.entries[0].Path != "/api/v1/namespaces/default/pods/x" {
 		t.Fatalf("recorded %+v, want the path below the base", rec.entries)
 	}
 }

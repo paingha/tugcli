@@ -38,6 +38,9 @@ terminal. Any command not listed here is passed to
 | [`tug why`](/docs/reference/commands/workloads#tug-why) | Explain why a workload or any other object isn't ready, and what to do next. |
 | [`tug tree`](/docs/reference/commands/workloads#tug-tree) | Show what a workload or any other object owns, with the health of each part. |
 | [`tug support bundle`](/docs/reference/commands/workloads#tug-support-bundle) | Collect an object's or a namespace's YAML, diagnosis, events, logs and nodes into a redacted archive. |
+| [`tug pick`](/docs/reference/commands/shortcuts#tug-pick) | Fuzzy-pick an object, then run why, tree, logs, describe or pf on it. |
+| [`tug bookmark`](/docs/reference/commands/shortcuts#tug-bookmark) | Save objects and places under short names, and open them from any terminal. |
+| [`tug open`](/docs/reference/commands/shortcuts#tug-open) | Open the file that defines an object in your editor, or else its live YAML. |
 
 ## Discover
 
@@ -56,6 +59,7 @@ terminal. Any command not listed here is passed to
 | --- | --- |
 | [`tug unlock`](/docs/reference/commands/safety#tug-unlock) | Allow writes on a read-only session for a while. |
 | [`tug lock`](/docs/reference/commands/safety#tug-lock) | Make it read-only again now. |
+| [`tug audit`](/docs/reference/commands/safety#tug-audit) | List what tug let through and refused, and sessions and unlocks. |
 
 ## Other
 
@@ -68,6 +72,7 @@ terminal. Any command not listed here is passed to
 | [`tug daemon`](/docs/reference/commands/other#tug-daemon) | Manage tugd, the local API proxy. |
 | [`tug intelligence`](/docs/reference/commands/other#tug-intelligence) | Keys, prices and usage for the model providers behind `tug why --deep`. |
 | [`tug version`](/docs/reference/commands/other#tug-version) | Print tug's version. |
+| [`tug alias`](/docs/reference/commands/shortcuts#tug-alias) | Name your own shortcuts for tug and kubectl commands. |
 | [`tug completion`](/docs/reference/commands/other#tug-completion) | Generate tab completion for your shell. |
 
 ## Global flags
