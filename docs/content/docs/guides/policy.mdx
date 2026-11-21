@@ -1,0 +1,305 @@
+---
+title: Policy packs with tug check
+description: Check what runs in a cluster against your team's rules, and fail a pipeline only on the ones that matter.
+icon: ListChecks
+---
+
+`tug check` looks at the workloads and other objects in a namespace and
+reports everything that breaks a rule: a container without a memory limit, an
+image from a registry you don't trust, a deployment no PodDisruptionBudget
+covers, a custom resource that isn't Ready. The rules come in **policy
+packs**: versioned YAML files of checks. Packs are data only, with no
+scripting and no plugin code, so a pack can't do anything but describe what
+good looks like.
+
+```bash
+tug check                        # this session's namespace, every pack
+tug check -n payments            # another namespace
+tug check -A                     # every namespace, and kinds that aren't namespaced
+tug check deploy/api             # one object
+tug check --pack platform        # only one pack (repeat --pack for more)
+tug check --list                 # the packs and their checks
+```
+
+check only **reads**, and never reads a Secret's data: for Secrets it reads
+metadata only.
+
+## What you'll see
+
+Each failure is a finding, written the way [`tug why`](/docs/guides/workloads#why-isnt-it-working)
+writes them, named by its pack and check, with the check's remediation as the
+next step:
+
+```console
+$ tug check -n shop
+Checked 11 objects in shop against baseline 1.0.0 and platform 2.1.0: 1 blocking failure and 9 advisory findings.
+
+error    deploy/billing, deploy/checkout, deploy/search and 1 more: platform/team-label [blocking]
+         has no team label
+         next: add a team label to the deployment
+
+warning  pod/scratch, container app: platform/registries
+         runs gcr.io/distroless/static-debian12, from gcr.io, which is not one of the allowed registries: registry.example.com
+         next: push the image to registry.example.com and run it from there
+
+warning  deploy/checkout, container main: baseline/resources
+         sets no cpu or memory request and no memory limit
+         next: set resources.requests.cpu, resources.requests.memory and resources.limits.memory on each container, sized from what `tug top` shows it uses
+```
+
+Objects with the same problem share a finding. Pods, ReplicaSets and Jobs
+that a workload controls aren't reported on their own: the workload's
+template is what to fix, so that's what tug checks. Name one (`tug check
+pod/api-7d9f-x2x4z`) to check it anyway.
+
+`-o json` and `-o yaml` give the whole report: the packs, how many objects
+were checked, whether it passed, and each finding with its `pack`, `check`
+and `blocking` beside the fields `tug why` gives.
+
+## Advisory and blocking
+
+Every check is **advisory** unless it says `enforcement: blocking`. Advisory
+checks report what they find and never fail the command. When a blocking
+check fails, `tug check` exits 1, so a pipeline can stop on the rules that
+matter and only warn about the rest:
+
+```bash
+tug check -n payments --pack platform || exit 1
+```
+
+Severity (`info`, `warning` or `error`) says how much a finding matters, as it
+does for `tug why`; it doesn't change the exit code. A blocking check of
+severity `info` still fails the command.
+
+## The baseline pack
+
+tug has one pack built in, `baseline`. Its checks are all advisory:
+
+| Check | Severity | Wants |
+| --- | --- | --- |
+| `resources` | warning | Every container asks for CPU and memory and has a memory limit. |
+| `readiness-probe` | warning | Containers of deployments, statefulsets and daemonsets have a readiness probe. |
+| `liveness-probe` | info | The same containers have a liveness probe. |
+| `run-as-non-root` | warning | `runAsNonRoot: true`, on the container or its pod. |
+| `no-privileged` | error | No container runs privileged. |
+| `read-only-root-filesystem` | info | `readOnlyRootFilesystem: true` on every container. |
+| `disruption-budget` | warning | A PodDisruptionBudget covers every workload with two or more replicas. |
+| `topology-spread` | info | Workloads with two or more replicas have a topology spread constraint. |
+
+To make one of them blocking, copy it into a pack of your own and set
+`enforcement: blocking`; then run your pack, or set `policy.default` so the
+baseline no longer runs by default.
+
+## Writing a pack
+
+```yaml title="~/.config/tug/policies/platform.yaml"
+apiVersion: tug.policy/v1alpha1
+kind: PolicyPack
+name: platform
+version: 2.1.0
+description: What the platform team asks of every service.
+checks:
+  - id: team-label
+    severity: error
+    enforcement: blocking
+    description: Deployments say which team owns them.
+    remediation: add a team label to the deployment
+    match:
+      kinds: [Deployment, StatefulSet]
+      excludeNamespaces: [kube-system]
+    requiredLabels: [team]
+
+  - id: registries
+    severity: warning
+    description: Images come from our registries.
+    remediation: push the image to registry.example.com and run it from there
+    imageRegistries:
+      allow: [registry.example.com, ghcr.io/acme]
+
+  - id: databases-ready
+    severity: error
+    description: Databases are ready.
+    match:
+      kinds: [Cluster.postgresql.cnpg.io]
+    conditions: [Ready]
+```
+
+tug reads packs strictly: a misspelt field is an error, and so is a check
+that doesn't say what to check or says two things. `tug check --list` is a
+quick way to see that a pack loads.
+
+| Field | What it is |
+| --- | --- |
+| `apiVersion` | `tug.policy/v1alpha1`. |
+| `kind` | `PolicyPack`. |
+| `name` | The pack's name, in lower case with dashes. `--pack` and `policy.default` use it, and findings are named `<name>/<check id>`. |
+| `version` | The pack's own version, such as `2.1.0`, shown in every report. |
+| `description` | Optional. |
+| `checks[].id` | The check's name within the pack, in lower case with dashes. |
+| `checks[].severity` | `info`, `warning` or `error`. |
+| `checks[].enforcement` | `advisory` (the default) or `blocking`. |
+| `checks[].description` | What the check wants, as a sentence. |
+| `checks[].remediation` | How to fix an object that fails; the finding's next step. A command at the end in backticks gets a line of its own. |
+| `checks[].match` | Which objects the check applies to. See [Matching objects](#matching-objects). |
+
+Then each check has exactly one of the fields below, which says what it
+checks.
+
+### Required labels and annotations
+
+```yaml
+requiredLabels: [team, app.kubernetes.io/name]
+requiredAnnotations: [example.com/on-call]
+```
+
+Each key must be on the object, with a value. Any kind can be checked; the
+default kinds are the workloads (below).
+
+### Image registries
+
+```yaml
+imageRegistries:
+  allow: [registry.example.com, ghcr.io/acme]
+```
+
+Every container's image, init containers included, must come from one of the
+registries, or paths in a registry. `ghcr.io/acme` allows
+`ghcr.io/acme/api:1.4` but not `ghcr.io/acmecorp/api`. An image without a
+registry, such as `nginx`, comes from `docker.io`, as `docker.io/library/nginx`.
+
+### Resources
+
+```yaml
+resources:
+  requests: [cpu, memory]
+  limits: [memory]
+```
+
+Every container must set these requests and limits. Any resource name works,
+such as `ephemeral-storage` or `nvidia.com/gpu`. A limit counts as the request
+too, as Kubernetes uses it for one.
+
+### Probes
+
+```yaml
+probes: [readiness, liveness]   # and startup
+```
+
+Every container must have these probes. The default kinds are deployments,
+statefulsets and daemonsets, since jobs finish and don't need them.
+
+### PodDisruptionBudget coverage
+
+```yaml
+podDisruptionBudget:
+  minReplicas: 2   # skip workloads with fewer; default 1
+```
+
+A PodDisruptionBudget in the workload's namespace must select its pods. A
+budget with an empty selector covers every pod in its namespace. This checks
+deployments, statefulsets and replicasets, and defaults to deployments and
+statefulsets.
+
+### Security context
+
+```yaml
+securityContext:
+  runAsNonRoot: true            # from the container, or else its pod
+  readOnlyRootFilesystem: true
+  privileged: false
+```
+
+Each setting given is a value every container's effective setting must have,
+init containers included. Leave out the ones you don't want checked.
+
+### Topology spread
+
+```yaml
+topologySpread:
+  minReplicas: 2                                # default 1
+  topologyKeys: [topology.kubernetes.io/zone]   # optional
+```
+
+The workload's pods must have a topology spread constraint, on each key if
+you name any.
+
+### Storage classes
+
+```yaml
+storageClasses:
+  allow: [gp3, replicated-ssd]
+  allowDefault: false   # true lets a claim name no class
+```
+
+PersistentVolumeClaims must ask for one of the classes. Add `StatefulSet` to
+`match.kinds` to check statefulsets' volume claim templates too.
+
+### Conditions
+
+```yaml
+match:
+  kinds: [Certificate.cert-manager.io]
+conditions: [Ready]
+```
+
+Each status condition must be there and `True`. It works on any kind, so it
+needs `match.kinds`; it's how to check custom resources.
+
+## Matching objects
+
+```yaml
+match:
+  kinds: [Deployment, Certificate.cert-manager.io]
+  labels: {tier: frontend}
+  excludeNamespaces: [kube-system]   # or namespaces: [payments, orders]
+```
+
+An object must match every part that is set.
+
+- `kinds` are kinds built into Kubernetes, such as `Deployment` or
+  `PersistentVolumeClaim`, or any other kind with its API group, such as
+  `Certificate.cert-manager.io`. Kinds the cluster doesn't serve are skipped.
+  Without `kinds`, each type of check has defaults: deployments,
+  statefulsets, daemonsets, jobs, cronjobs and pods for most.
+- `labels` must all be on the object, with these values.
+- `namespaces` limits the check to those namespaces, and `excludeNamespaces`
+  leaves some out. Use one or the other.
+
+Kinds that aren't namespaced, such as nodes or cluster-wide custom resources,
+are checked with `--all-namespaces` or when you name one.
+
+## Loading packs
+
+List your packs under `policy` in [config.yaml](/docs/reference/configuration#policy):
+
+```yaml title="~/.config/tug/config.yaml"
+policy:
+  packs:
+    - path: policies/platform.yaml          # relative to the config folder
+    - url: https://policies.example.com/payments-1.2.0.yaml
+      sha256: "9f2c..."                     # required for a URL
+  default: [baseline, platform]             # without --pack; default: all
+```
+
+A pack from a URL is downloaded over HTTPS and must match its `sha256`, so it
+can't change under you: when its publisher changes it, `tug check` refuses it
+until you've read the new version and updated the pin. Get the hash with
+`shasum -a 256 payments-1.2.0.yaml` (or `sha256sum` on Linux), and quote it,
+as YAML may otherwise read it as a number. A pinned pack is downloaded once
+and kept in tug's cache folder, named by its hash. A `sha256` on a `path` is
+checked too.
+
+Every pack must load before anything runs, and no two may share a name; a
+pack called `baseline` clashes with tug's own.
+
+## Across clusters
+
+check runs on every cluster with some labels, as `why` and `tree` do, each
+line prefixed with its cluster:
+
+```bash
+tug check -A --pack platform --cluster-selector env=prod
+```
+
+tug exits 1 if a blocking check failed on any cluster, and lists those
+clusters at the end.

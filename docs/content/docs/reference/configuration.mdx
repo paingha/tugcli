@@ -54,6 +54,15 @@ sessions:
 oidc:
   # Where the browser comes back to after an OpenID Connect sign-in.
   listenAddresses: [127.0.0.1:8000, 127.0.0.1:18000]
+
+policy:
+  # Policy packs for tug check, besides the built-in baseline.
+  packs:
+    - path: policies/platform.yaml
+    - url: https://policies.example.com/payments-1.2.0.yaml
+      sha256: "<sha256 of the file>"
+  # The packs tug check runs without --pack. Default: all of them.
+  default: [baseline, platform]
 ```
 
 ## keyring
@@ -138,6 +147,24 @@ oidc:
       default: '["127.0.0.1:8000", "127.0.0.1:18000"]',
       description:
         'Loopback addresses tried, in order, for the browser’s return after tug auth login (it comes back to http://localhost:<port>). Change them only if your identity provider allows other redirect URLs.',
+    },
+  }}
+/>
+
+## policy
+
+<TypeTable
+  type={{
+    packs: {
+      type: '{ path } | { url, sha256 }[]',
+      default: '[]',
+      description:
+        'Policy packs for tug check, besides the built-in baseline. A relative path is taken from the config folder. A url must be https and needs the sha256 of the file, which pins it: a pack that changes is refused until you update the pin. A sha256 on a path is checked too. See Policy packs.',
+    },
+    default: {
+      type: 'string[]',
+      default: 'every pack',
+      description: 'The packs tug check runs without --pack, by name. Leave baseline out to stop it running by default.',
     },
   }}
 />
