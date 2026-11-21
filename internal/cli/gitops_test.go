@@ -396,3 +396,24 @@ func TestGitOpsWithoutFluxOrArgoCD(t *testing.T) {
 		t.Errorf("tug gitops explain apps = %d, stderr %q", r.code, r.stderr)
 	}
 }
+
+func TestGitOpsRevisions(t *testing.T) {
+	a := &app{now: time.Now}
+	for _, tt := range []struct {
+		o    gitops.Object
+		want string
+	}{
+		{gitops.Object{Tool: gitops.Flux, Namespace: "flux-system", Source: &gitops.Ref{Kind: "GitRepository", Name: "fleet", Namespace: "flux-system"},
+			Revision: fleetRevision, Applied: oldRevision}, "source gitrepository/fleet at main@sha1:1a2b3c4, last applied main@sha1:9f8e7d6"},
+		{gitops.Object{Tool: gitops.Flux, Namespace: "shop", Source: &gitops.Ref{Kind: "HelmChart", Name: "shop-podinfo", Namespace: "flux-system"},
+			Revision: "6.7.1", Applied: "6.7.0"}, "source helmchart/shop-podinfo in flux-system at 6.7.1, last applied 6.7.0"},
+		// An Application whose source has no repoURL, such as one whose
+		// sources Argo CD has not resolved yet.
+		{gitops.Object{Tool: gitops.ArgoCD, Revision: "3f2c1a0b9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a"}, "revision 3f2c1a0"},
+		{gitops.Object{Tool: gitops.ArgoCD}, ""},
+	} {
+		if got := a.gitopsRevisions(&tt.o); got != tt.want {
+			t.Errorf("gitopsRevisions(%+v) = %q, want %q", tt.o, got, tt.want)
+		}
+	}
+}

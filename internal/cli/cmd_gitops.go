@@ -349,8 +349,12 @@ func (a *app) gitopsRevisions(o *gitops.Object) string {
 	case o.Repo != "":
 		parts = append(parts, "source "+o.Repo)
 	}
-	if o.Revision != "" {
+	switch {
+	case o.Revision == "":
+	case len(parts) > 0:
 		parts[len(parts)-1] += " at " + gitopsRevision(o.Revision)
+	default:
+		parts = append(parts, "revision "+gitopsRevision(o.Revision))
 	}
 	applied := "last applied "
 	if o.Tool == gitops.ArgoCD {
