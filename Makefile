@@ -2,7 +2,9 @@ SHELL := /bin/bash
 
 MODULE   := github.com/paingha/tugcli
 BIN      := bin/tug
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Only tug's own tags (v1.2.3) name its version; sdk/python/v* tags are the
+# Python SDK's.
+VERSION  ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
 COMMIT   ?= $(shell git rev-parse HEAD 2>/dev/null)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w \
