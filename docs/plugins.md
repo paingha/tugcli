@@ -618,6 +618,8 @@ tug-provider-<name> <operation>
   operation, visible with `tug --debug`.
 - The environment is scrubbed ([section 8](#8-secrets-and-the-environment)),
   and `TUG_PLUGIN=1` is set.
+- A native plugin runs in the operating system's sandbox, with its own
+  empty `TMPDIR` ([the sandbox](#the-sandbox-for-native-plugins)).
 
 tug treats a non-zero exit with an `Error` on stdout as that error, and a
 non-zero exit with nothing on stdout as `Internal`.
@@ -820,7 +822,11 @@ spec:
   secrets:
   - {name: api_token, prompt: "acme API token"}
   env: [ACME_CONFIG]
-  network: [api.acme.example]
+  network: [api.acme.example, "auth.acme.example:8443"]
+  sandbox:
+    tools: [acme]
+    read: ["~/.acme/config.yaml"]
+    write: ["~/.acme/cache"]
   accountConfig:
     type: object
     properties:
@@ -841,7 +847,12 @@ spec:
 | `spec.platforms[].sha256` | no | Leave it out: `tug plugin package` fills it in the archived manifest, and installed plugins must match it. |
 | `spec.secrets` | no | Secrets tug asks for once per account and keeps in the keychain: `name`, `prompt` (what tug asks), and `optional: true` for ones the plugin can do without. The plugin receives these and no others. |
 | `spec.env` | no | Host environment variables passed through to the plugin, such as `AWS_PROFILE`. Everything else is scrubbed. |
-| `spec.network` | no | Hosts the plugin talks to. Shown to users before they install. tug enforces it for the WebAssembly build, which can reach only these hosts, over https; entries must then be hosts such as `api.example.com`, `*.example.com` or `api.example.com:8443` ([section 11](#the-network)). A native plugin is not held to it. |
+| `spec.network` | no | Hosts the plugin talks to. Shown to users before they install. tug enforces it for the WebAssembly build, which can reach only these hosts, over https; entries must then be hosts such as `api.example.com`, `*.example.com` or `api.example.com:8443` ([section 11](#the-network)). A native plugin's sandbox cannot match host names, so it does not hold the plugin to the hosts, but an entry written as `host:port` lets it connect to that port. |
+| `spec.sandbox.tools` | no | Programs the plugin runs, such as `tsh`: a name, looked up on the plugin's `PATH` when it starts, or a path. The sandbox lets the plugin run only itself, its `#!` interpreter and these. |
+| `spec.sandbox.read` | no | Files and directories the plugin and its tools read beyond the plugin directory and the system's files, such as `~/.tsh`. |
+| `spec.sandbox.write` | no | Files and directories they also write. Everything else is read-only or out of reach, apart from the plugin's private `TMPDIR`. |
+| `spec.sandbox.sockets` | no | Unix sockets they connect to, such as a daemon's. |
+| `spec.sandbox.ports` | no | TCP ports they connect to besides 443, for any host. |
 | `spec.accountConfig` | no | A JSON Schema for the account settings. `tug plugin describe` and `tug plugin install` list its `properties`, and `tug import` warns about `--set` keys that are not among them, unless `additionalProperties` allows others. tug does not check the values. |
 | `spec.minTugVersion` | no | The oldest tug the plugin works with, such as `0.4.0`. A released tug refuses a plugin that needs a newer one when it finds, links or installs it; development builds accept every plugin. |
 
@@ -853,6 +864,14 @@ about them, so a misspelt field (`secret:` for `secrets:`) shows up as
 Keep the manifest and `Info()` in step: tug takes the name, version,
 capabilities and secrets from the manifest, and the conformance suite checks
 the name and capabilities that `describe` returns.
+
+Paths in `spec.sandbox` start with `/`, with `~/` for the home directory, or
+with an environment variable the plugin receives, such as `$TELEPORT_HOME`.
+tug expands them with the plugin's own environment when it starts the
+plugin, and leaves out a path whose variables are unset. They may not contain
+`..`. A plugin that only calls an HTTPS API on port 443 needs no
+`spec.sandbox` at all; [the sandbox](#the-sandbox-for-native-plugins) says
+what every plugin gets. A WebAssembly build ignores `spec.sandbox`.
 
 ## 8. Secrets and the environment
 
@@ -890,11 +909,94 @@ get only the following, and WebAssembly plugins less
 Variables are passed only when they are set. So `TUG_SECRET_*`, cloud
 credentials in the environment and anything else stay with tug unless you
 declare them. Prefer secrets for anything sensitive: they live in the keychain
-rather than in shell profiles.
+rather than in shell profiles. In the sandbox, `TMPDIR` is the plugin's own
+temporary directory rather than tug's.
 
 **Network.** List the hosts you call in `spec.network`. Users see them before
-they install your plugin. tug does not restrict a native plugin's network; a
-WebAssembly build can reach only those hosts ([section 11](#the-network)).
+they install your plugin. A native plugin's sandbox limits the TCP ports it
+connects to, not the hosts; a WebAssembly build can reach only those hosts
+([section 11](#the-network)).
+
+### The sandbox for native plugins
+
+On Linux and macOS, tug runs every native plugin in the operating system's
+sandbox, so that a plugin which is buggy or malicious reaches only what it
+needs: its
+own directory, the system files every program reads, a private temporary
+directory, TCP port 443, and what its manifest declares in `spec.sandbox`. It
+cannot read your home directory, other plugins' files, tug's catalog or
+session kubeconfigs, nor, unless it declares one, connect to another
+program's Unix socket. One-shot calls, serve mode
+and `tug plugin test` all run the plugin the same way. Each process gets a
+new empty directory as `TMPDIR`, which tug removes when the process exits.
+
+| | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| How | tug runs itself as the hidden `tug plugin-sandbox-exec`, which restricts its own process with Landlock and a seccomp filter and then executes the plugin, which inherits both | `sandbox-exec` runs the plugin with a profile tug generates, which denies everything by default on top of Apple's base profile, `system.sb` | No sandbox |
+| Read | The plugin directory; system libraries (`/lib`, `/lib64`, `/usr/lib` and the like) and the rest of `/usr`; CA certificates, `/etc/resolv.conf`, `hosts`, `nsswitch.conf`, `passwd`, `group`, the time zone and the dynamic linker's cache; `$SSL_CERT_FILE` and `$SSL_CERT_DIR`; the directory of each tool; `spec.sandbox.read` and `write` | The plugin directory; what `system.sb` allows, such as `/System`, `/usr/lib` and `/usr/share`; CA certificates, `hosts` and `resolv.conf`; Homebrew's libraries; the directory of each tool; `spec.sandbox.read` and `write` | Everything the user can |
+| Write | `TMPDIR`, `/dev/null` and `spec.sandbox.write` | `TMPDIR`, `/dev/null` and `spec.sandbox.write` | Everything the user can |
+| Run | The plugin, its `#!` interpreter (and, for `/usr/bin/env`, the program it runs) and `spec.sandbox.tools` | The same; programs in `/usr/bin` such as `python3` may also run the developer tools `xcode-select` chose, since they are shims for them | Anything |
+| Network | TCP connections to ports 443 and 53, `spec.sandbox.ports`, the ports of `host:port` entries in `spec.network` and those of the proxy variables (`HTTPS_PROXY` and the like), on any host. No listening on TCP. UDP is not restricted. | TCP connections to the same ports, on any host; DNS through the system's resolver and UDP port 53; no listening | Anything |
+| Unix sockets | None, unless `spec.sandbox.sockets` names one; then any, because Landlock cannot tell sockets apart | Those in `spec.sandbox.sockets`, and the system's resolver and log | Any |
+| System calls | seccomp refuses `ptrace` and reading other processes' memory, mounts, new namespaces (`unshare`, `setns`, namespace flags to `clone`), loading kernel modules, `kexec`, `bpf`, `perf_event_open`, `io_uring`, `userfaultfd`, the kernel keyrings, `open_by_handle_at`, `reboot`, swap, process accounting, the kernel log and setting the clock; `clone3` fails with `ENOSYS` so that callers fall back to `clone` | What `system.sb` allows | Any |
+
+What Linux enforces depends on the kernel. Landlock needs Linux 5.13 or later
+with Landlock turned on (`landlock` is then listed in
+`/sys/kernel/security/lsm`). Before Linux 5.19 (ABI 2) it refuses moving files
+between directories even where the plugin may write, and before 6.2 (ABI 3)
+it cannot stop the plugin truncating a file it may not write. Network rules
+need Linux 6.7 (ABI 4), and keeping the plugin from signalling other
+processes and from abstract Unix sockets needs 6.12 (ABI 6). Where a part is
+missing, as in some containers, tug runs the plugin with what the kernel has,
+and says what is missing in the debug log (`tug --debug`). It does not fail.
+
+On macOS, Apple has marked `sandbox-exec` deprecated since macOS 10.12, but
+it still ships it and uses its profile language for its own services. If
+`/usr/bin/sandbox-exec` is missing or does not work, for example because tug
+itself runs in another sandbox, tug runs plugins without one and says so in
+the debug log. On Windows there is no sandbox, and the debug log says that
+too; plugins there rely on the process boundary and the scrubbed environment.
+
+**Declaring what the plugin needs.** A plugin that calls an HTTPS API needs
+nothing. One that runs a vendor CLI declares it and what it reads and writes,
+as the Teleport plugin does:
+
+```yaml
+spec:
+  env: [TELEPORT_HOME]
+  sandbox:
+    tools: [tsh]                          # on the plugin's PATH
+    write: ["~/.tsh", "$TELEPORT_HOME"]   # tsh refreshes its profiles
+    ports: [3023, 3080]                   # a self-hosted proxy
+```
+
+The tools run in the same sandbox as the plugin, so declare what they need
+too. Write implies read. A tool that talks to a daemon declares its socket in
+`spec.sandbox.sockets`, as the Tailscale plugin does with tailscaled's. A
+plugin written as a shell script declares the programs it runs, such as
+`cat` or `sed`; on macOS, `/bin/sh` writes here-documents (`<<EOF`) to
+`/tmp`, which the sandbox refuses, so print with `printf` instead.
+
+**Turning it off.** Users can run a plugin that needs more than the sandbox
+allows without it, or turn the sandbox off, in tug's `config.yaml`:
+
+```yaml
+plugins:
+  sandbox:
+    enabled: true          # the default; false runs every plugin without it
+    exclude: [teleport]    # plugins that run without the sandbox
+```
+
+When a sandboxed plugin fails with an error that reads like a refusal
+(`permission denied`, `operation not permitted`) or exits without answering,
+tug's error has a hint that names `plugins.sandbox.exclude`.
+`tug plugin describe` and `tug plugin install` show what the plugin may reach
+in the sandbox, or why it runs without one, and `tug --debug` logs what the
+sandbox enforces each time a plugin starts.
+
+A plugin's WebAssembly build ([section 11](#11-webassembly-plugins)) does
+not run as a process, so none of this applies to it: tug runs the module
+itself, in a stricter sandbox of its own.
 
 ## 9. Testing
 
@@ -940,7 +1042,8 @@ are complete examples.
 ### tug plugin test
 
 `tug plugin test <name>` runs the conformance suite against a linked or
-installed plugin (or a built-in), with the same scrubbed environment tug uses.
+installed plugin (or a built-in), with the same scrubbed environment and
+[sandbox](#the-sandbox-for-native-plugins) tug uses.
 
 ```bash
 tug plugin test acme                                      # without an account: checks that need data are skipped
@@ -1119,8 +1222,9 @@ tug plugin install https://github.com/acme/tug-provider-acme/releases/download/v
    archived manifest, and refuses an archive with neither; a module is also
    compiled, and refused if tug cannot run it;
 5. shows the publisher, homepage, capabilities, secrets, environment, network
-   hosts, platforms and how the plugin will run, and asks you to confirm.
-   `--yes` skips the question; without a terminal, `--yes` is required;
+   hosts, platforms and how the plugin will run, including what it may
+   reach in the sandbox, and asks you to confirm. `--yes` skips the
+   question; without a terminal, `--yes` is required;
 6. installs into `plugins/<name>/<version>/` under tug's data directory
    (`$TUG_HOME/data` when `TUG_HOME` is set, otherwise
    `$XDG_DATA_HOME/tug`, `~/.local/share/tug`, or `%LOCALAPPDATA%\tug` on
@@ -1291,8 +1395,11 @@ sandbox tug has:
 - no programs, no signals and no environment but what the manifest declares;
 - a memory limit, and a timeout that stops the module wherever it is.
 
-A native plugin runs as a process with your user's access. A plugin that only
-calls HTTPS APIs, as most do, loses nothing as WebAssembly.
+A native plugin runs as a process, in the operating system's sandbox where
+there is one ([section 8](#the-sandbox-for-native-plugins)), which still
+lets it reach any host on its ports and the files, programs and sockets its
+manifest declares. A plugin that only calls HTTPS APIs, as most do, loses
+nothing as WebAssembly.
 
 ### Build it
 
@@ -1533,8 +1640,9 @@ sha256 it printed.
 ### Any language
 
 A plugin is any executable that follows [section 6](#6-protocol-reference).
-This shell plugin needs nothing but `/bin/sh`. It declares no secrets, lists
-one cluster, and delegates credentials to a vendor's exec plugin:
+This shell plugin needs nothing but `/bin/sh` and `cat`. It declares no
+secrets, lists one cluster, and delegates credentials to a vendor's exec
+plugin:
 
 ```sh
 #!/bin/sh
@@ -1585,6 +1693,7 @@ spec:
   - {os: darwin, arch: amd64, bin: tug-provider-lab}
   - {os: linux, arch: amd64, bin: tug-provider-lab}
   - {os: linux, arch: arm64, bin: tug-provider-lab}
+  sandbox: {tools: [cat]}   # it reads requests with cat
 ```
 
 ```bash
@@ -1618,10 +1727,10 @@ unknown to every other command, which then reports
 
 **What does tug see?** `tug plugin describe acme` runs `describe` and prints
 the manifest as tug reads it: publisher, capabilities, secrets, environment,
-network hosts, platforms, how it runs, account settings, the description,
-protocols and the executable or WebAssembly module it will run. It warns when
-`describe` and the manifest disagree on the name, and about manifest fields
-it does not know.
+network hosts, platforms, how it runs (in the sandbox, with what it may
+reach), account settings, the description, protocols and the executable or
+WebAssembly module it will run. It warns when `describe` and the manifest
+disagree on the name, and about manifest fields it does not know.
 
 **What did the plugin say?** `tug --debug <command>` logs each plugin call
 with its operation, duration and error, and every line the plugin wrote to
@@ -1647,8 +1756,9 @@ echo '{"apiVersion":"provider/v1alpha1","kind":"ListRequest","account":{"id":"de
 {"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[{"id":"dev","name":"dev","region":"eu-west","endpoints":{"public":"https://127.0.0.1:6443"},"labels":{"env":"dev","team":"platform"}}]}
 ```
 
-It runs with your full environment this way, not the scrubbed one: if it works
-here but not under tug, declare the variable it needs in `spec.env`. A
+It runs with your full environment this way, not the scrubbed one, and outside
+the sandbox: if it works here but not under tug, declare the variable it needs
+in `spec.env`, or the file, program, socket or port in `spec.sandbox`. A
 WebAssembly build needs tug to run it, in its sandbox:
 `tug provider-exec acme list` reads the same request on stdin
 ([section 11](#testing)).
@@ -1678,3 +1788,6 @@ Use it to check the endpoint, CA and credential your plugin returns.
 | `tug_http: GET https://... refused: ... is not in the plugin's spec.network` | A WebAssembly plugin asked for a host its manifest does not list, or not over https. Add the host to `spec.network`. |
 | `plugin acme list ran out of memory: WebAssembly plugins may use 256 MiB` | The module needs more memory. Use less, or raise `plugins.wasm.memoryLimitMiB` in `config.yaml`. |
 | `the module imports gojs.runtime.wasmExit, which tug does not provide` | The module was built for another host, here `GOOS=js`. Build it with `GOOS=wasip1 GOARCH=wasm`. |
+| `hint: tug's sandbox may have stopped acme; to run it without one, add acme to plugins.sandbox.exclude in config.yaml` | The plugin, or a program it runs, reached for a file, program, socket or port that [the sandbox](#the-sandbox-for-native-plugins) does not allow. Declare it in `spec.sandbox`; until a fixed plugin is out, users can exclude it. `tug --debug` shows what the sandbox enforces. |
+| A tool the plugin runs is not found, or gets `permission denied`, only under tug | The tool is not in `spec.sandbox.tools`, or its directory is not on the `PATH` tug was started with. |
+| `cannot create temp file for here document: Operation not permitted` | A shell script uses a here-document (`<<EOF`) on macOS, where `/bin/sh` writes it to `/tmp`, outside the sandbox's `TMPDIR`. Print with `printf` instead. |
