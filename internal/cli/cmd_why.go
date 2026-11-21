@@ -18,6 +18,10 @@ import (
 type whyOptions struct {
 	namespace string
 	output    string
+	deep      bool
+	yes       bool
+	provider  string
+	model     string
 }
 
 func newWhyCmd(a *app) *cobra.Command {
@@ -41,12 +45,24 @@ ownerReferences, with the diagnosis above for each workload it owns, and at
 recent Warning events about all of it.
 
 why only reads, and never reads a Secret's data. It exits 1 when the target is
-not healthy, as doctor does when a check fails, so scripts can wait on it.`,
+not healthy, as doctor does when a check fails, so scripts can wait on it.
+
+--deep, once turned on in config.yaml (intelligence.enabled), also asks a
+model for an explanation: Claude, OpenAI, Mistral or any OpenAI-compatible
+endpoint. tug collects bounded evidence (the diagnosis, what the target owns,
+recent events and the last lines of failing containers' logs), replaces
+secrets in it with placeholders, and shows it, with the estimated cost, before
+asking to send it. The answer separates facts, each citing the evidence, from
+hypotheses, suggests next steps that only read, and lists any change apart, as
+needing your approval; tug runs nothing it suggests. See tug intelligence for
+keys, prices and usage.`,
 		Example: `  tug why api
   tug why sts/db -n data
   tug why job/migrate -o json
   tug why certificate/web-tls          # a custom resource and what it owns
-  tug why cronjob/nightly-backup       # judged by its newest job`,
+  tug why cronjob/nightly-backup       # judged by its newest job
+  tug why billing --deep               # show the evidence and cost, ask, then explain
+  tug why billing --deep --provider openai --model gpt-6.2-sol`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := render.ParseFormat(o.output)
@@ -55,6 +71,10 @@ not healthy, as doctor does when a check fails, so scripts can wait on it.`,
 			}
 			if format == render.FormatName {
 				return errors.New("why supports -o table, json or yaml")
+			}
+			deep, err := a.prepareDeep(o)
+			if err != nil {
+				return err
 			}
 			ctx := cmd.Context()
 			env, err := a.opsEnv(ctx, o.namespace)
@@ -65,20 +85,23 @@ not healthy, as doctor does when a check fails, so scripts can wait on it.`,
 			if err != nil {
 				return err
 			}
-			o, err := a.resolveObject(ctx, env, clients, mapper, args[0])
+			obj, err := a.resolveObject(ctx, env, clients, mapper, args[0])
 			if err != nil {
 				return err
 			}
-			d, err := ops.WhyObject(ctx, clients, o, ops.WhyOptions{
+			d, err := ops.WhyObject(ctx, clients, obj, ops.WhyOptions{
 				Now:               a.now,
 				ExplicitNamespace: env.namespace != env.session.State.Namespace,
 			})
 			if err != nil {
 				return err
 			}
-			if format != render.FormatTable {
+			switch {
+			case deep != nil:
+				err = a.whyDeep(ctx, env, clients, obj, d, format, deep)
+			case format != render.FormatTable:
 				err = render.Structured(a.stdout, format, d)
-			} else {
+			default:
 				err = a.printWhy(d)
 			}
 			if err == nil && !d.Healthy {
@@ -89,6 +112,10 @@ not healthy, as doctor does when a check fails, so scripts can wait on it.`,
 	}
 	cmd.Flags().StringVarP(&o.namespace, "namespace", "n", "", "namespace (default: the session's)")
 	cmd.Flags().StringVarP(&o.output, "output", "o", "", "output format: table, json or yaml")
+	cmd.Flags().BoolVar(&o.deep, "deep", false, "also ask a model to explain the evidence, after showing it and asking (needs intelligence.enabled in config.yaml)")
+	cmd.Flags().BoolVarP(&o.yes, "yes", "y", false, "with --deep, send the evidence without asking")
+	cmd.Flags().StringVar(&o.provider, "provider", "", "with --deep, the provider to ask: anthropic, openai, mistral or custom (default: intelligence.provider)")
+	cmd.Flags().StringVar(&o.model, "model", "", "with --deep, the model to ask (default: intelligence.model, or the provider's default)")
 	return cmd
 }
 
