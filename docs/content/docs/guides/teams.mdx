@@ -1,0 +1,239 @@
+---
+title: Team catalogs
+description: Share cluster names, labels, provider accounts, plugin indexes and safety policies across a team, without sharing a single credential.
+icon: Users
+---
+
+A **team catalog** is a small signed file in which a team says how its
+clusters should look in everyone's tug: what each one is called, its aliases
+and labels, which provider accounts to import, which plugin indexes are
+approved, and which **policies** make clusters read-only. Everyone who follows
+it sees the same names and the same safety rules.
+
+A team catalog never carries credentials. Each person still imports the
+team's accounts and reaches every cluster as **themselves**, through their own
+cloud sign-in or OpenID Connect identity, so what they may do on a cluster is
+decided by the cluster, as before.
+
+<Callout type="warn" title="Catalog administration grants no Kubernetes permission">
+  Whoever can publish a team catalog can rename and relabel clusters in tug
+  and make tug stricter, nothing more. It does not give them, or anyone who
+  follows the catalog, access to a cluster or any permission on one. Those
+  come only from each cluster's own RBAC and your provider's IAM. Likewise,
+  a policy only changes what tug's guard allows; it is not access control.
+</Callout>
+
+## Follow a team
+
+Your team gives you the catalog's address and its public key:
+
+```console
+$ tug team add platform https://teams.example.com/platform/team.yaml --public-key 3q2+7w...
+team platform version 4: Payments platform
+  from:           https://teams.example.com/platform/team.yaml
+  signed by:      sha256:b60083ce0e617276
+  accounts:       aws/platform
+  clusters:       3 named or labelled
+  plugin indexes: platform/acme https://plugins.example.com/index.yaml
+  policies:       production-read-only (env=prod: read-only, unlocks up to 30m)
+                  staging-write (env=staging: read-write)
+Changes:
+  + account aws/platform: settings regions=eu-west-1
+  + cluster pay-prod: renamed from arn:aws:eks:eu-west-1:123456789012:cluster/payments; aliases pp; labels env=prod,team=payments
+  + plugin index platform/acme: https://plugins.example.com/index.yaml, signed by sha256:b5acfb0380dcd9f5
+  + policy production-read-only: env=prod: read-only, unlocks up to 30m
+  + policy staging-write: env=staging: read-write
+Not in your catalog yet, named and labelled once tug sync lists them: gpu-train
+Follow team platform's catalog and apply it? [y/N] y
+Added team platform, version 4: 5 changes
+```
+
+tug fetches the catalog, checks its signature against the key, shows what it
+can do and what it would change, and asks before trusting it. Without a
+terminal, pass `--yes`. Then list the clusters of the team's accounts with
+your own credentials:
+
+```bash
+tug sync
+```
+
+A catalog kept in a git repository works the same way. tug makes a shallow
+clone with your own git credentials (your credential helper or ssh agent):
+
+```bash
+tug team add platform --git git@github.com:acme/tug-team.git --path platform.yaml --ref main --public-key 3q2+7w...
+```
+
+Teams can also be listed under [`teams`](/docs/reference/configuration#teams)
+in `config.yaml`, for machines set up by a script.
+
+## Keep up to date
+
+```bash
+tug team sync            # every team
+tug team sync platform   # one
+```
+
+A new version is shown as a summary of what it changes, and applies only when
+you say yes (`--yes` skips the question; without a terminal it is required).
+When the catalog cannot be fetched, or does not check out, tug says so and
+keeps using the **last good version**, so names, labels and policies keep
+working offline. tug refuses:
+
+- a catalog whose signature does not match the team's key,
+- a version lower than the one you have, so an old catalog cannot be served
+  again in place of a newer one,
+- a catalog that changed without its version going up.
+
+`tug team ls` lists the teams you follow, with the version you have and when it
+was last checked. `tug team show platform` shows that version, the clusters it
+names here, its policies, and any conflicts.
+
+## Your entries win
+
+The team's entries never overwrite yours. Each case where they would is
+listed as a **conflict** when you sync, and in `tug team show`:
+
+| Yours | The team's | What happens |
+| --- | --- | --- |
+| A label you set with `tug label` | The same label with another value | Yours wins in `tug ls` and selectors |
+| An account you imported with other settings | The same account | Yours is kept as it is |
+| A cluster that already has a name or alias | That name for another cluster | The other cluster keeps its name |
+| Another team's entry for a cluster or account | This team's entry | The first team's stays |
+
+Every entry a team adds records the team and its version: `tug ls -o json`
+shows a cluster's `team` and `aliases`.
+
+## Safety policies
+
+A policy matches clusters by label and says whether they open read-only and
+how long an unlock may last:
+
+```yaml
+policies:
+  - name: production-read-only
+    selector: {env: prod}
+    readOnly: true
+    maxUnlock: 30m
+  - name: staging-write
+    selector: {env: staging}
+  - name: sandbox
+    selector: {env: sandbox}
+```
+
+On a cluster under `production-read-only`:
+
+```console
+$ tug connect pay-prod
+Connected to pay-prod, namespace default, read-only (tug unlock 15m to allow writes)
+$ tug unlock 2h
+tug: an unlock on pay-prod lasts at most 30m, as policy production-read-only of team platform says; run `tug unlock 30m`
+$ tug connect pay-prod --read-write
+tug: pay-prod cannot open read-write: policy production-read-only of team platform limits unlocks to 30m; connect without --read-write and run `tug unlock 30m`
+```
+
+- Policies combine with your own
+  [`guard.readOnlyLabels`](/docs/reference/configuration#guard): a cluster
+  opens read-only when either says so, and the shortest unlock limit wins.
+  Neither the team nor you can make a cluster less safe than the other says.
+- `--read-write` is an unlock without an end, so a policy with `maxUnlock`
+  refuses it.
+- Policies see a cluster's labels with the **team's** labels winning, so a
+  label you set yourself cannot take a cluster out of the team's policy. Your
+  labels can still correct a provider's guess, such as an `env` read from a
+  cluster's name, where the team set none.
+- Through [tugd](/docs/guides/proxy) the same limits apply to kubectl, helm
+  and k9s, since tugd checks the session's unlock.
+
+## Plugin indexes
+
+Indexes the team approves are used by `tug plugin search` and
+`tug plugin install <name>` after your own, under the name `<team>/<index>`,
+such as `platform/acme`. An index you already list in `config.yaml` is not
+added twice. Installing a plugin still shows its publisher, secrets and
+network hosts and asks first.
+
+## Stop following a team
+
+```console
+$ tug team remove platform
+Removed team platform: its policies and plugin indexes no longer apply
+  - account aws/platform: team platform is removed; it stays as your own account, and tug forget aws/platform removes it and its clusters
+  - cluster pay-prod: team platform is removed; it keeps its name, and loses the team's labels and aliases
+```
+
+A team set in `config.yaml` is removed there first; `tug team remove` then
+takes back what it added.
+
+## Publishing a catalog
+
+<Steps>
+<Step>
+
+### Make a signing key
+
+```bash
+tug team keygen        # prints the public key; the private key stays in your keychain
+```
+
+In CI, set `TUG_TEAM_KEY` to the private key instead.
+
+</Step>
+<Step>
+
+### Write the catalog
+
+```yaml title="team.yaml"
+apiVersion: tug.team/v1alpha1
+kind: TeamCatalog
+version: 4                      # raise it with every change you publish
+description: Payments platform
+accounts:                       # imported by each person, with their own credentials
+  - provider: aws
+    account: platform
+    config: {regions: eu-west-1}
+clusters:
+  - match:                      # set providerID or server; every field set must match
+      provider: aws
+      providerID: arn:aws:eks:eu-west-1:123456789012:cluster/payments
+    name: pay-prod
+    aliases: [pp]
+    env: prod
+    labels: {team: payments}
+  - match: {server: https://gpu.example.com}
+    name: gpu-train
+    env: sandbox
+pluginIndexes:
+  - name: acme
+    url: https://plugins.example.com/index.yaml
+    publicKey: <base64 ed25519 public key>
+policies:
+  - name: production-read-only
+    selector: {env: prod}
+    readOnly: true
+    maxUnlock: 30m
+```
+
+`match` picks the cluster out of each person's catalog by what everyone's has
+in common: the provider's ID for the cluster and its API server. Leave out
+`account` unless everyone names the account the same way.
+
+A team catalog cannot carry credentials: tug refuses a catalog whose account
+settings have names like `token`, `secret`, `password` or `apiKey`, and its
+labels cannot set `provider` or `account`.
+
+</Step>
+<Step>
+
+### Sign and publish it
+
+```bash
+tug team sign team.yaml                    # checks it and writes team.yaml.sig
+tug team verify team.yaml --public-key <key>
+```
+
+Publish `team.yaml` and `team.yaml.sig` side by side, on an https server or in
+a git repository.
+
+</Step>
+</Steps>
