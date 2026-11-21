@@ -234,6 +234,12 @@ func TestManifestValidation(t *testing.T) {
 			m.Spec.Platforms = append(m.Spec.Platforms, Platform{OS: WASMOS, Arch: WASMArch, Bin: "a.wasm"})
 			m.Spec.Network = []string{"the server in the account's url setting"}
 		}, "spec.network entry"},
+		{"relative sandbox path", func(m *Manifest) { m.Spec.Sandbox.Read = []string{".tsh"} }, "spec.sandbox.read"},
+		{"sandbox path escaping", func(m *Manifest) { m.Spec.Sandbox.Write = []string{"~/x/../.ssh"} }, `must not contain a ".." component`},
+		{"relative tool path", func(m *Manifest) { m.Spec.Sandbox.Tools = []string{"bin/tsh"} }, "spec.sandbox.tools"},
+		{"empty tool", func(m *Manifest) { m.Spec.Sandbox.Tools = []string{""} }, "spec.sandbox.tools"},
+		{"relative socket", func(m *Manifest) { m.Spec.Sandbox.Sockets = []string{"run/x.sock"} }, "spec.sandbox.sockets"},
+		{"bad port", func(m *Manifest) { m.Spec.Sandbox.Ports = []int{70000} }, "spec.sandbox.ports"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -337,6 +343,44 @@ func TestLoadRefusesAWASMBuildThatIsNot(t *testing.T) {
 	}
 	if _, err := Load(dir, true); err == nil || !strings.Contains(err.Error(), "is not a WebAssembly module") {
 		t.Fatalf("Load of a script listed as WebAssembly = %v", err)
+	}
+}
+
+func TestManifestSandbox(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `apiVersion: tug.plugin/v1alpha1
+kind: ProviderPlugin
+metadata: {name: acme, version: 1.0.0}
+spec:
+  protocols: [provider/v1alpha1]
+  platforms:
+  - {os: linux, arch: amd64, bin: tug-provider-acme}
+  network: [api.acme.example, "auth.acme.example:8443", "the server in the account's url setting"]
+  sandbox:
+    tools: [acme, /opt/acme/bin/acme-helper]
+    read: ["~/.acme", "$ACME_HOME/config"]
+    write: ["~/.acme/cache"]
+    sockets: [/var/run/acme.sock]
+    ports: [3080, 8443]
+    port: [1]
+`
+	if err := os.WriteFile(filepath.Join(dir, ManifestFile), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := m.Spec.Sandbox
+	if !slices.Equal(s.Tools, []string{"acme", "/opt/acme/bin/acme-helper"}) || !slices.Equal(s.Read, []string{"~/.acme", "$ACME_HOME/config"}) ||
+		!slices.Equal(s.Write, []string{"~/.acme/cache"}) || !slices.Equal(s.Sockets, []string{"/var/run/acme.sock"}) {
+		t.Errorf("Spec.Sandbox = %+v", s)
+	}
+	if got, want := m.SandboxPorts(), []uint16{3080, 8443}; !slices.Equal(got, want) {
+		t.Errorf("SandboxPorts() = %v, want %v", got, want)
+	}
+	if !slices.Equal(m.Unknown, []string{"spec.sandbox.port"}) {
+		t.Errorf("Unknown = %v, want [spec.sandbox.port]", m.Unknown)
 	}
 }
 

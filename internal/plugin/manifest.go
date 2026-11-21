@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -67,9 +69,31 @@ type Spec struct {
 	// Env lists host environment variables passed through, e.g. AWS_PROFILE.
 	Env []string `json:"env,omitempty"`
 	// Network lists the hosts the plugin talks to; shown at install time.
+	// An entry written as host:port also lets the plugin connect to that
+	// port in the sandbox.
 	Network []string `json:"network,omitempty"`
+	// Sandbox says what the plugin needs beyond its own directory when tug
+	// runs it in the operating system's sandbox.
+	Sandbox Sandbox `json:"sandbox,omitzero"`
 	// AccountConfig is a JSON Schema for per-account settings.
 	AccountConfig map[string]any `json:"accountConfig,omitempty"`
+}
+
+// Sandbox is spec.sandbox: what a plugin reaches beyond its own directory, a
+// private temporary directory and TCP port 443. Paths start with / or ~/,
+// or with an environment variable the plugin receives, as $NAME or ${NAME}.
+type Sandbox struct {
+	// Tools are programs the plugin runs, such as tsh: a name looked up on
+	// PATH, or a path.
+	Tools []string `json:"tools,omitempty"`
+	// Read lists files and directories the plugin and its tools read.
+	Read []string `json:"read,omitempty"`
+	// Write lists files and directories they also write.
+	Write []string `json:"write,omitempty"`
+	// Sockets lists Unix sockets they connect to, such as a daemon's.
+	Sockets []string `json:"sockets,omitempty"`
+	// Ports lists TCP ports they connect to besides 443.
+	Ports []int `json:"ports,omitempty"`
 }
 
 // Platform is one executable for an OS and architecture.
@@ -229,7 +253,68 @@ func (m *Manifest) Validate() error {
 			errs = append(errs, fmt.Errorf("spec.env %q is not a variable name", e))
 		}
 	}
+	errs = append(errs, m.Spec.Sandbox.validate()...)
 	return errors.Join(errs...)
+}
+
+func (s Sandbox) validate() []error {
+	var errs []error
+	for _, tool := range s.Tools {
+		if tool == "" || (strings.ContainsAny(tool, `/\`) && checkSandboxPath(tool) != nil) {
+			errs = append(errs, fmt.Errorf("spec.sandbox.tools %q must be a program name or a path such as /usr/bin/tsh", tool))
+		}
+	}
+	for _, f := range []struct {
+		name  string
+		paths []string
+	}{{"read", s.Read}, {"write", s.Write}, {"sockets", s.Sockets}} {
+		for _, p := range f.paths {
+			if err := checkSandboxPath(p); err != nil {
+				errs = append(errs, fmt.Errorf("spec.sandbox.%s %q %w", f.name, p, err))
+			}
+		}
+	}
+	for _, port := range s.Ports {
+		if port < 1 || port > 65535 {
+			errs = append(errs, fmt.Errorf("spec.sandbox.ports %d is not a TCP port", port))
+		}
+	}
+	return errs
+}
+
+// checkSandboxPath accepts the path forms spec.sandbox takes: absolute, in
+// the home directory, or starting with an environment variable.
+func checkSandboxPath(p string) error {
+	if !strings.HasPrefix(p, "/") && p != "~" && !strings.HasPrefix(p, "~/") && !strings.HasPrefix(p, "$") {
+		return errors.New("must start with /, ~/ or an environment variable such as $HOME")
+	}
+	if slices.Contains(strings.Split(p, "/"), "..") {
+		return errors.New(`must not contain a ".." component`)
+	}
+	return nil
+}
+
+// SandboxPorts returns the TCP ports, besides 443, that the plugin may
+// connect to in the sandbox: spec.sandbox.ports, and the ports of
+// spec.network entries written as host:port.
+func (m *Manifest) SandboxPorts() []uint16 {
+	var ports []uint16
+	for _, p := range m.Spec.Sandbox.Ports {
+		if p >= 1 && p <= 65535 {
+			ports = append(ports, uint16(p))
+		}
+	}
+	for _, host := range m.Spec.Network {
+		_, port, err := net.SplitHostPort(host)
+		if err != nil {
+			continue
+		}
+		if n, err := strconv.ParseUint(port, 10, 16); err == nil && n > 0 {
+			ports = append(ports, uint16(n))
+		}
+	}
+	slices.Sort(ports)
+	return slices.Compact(ports)
 }
 
 // CheckTugVersion returns an error when the manifest's minTugVersion is
