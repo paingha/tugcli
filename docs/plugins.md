@@ -26,8 +26,9 @@ Contents:
 8. [Secrets and the environment](#8-secrets-and-the-environment)
 9. [Testing](#9-testing)
 10. [Packaging, releasing and installing](#10-packaging-releasing-and-installing)
-11. [Plugins without the SDK](#11-plugins-without-the-sdk)
-12. [Troubleshooting](#12-troubleshooting)
+11. [WebAssembly plugins](#11-webassembly-plugins)
+12. [Plugins without the SDK](#12-plugins-without-the-sdk)
+13. [Troubleshooting](#13-troubleshooting)
 
 ## 1. What a provider plugin is
 
@@ -42,7 +43,9 @@ the operation as its only argument, writes one JSON request to its stdin and
 reads one JSON response from its stdout. Anything the plugin writes to stderr
 goes to tug's log. The process then exits; nothing stays running. Any language
 works. Go has an SDK, [`pkg/provider`](../pkg/provider), which does the
-protocol for you.
+protocol for you. A plugin can also ship a WebAssembly build, one file for
+every platform, which tug runs in a sandbox of its own
+([section 11](#11-webassembly-plugins)).
 
 Write a plugin when your clusters come from an API (a cloud, an internal
 platform, a cluster registry) and you want tug to find them and fetch their
@@ -135,7 +138,7 @@ replace github.com/paingha/tugcli => /home/you/src/tugcli
 Pass `--module github.com/you/tug-provider-acme` to set your module path (the
 default is `example.com/tug-provider-acme`), `--dir` to choose another
 directory (the default is `./tug-provider-<name>`), or `--lang python` for a
-Python plugin ([section 11](#11-plugins-without-the-sdk)).
+Python plugin ([section 12](#12-plugins-without-the-sdk)).
 
 The plugin name must be lower-case letters, digits and dashes, start and end
 with a letter or digit, and be at most 63 characters. It must not be the name
@@ -148,7 +151,7 @@ You get:
 | `main.go` | The plugin: `Info`, `List`, `Credential` and `main`. |
 | `main_test.go` | Unit tests that run each operation in process through `provider.Run`. |
 | `plugin.yaml` | The manifest: name, version, platforms, secrets, settings. |
-| `Makefile` | `build`, `build-all`, `test`, `link`, `conformance`, `package`, `clean`. |
+| `Makefile` | `build`, `build-all`, `wasm`, `test`, `link`, `conformance`, `package`, `clean`. |
 | `.github/workflows/release.yml` | Builds and publishes an archive when you push a `v*` tag. |
 | `.gitignore` | Ignores `bin/` and `dist/`. |
 | `README.md` | A short README for your plugin. |
@@ -277,7 +280,7 @@ make package       # builds every platform, then: tug plugin package . -o dist
 
 ```text
 dist/tug-provider-acme_0.1.0.tar.gz
-  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64
+  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, wasip1/wasm
   sha256:    98b07c5943ae2674b04199c8f1f33cd24fb7ed56b8c03d6f0f9951dcc99b2ee9
 ```
 
@@ -739,7 +742,8 @@ plugin.
 | `credential` timeout | 10 seconds |
 | `rotate` timeout | 60 seconds |
 | Other operations | 30 seconds |
-| After a timeout or Ctrl-C | SIGTERM, then SIGKILL after 2 seconds (Windows: killed at once) |
+| After a timeout or Ctrl-C | SIGTERM, then SIGKILL after 2 seconds (Windows: killed at once); a WebAssembly plugin is stopped at once |
+| WebAssembly memory | 256 MiB (`plugins.wasm.memoryLimitMiB`); see [section 11](#the-sandbox) |
 
 A timed-out call fails as `Unavailable`. Users with slow APIs can change the
 timeout of any operation in tug's `config.yaml`:
@@ -782,6 +786,7 @@ spec:
   - {os: darwin, arch: arm64, bin: bin/darwin_arm64/tug-provider-acme}
   - {os: linux, arch: amd64, bin: bin/linux_amd64/tug-provider-acme}
   - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-acme.exe}
+  - {os: wasip1, arch: wasm, bin: bin/wasm/plugin.wasm}
   secrets:
   - {name: api_token, prompt: "acme API token"}
   env: [ACME_CONFIG]
@@ -802,11 +807,11 @@ spec:
 | `metadata.homepage` | no | Where users can read about it. Shown before install. |
 | `spec.protocols` | yes | Protocol versions the plugin speaks; must include `provider/v1alpha1`. |
 | `spec.capabilities` | no | `list` and `credential`, plus any of `accounts`, `rotate`, `checkAccess` and `serve`. tug assumes `list` and `credential` even when they are missing, calls optional operations only when they are listed here, and runs the plugin in [serve mode](#serve-mode) when `serve` is. |
-| `spec.platforms` | yes | One entry per OS and architecture: `os` and `arch` as in Go (`darwin`, `linux`, `windows`; `amd64`, `arm64`), and `bin`, the executable's path relative to the manifest. tug runs the entry for its own platform. |
+| `spec.platforms` | yes | One entry per OS and architecture: `os` and `arch` as in Go (`darwin`, `linux`, `windows`; `amd64`, `arm64`), and `bin`, the executable's path relative to the manifest. At most one entry may be `{os: wasip1, arch: wasm}`, a WebAssembly module ([section 11](#11-webassembly-plugins)). tug runs the entry for its own platform, or else the WebAssembly one, using the first of them that is built. |
 | `spec.platforms[].sha256` | no | Leave it out: `tug plugin package` fills it in the archived manifest, and installed plugins must match it. |
 | `spec.secrets` | no | Secrets tug asks for once per account and keeps in the keychain: `name`, `prompt` (what tug asks), and `optional: true` for ones the plugin can do without. The plugin receives these and no others. |
 | `spec.env` | no | Host environment variables passed through to the plugin, such as `AWS_PROFILE`. Everything else is scrubbed. |
-| `spec.network` | no | Hosts the plugin talks to. Shown to users before they install; tug does not enforce it. |
+| `spec.network` | no | Hosts the plugin talks to. Shown to users before they install. tug enforces it for the WebAssembly build, which can reach only these hosts, over https; entries must then be hosts such as `api.example.com`, `*.example.com` or `api.example.com:8443` ([section 11](#the-network)). A native plugin is not held to it. |
 | `spec.accountConfig` | no | A JSON Schema for the account settings. `tug plugin describe` and `tug plugin install` list its `properties`, and `tug import` warns about `--set` keys that are not among them, unless `additionalProperties` allows others. tug does not check the values. |
 | `spec.minTugVersion` | no | The oldest tug the plugin works with, such as `0.4.0`. A released tug refuses a plugin that needs a newer one when it finds, links or installs it; development builds accept every plugin. |
 
@@ -839,7 +844,9 @@ declares a secret of that name. On a machine without a keychain, also set
 name is built from the secret name, a name with a dash (`api-token`) cannot be
 supplied this way from most shells; use underscores.
 
-**The environment.** Plugins do not inherit tug's environment. They get only:
+**The environment.** Plugins do not inherit tug's environment. Native plugins
+get only the following, and WebAssembly plugins less
+([section 11](#the-sandbox)):
 
 - `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR`, `USER`;
 - `SSL_CERT_FILE`, `SSL_CERT_DIR`;
@@ -856,7 +863,8 @@ declare them. Prefer secrets for anything sensitive: they live in the keychain
 rather than in shell profiles.
 
 **Network.** List the hosts you call in `spec.network`. Users see them before
-they install your plugin; tug does not restrict the network.
+they install your plugin. tug does not restrict a native plugin's network; a
+WebAssembly build can reach only those hosts ([section 11](#the-network)).
 
 ## 9. Testing
 
@@ -997,12 +1005,15 @@ that the list and credential checks run too.
 ### Package
 
 ```bash
-make package       # make build-all, then tug plugin package . -o dist
+make package       # make build-all wasm, then tug plugin package . -o dist
 ```
 
 `make build-all` cross-compiles, with `CGO_ENABLED=0`, every platform in the
 Makefile's `TARGETS` list, which matches the scaffold's `plugin.yaml`. If you
-add or drop a platform, change both. `tug plugin package [dir] -o <dir>` (the
+add or drop a platform, change both. `make wasm` builds the WebAssembly
+platform ([section 11](#11-webassembly-plugins)); drop its entry from
+`plugin.yaml` and `package`'s prerequisites if your plugin cannot run as
+WebAssembly. `tug plugin package [dir] -o <dir>` (the
 default output is `dist`) then writes `tug-provider-<name>_<version>.tar.gz`
 containing `plugin.yaml` and the binaries, nothing else. The archived manifest
 records each binary's sha256; your source manifest is not changed. The command
@@ -1010,7 +1021,7 @@ prints the archive's path, its platforms and the archive's own sha256:
 
 ```text
 dist/tug-provider-acme_0.1.0.tar.gz
-  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64
+  platforms: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64, wasip1/wasm
   sha256:    98b07c5943ae2674b04199c8f1f33cd24fb7ed56b8c03d6f0f9951dcc99b2ee9
 ```
 
@@ -1056,12 +1067,13 @@ tug plugin install https://github.com/acme/tug-provider-acme/releases/download/v
 2. checks the archive against `--sha256` when given;
 3. refuses links, special files, paths outside the plugin directory, archives
    over 512 MiB or 1,000 entries, and files over 256 MiB;
-4. checks the binary for this machine's OS and architecture against its
-   sha256 in the archived manifest, and refuses an archive with no build for
-   this platform;
+4. checks the build tug will run, the binary for this machine's OS and
+   architecture or else the WebAssembly module, against its sha256 in the
+   archived manifest, and refuses an archive with neither; a module is also
+   compiled, and refused if tug cannot run it;
 5. shows the publisher, homepage, capabilities, secrets, environment, network
-   hosts and platforms, and asks you to confirm. `--yes` skips the question;
-   without a terminal, `--yes` is required;
+   hosts, platforms and how the plugin will run, and asks you to confirm.
+   `--yes` skips the question; without a terminal, `--yes` is required;
 6. installs into `plugins/<name>/<version>/` under tug's data directory
    (`$TUG_HOME/data` when `TUG_HOME` is set, otherwise
    `$XDG_DATA_HOME/tug`, `~/.local/share/tug`, or `%LOCALAPPDATA%\tug` on
@@ -1108,7 +1120,221 @@ it. The signing key lives in tug's credential store; keep a copy somewhere
 safe, since an index signed with a lost key can only be replaced by a new
 key that every user configures again.
 
-## 11. Plugins without the SDK
+## 11. WebAssembly plugins
+
+A plugin can ship a WebAssembly build beside its native executables, or
+instead of them. tug runs it itself, with [wazero](https://wazero.io), so one
+file serves every OS and architecture, and the plugin gets the strictest
+sandbox tug has:
+
+- no files but a private temporary directory, removed after each run;
+- no network but https to the hosts in `spec.network`, sent by tug;
+- no programs, no signals and no environment but what the manifest declares;
+- a memory limit, and a timeout that stops the module wherever it is.
+
+A native plugin runs as a process with your user's access. A plugin that only
+calls HTTPS APIs, as most do, loses nothing as WebAssembly.
+
+### Build it
+
+The Go scaffold is ready for it: `plugin.yaml` lists a `wasip1/wasm`
+platform, and `make wasm` builds it.
+
+```bash
+make wasm    # GOOS=wasip1 GOARCH=wasm go build -trimpath -o bin/wasm/plugin.wasm .
+tug plugin link .
+TUG_SECRET_API_TOKEN=demo_test tug plugin test acme --set clusters=dev=https://127.0.0.1:6443
+```
+
+The platform entry is `{os: wasip1, arch: wasm, bin: bin/wasm/plugin.wasm}`,
+and a manifest may have one. `make package` builds it with the native
+platforms, and `tug plugin package` records its sha256 like any binary's, so
+an archive with only a WebAssembly build installs on every platform.
+
+The code does not change. `provider.Main`, `Run` and serve mode work as
+before, and requests made with `provider.HTTPClient()`, or with
+`http.DefaultClient`, whose transport the SDK replaces in a WebAssembly
+build, go through tug. The repository's example builds the same way:
+`make example-plugin-wasm`.
+
+### Which build tug runs
+
+tug runs the build for its own OS and architecture when the manifest lists
+one and it is built, and the WebAssembly build otherwise. To run the
+WebAssembly build of every plugin that has one, even where a native build
+matches, set in `config.yaml`:
+
+```yaml
+plugins:
+  wasm:
+    prefer: true
+    memoryLimitMiB: 256   # the default
+```
+
+`tug plugin install`, `link` and `describe` say which build runs, on the
+`runs as:` line. tug compiles a module to machine code the first time it runs
+it, which takes about a second for a Go plugin, and keeps the result under
+its cache directory (`wasm/` in `$XDG_CACHE_HOME/tug`), so later runs start
+in milliseconds. `tug plugin install` and `link` compile it at once: install
+refuses a module tug cannot run, and link warns about one.
+
+### The sandbox
+
+A WebAssembly plugin is a WASI preview 1 command. It gets what a process
+gets in [section 6](#invocation): the operation as its argument, after the
+program name `tug-provider-<name>`; the request on stdin; stdout for the
+response and stderr for logs; the same exit codes; and serve mode. Beyond
+that:
+
+| | What the module gets |
+| --- | --- |
+| Files | A directory at `/tmp`, new for each call (in serve mode, for each instance) and removed afterwards. Nothing else: not your home directory, kubeconfigs, or a vendor CLI's configuration. |
+| Environment | `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ` and the variables in `spec.env`, when they are set; `HOME` and `TMPDIR`, both `/tmp`; and `TUG_PLUGIN=1`. No `PATH` or proxy settings, since the module runs no programs and opens no connections. |
+| Network | https to the hosts in `spec.network`, through tug's host functions. No sockets. |
+| Memory | 256 MiB, or `plugins.wasm.memoryLimitMiB`. A module that needs more fails with `Internal: plugin acme list ran out of memory`. |
+| Time | Each operation's timeout ([limits](#limits)) stops the module where it is, even in a loop that never yields, or while it waits for a request or sleeps. Code after that point does not run. |
+| Clocks and randomness | The real clocks, and random bytes from the operating system. |
+| Serve mode | One instance answers every call, one request at a time: a read from stdin blocks every goroutine of a WASI module, so the SDK reads the next request only once it has answered the last. A request that runs out of time ends the instance, and the next call starts a fresh one. |
+
+### The network
+
+For the WebAssembly build, tug enforces `spec.network`: it sends a request
+only when the URL is https and the host is listed. An entry is
+
+- a host name, `api.example.com`, or an IP address, `10.0.0.1`;
+- or `*.example.com`, which covers every name under `example.com` but not
+  `example.com` itself;
+- with a port, `api.example.com:8443`; without one, it allows 443 only.
+
+So a manifest with a WebAssembly build must list hosts, not descriptions such
+as "the server in the account's url setting". tug does not follow redirects:
+the plugin's client does, sending each hop through tug, which checks it like
+any request; Go's `http.Client` does this for you. tug adds no cookies,
+credentials or headers of its own and leaves the plugin's own, such as its
+`Authorization` header, as they are. It checks TLS certificates against the
+system's roots, and uses the proxy in `HTTPS_PROXY`, as for tug's own
+requests. Bodies arrive decoded: tug asks for gzip and removes it, unless the
+plugin sets `Accept-Encoding` itself.
+
+A refused request fails in the plugin with an error such as
+
+```text
+tug_http: GET https://evil.example/v1 refused: evil.example is not in the plugin's spec.network (api.acme.example)
+```
+
+and tug logs a warning that names the plugin and the URL, without its query.
+In Go, `errors.As(err, &he)` with a `*provider.HostError` says why a request
+failed (`he.Errno == provider.HostDenied`), and a timeout matches
+`context.DeadlineExceeded`.
+
+### What a WebAssembly plugin cannot do
+
+- Read files on the machine: a vendor CLI's configuration or credentials,
+  kubeconfigs, certificates. A plugin whose `accounts` reads CLI profiles
+  needs a native build.
+- Run programs, such as a vendor CLI. Returning a `delegate` credential still
+  works, since kubectl runs that program, not the plugin.
+- Reach a host chosen at run time, such as a self-hosted server named in an
+  account setting, unless `spec.network` lists it or a wildcard covers it.
+- Open sockets, or make anything but HTTP requests with a whole body: no
+  WebSockets, no streamed uploads, no trailers and so no gRPC. A request body
+  is at most 8 MiB.
+- Run other goroutines while a request is in flight: a host call blocks the
+  whole module, so requests go one at a time.
+- Use local time: WASI has no time zone database, so `time.Local` is UTC
+  unless the plugin embeds one with `import _ "time/tzdata"`.
+- Use cgo, or packages that need it.
+- Catch SIGTERM. tug stops a module by ending it, so clean-up code does not
+  run.
+
+### Testing
+
+`tug plugin test <name>` runs the conformance suite against the WebAssembly
+build through `tug provider-exec`, which runs the module as its process
+would, and adds one check: the module is a WASI command that imports nothing
+but WASI preview 1 and the `tug_http` functions below, with their
+signatures. In Go tests, `conformance.CheckModule(path)` makes that check
+alone, and setting `Target.Module` adds it to `conformance.Run`. To call a
+module by hand, let tug run it:
+
+```bash
+echo '{"apiVersion":"provider/v1alpha1","kind":"DescribeRequest"}' | tug provider-exec acme describe
+```
+
+`provider-exec` runs whichever build tug would run, in the same sandbox.
+
+### Host function ABI
+
+This is the whole contract between tug and a module, for plugins written in
+other languages such as Rust, TinyGo or Zig. A module imports these functions
+from the module `tug_http`. Every parameter and every result is an `i32`.
+Pointers are byte offsets in the module's exported memory, `memory`; lengths
+are in bytes; and numbers tug writes to memory are little-endian 32-bit
+unsigned integers. Each function returns an errno, 0 for success.
+
+| Function | Parameters | What it does |
+| --- | --- | --- |
+| `request` | `head_ptr, head_len, body_ptr, body_len, handle_ptr` | Sends a request and waits for the response's headers. `head` is JSON, below; `body` is the raw body, of length 0 for none. Writes the response's handle at `handle_ptr`. |
+| `response_head` | `handle, buf_ptr, buf_len, len_ptr` | Writes the length of the response head at `len_ptr` and, when `buf_len` holds it, the head, JSON, at `buf_ptr`. When it does not, returns 8 (short buffer); call again with a buffer that long. |
+| `read_body` | `handle, buf_ptr, buf_len, n_ptr` | Reads up to `buf_len` bytes, at least 1, of the body into `buf_ptr` and writes how many at `n_ptr`. 0 bytes means the body has ended. |
+| `close` | `handle` | Releases the response. Handles are never reused, and tug closes those left open when the instance ends. |
+| `last_error` | `buf_ptr, buf_len, len_ptr` | As `response_head`, for the message of the last call that failed. |
+
+The request head, of which only `url` is required:
+
+```json
+{"method":"POST","url":"https://api.acme.example/v1/tokens","header":{"Authorization":["Bearer ..."],"Content-Type":["application/json"]},"timeoutMillis":10000}
+```
+
+`method` defaults to `GET`. `timeoutMillis`, when set, bounds the whole
+request, its headers and body; the operation's timeout always does. The
+response head:
+
+```json
+{"status":200,"header":{"Content-Type":["application/json"]},"contentLength":1234,"url":"https://api.acme.example/v1/tokens"}
+```
+
+`contentLength` is -1 when it is not known, and `url` is the URL that
+answered. A 3xx status comes back as it is, with its `Location` header.
+
+| errno | Name | Meaning |
+| --- | --- | --- |
+| 0 | ok | Success. |
+| 1 | denied | The URL is not https, or its host is not in `spec.network`. |
+| 2 | invalid | Malformed JSON, method or URL, or a pointer outside the module's memory. |
+| 3 | too large | Over one of the limits below. |
+| 4 | network | DNS, connection, TLS or a broken response. |
+| 5 | timeout | `timeoutMillis` passed, or the operation ended. |
+| 6 | bad handle | No open response has the handle. |
+| 7 | too many | 32 responses are open already; close one. |
+| 8 | short buffer | The buffer is too small; the length needed is at the length pointer. |
+
+| Limit | Value |
+| --- | --- |
+| Request head | 64 KiB |
+| Request body | 8 MiB |
+| Response headers | 1 MiB |
+| Response body | 32 MiB, after decoding |
+| Open responses | 32 per instance |
+
+A call blocks the module until it returns. One request goes:
+
+```text
+request(head, body)          -> handle
+response_head(handle, buf)   -> status and headers
+read_body(handle, buf)       -> n, until n is 0
+close(handle)
+after any errno but 0: last_error(buf) for the message
+```
+
+The Go definitions are `provider.HostModule`, `HostErrno`, `HostRequest`,
+`HostResponse` and the `MaxHost*` limits in
+[`pkg/provider/wasm.go`](../pkg/provider/wasm.go), and the SDK's transport in
+[`http_wasip1.go`](../pkg/provider/http_wasip1.go) uses them. `tug_http` is
+part of `provider/v1alpha1` and changes as the protocol does: new functions
+and fields may come, but signatures do not change.
+
+## 12. Plugins without the SDK
 
 The Python SDK, [sdk/python](../sdk/python), the `tug_provider` package, gives
 Python plugins the same shape as the Go SDK: a `Provider` class with `list`
@@ -1214,7 +1440,7 @@ A real plugin parses the request (with a JSON library: `jq`, or your
 language's own) to read `account`, `secrets` and `clusterID`, and escapes the
 strings it prints. Everything else is the same as with the SDK.
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 **Is tug finding the plugin?** `tug plugin ls` lists every provider with its
 version, kind (`built-in`, `plugin` or `dev plugin`), capabilities and
@@ -1233,13 +1459,16 @@ unknown to every other command, which then reports
 
 **What does tug see?** `tug plugin describe acme` runs `describe` and prints
 the manifest as tug reads it: publisher, capabilities, secrets, environment,
-network hosts, platforms, account settings, the description, protocols and
-the executable it will run. It warns when `describe` and the manifest
-disagree on the name, and about manifest fields it does not know.
+network hosts, platforms, how it runs, account settings, the description,
+protocols and the executable or WebAssembly module it will run. It warns when
+`describe` and the manifest disagree on the name, and about manifest fields
+it does not know.
 
 **What did the plugin say?** `tug --debug <command>` logs each plugin call
 with its operation, duration and error, and every line the plugin wrote to
-stderr. Plugin stderr is not shown without `--debug`.
+stderr. Plugin stderr is not shown without `--debug`. For a WebAssembly
+plugin it also logs each request the module made, with its status, and how
+long compiling the module took.
 
 ```bash
 tug --debug import acme --account demo
@@ -1260,7 +1489,10 @@ echo '{"apiVersion":"provider/v1alpha1","kind":"ListRequest","account":{"id":"de
 ```
 
 It runs with your full environment this way, not the scrubbed one: if it works
-here but not under tug, declare the variable it needs in `spec.env`.
+here but not under tug, declare the variable it needs in `spec.env`. A
+WebAssembly build needs tug to run it, in its sandbox:
+`tug provider-exec acme list` reads the same request on stdin
+([section 11](#testing)).
 
 **Can the user reach the cluster?** `tug doctor <cluster>` checks DNS, TCP,
 TLS against the CA you returned, the credential from `tug auth token`, the API
@@ -1283,3 +1515,7 @@ Use it to check the endpoint, CA and credential your plugin returns.
 | `<name> is a built-in provider; a plugin may replace it only if plugins.allowOverride in config.yaml lists it` | The plugin uses a built-in provider's name. Pick another name. |
 | Changes to `main.go` do not show up | Rebuild (`make build` or `make link`), then `tug sync` to refresh listed data or `tug auth token --refresh` for credentials. |
 | `plugin acme needs tug v0.5.0 or later and this is v0.4.0` | The plugin's `minTugVersion` is newer than tug. Upgrade tug. |
+| `plugin acme has no build for linux/arm64 and no WebAssembly build` | Add the platform, or a WebAssembly build, which runs everywhere ([section 11](#11-webassembly-plugins)). |
+| `tug_http: GET https://... refused: ... is not in the plugin's spec.network` | A WebAssembly plugin asked for a host its manifest does not list, or not over https. Add the host to `spec.network`. |
+| `plugin acme list ran out of memory: WebAssembly plugins may use 256 MiB` | The module needs more memory. Use less, or raise `plugins.wasm.memoryLimitMiB` in `config.yaml`. |
+| `the module imports gojs.runtime.wasmExit, which tug does not provide` | The module was built for another host, here `GOOS=js`. Build it with `GOOS=wasip1 GOARCH=wasm`. |
