@@ -61,6 +61,13 @@ func (p *procInstance) terminate() error { return terminate(p.cmd.Process) }
 func (p *procInstance) kill() error      { return p.cmd.Process.Kill() }
 
 func (r *Runner) callServe(ctx context.Context, op string, request []byte) ([]byte, error) {
+	if r.WASM != nil {
+		// Compile first, as callWASM does: it does not count against op's
+		// timeout, and a caller that gives up stops waiting for it.
+		if _, err := r.wasmHost(ctx); err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout(op))
 	defer cancel()
 	r.srvMu.Lock()
@@ -316,6 +323,10 @@ func (r *Runner) Close() error {
 	r.wasmMu.Lock()
 	h := r.wasm
 	r.wasm = nil
+	if job := r.compiling; job != nil {
+		job.abandoned = true
+		r.compiling = nil
+	}
 	r.wasmMu.Unlock()
 	if h != nil {
 		err = errors.Join(err, h.close())

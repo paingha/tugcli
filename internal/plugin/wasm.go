@@ -59,6 +59,10 @@ type WASMOptions struct {
 	// system's certificate roots and the proxy from the environment. tug
 	// adds no cookies or credentials of its own either way.
 	Transport http.RoundTripper
+
+	// beforeCompile, when set, runs before the module is compiled; tests
+	// use it to make start-up slow.
+	beforeCompile func()
 }
 
 // wasmHost is a WebAssembly plugin compiled and ready to run: one wazero
@@ -339,7 +343,9 @@ func (w *wasmInstance) kill() error { return w.terminate() }
 
 // startWASM starts a module instance in serve mode.
 func (r *Runner) startWASM(stderr io.Writer) (instance, io.WriteCloser, io.ReadCloser, error) {
-	h, err := r.wasmHost()
+	// callServe has compiled the module already, unless the runner has been
+	// closed since.
+	h, err := r.wasmHost(context.Background())
 	if err != nil {
 		return nil, nil, nil, err
 	}

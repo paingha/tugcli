@@ -69,6 +69,20 @@ type Runner struct {
 
 	wasmMu sync.Mutex
 	wasm   *wasmHost
+	// compiling is the compile of the module in progress, if any.
+	compiling *compileJob
+}
+
+// compileJob is a compile of a runner's module. A caller that stops
+// waiting for it leaves it to finish by itself, since wazero cannot stop a
+// compile part way, and the next call finds the module compiled.
+type compileJob struct {
+	done chan struct{} // closed once h or err is set
+	h    *wasmHost
+	err  error
+	// abandoned is set, under the runner's wasmMu, when the runner is
+	// closed during the compile, which then frees what it made.
+	abandoned bool
 }
 
 func (r *Runner) timeout(op string) time.Duration {
@@ -119,7 +133,7 @@ func (r *Runner) Call(ctx context.Context, op string, request []byte) ([]byte, e
 // callWASM runs op in a new instance of the plugin's module.
 func (r *Runner) callWASM(ctx context.Context, op string, request []byte) ([]byte, error) {
 	// Compiling, on the first call, does not count against op's timeout.
-	h, err := r.wasmHost()
+	h, err := r.wasmHost(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -167,19 +181,59 @@ func (r *Runner) maxBytes() int64 {
 }
 
 // wasmHost returns the plugin's compiled module, compiling it on first use.
-func (r *Runner) wasmHost() (*wasmHost, error) {
+// It stops waiting when ctx ends, which a compile cannot do: compiling a
+// large module takes seconds, a cold one many more, and a plugin told to
+// stop then must not wait for it. The compile goes on, and serves the next
+// call.
+func (r *Runner) wasmHost(ctx context.Context) (*wasmHost, error) {
 	r.wasmMu.Lock()
-	defer r.wasmMu.Unlock()
-	if r.wasm == nil {
-		start := time.Now()
-		h, err := newWASMHost(context.Background(), r.Name, r.Bin, *r.WASM, r.logger())
-		if err != nil {
-			return nil, provider.Errorf(provider.Internal, "plugin %s: %v", r.Name, err)
-		}
+	if h := r.wasm; h != nil {
+		r.wasmMu.Unlock()
+		return h, nil
+	}
+	job := r.compiling
+	if job == nil {
+		job = &compileJob{done: make(chan struct{})}
+		r.compiling = job
+		go r.compile(job)
+	}
+	r.wasmMu.Unlock()
+	select {
+	case <-job.done:
+		return job.h, job.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// compile compiles the module for job, and keeps it for the runner's calls
+// unless the runner was closed meanwhile.
+func (r *Runner) compile(job *compileJob) {
+	if hook := r.WASM.beforeCompile; hook != nil {
+		hook()
+	}
+	start := time.Now()
+	h, err := newWASMHost(context.Background(), r.Name, r.Bin, *r.WASM, r.logger())
+	if err != nil {
+		err = provider.Errorf(provider.Internal, "plugin %s: %v", r.Name, err)
+	} else {
 		r.logger().Debug("compiled WebAssembly plugin", "plugin", r.Name, "duration", time.Since(start))
+	}
+	r.wasmMu.Lock()
+	if r.compiling == job {
+		r.compiling = nil
+	}
+	switch {
+	case err != nil:
+	case job.abandoned:
+		_ = h.close() // nobody is left to use it
+		h, err = nil, provider.Errorf(provider.Unavailable, "plugin %s has been stopped", r.Name)
+	default:
 		r.wasm = h
 	}
-	return r.wasm, nil
+	job.h, job.err = h, err
+	r.wasmMu.Unlock()
+	close(job.done)
 }
 
 // Prepare compiles a WebAssembly plugin, so that its first call need not,
@@ -189,7 +243,7 @@ func (r *Runner) Prepare() error {
 	if r.WASM == nil {
 		return nil
 	}
-	_, err := r.wasmHost()
+	_, err := r.wasmHost(context.Background())
 	return err
 }
 
@@ -216,8 +270,12 @@ func (r *Runner) Exec(ctx context.Context, args []string, stdin io.Reader, stdou
 		}
 		return 0, err
 	}
-	h, err := r.wasmHost()
-	if err != nil {
+	h, err := r.wasmHost(ctx)
+	switch {
+	case ctx.Err() != nil:
+		// Told to stop while the module compiled, or as it finished.
+		return provider.ExitError, nil // as a process ended by a signal
+	case err != nil:
 		return 0, err
 	}
 	in, stop := readUntilDone(ctx, stdin)
