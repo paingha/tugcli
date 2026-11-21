@@ -30,19 +30,26 @@ const DefaultInterface = "nic0"
 // Region and Network) is set: the instance mode forwards to a port on a VM,
 // the destination group mode forwards to a host in the VPC, such as a
 // private GKE endpoint.
+//
+// CertFile and KeyFile, set together, name a PEM client certificate and
+// its unencrypted PEM private key for certificate-based access. The tunnel
+// then goes through the mTLS relay, as gcloud's does when certificate-based
+// access is on, and presents the certificate.
 type Config struct {
 	Project, Zone, Instance, Interface string // instance mode; Interface defaults to nic0
 	Region, Network, Group             string // destination group mode
+	CertFile, KeyFile                  string // client certificate for certificate-based access
 }
 
 // urlSettings are the query parameters an iap:// URL may have.
-var urlSettings = []string{"project", "zone", "interface", "region", "network", "group"}
+var urlSettings = []string{"project", "zone", "interface", "region", "network", "group", "cert", "key"}
 
 // ParseURL reads iap://<instance>?project=..&zone=.. or
 // iap://?project=..&region=..&network=..&group=..
 //
-// An instance URL may also set interface. The port is not part of the URL:
-// it comes with the address given to Dial.
+// An instance URL may also set interface. Either kind may set cert and key
+// to the files of a client certificate and its key. The port is not part of
+// the URL: it comes with the address given to Dial.
 func ParseURL(u *url.URL) (Config, error) {
 	if u == nil {
 		return Config{}, errors.New("no iap:// URL")
@@ -73,6 +80,8 @@ func ParseURL(u *url.URL) (Config, error) {
 		Region:    q.Get("region"),
 		Network:   q.Get("network"),
 		Group:     q.Get("group"),
+		CertFile:  q.Get("cert"),
+		KeyFile:   q.Get("key"),
 	}
 	if err := cfg.validate(); err != nil {
 		return Config{}, fmt.Errorf("reading the IAP URL %s: %w", u.Redacted(), err)
@@ -86,6 +95,7 @@ func (c Config) String() string {
 	for k, v := range map[string]string{
 		"project": c.Project, "zone": c.Zone, "interface": c.Interface,
 		"region": c.Region, "network": c.Network, "group": c.Group,
+		"cert": c.CertFile, "key": c.KeyFile,
 	} {
 		if v != "" {
 			q.Set(k, v)
@@ -105,6 +115,8 @@ func (c Config) validate() error {
 	switch {
 	case c.Project == "":
 		return errors.New("an IAP tunnel needs a project")
+	case (c.CertFile == "") != (c.KeyFile == ""):
+		return errors.New("an IAP tunnel with a client certificate needs both the certificate file (cert) and its key file (key)")
 	case instance && group:
 		return errors.New("an IAP tunnel goes to an instance (with zone) or through a destination group (with region and network), not both")
 	case instance && c.Instance == "":

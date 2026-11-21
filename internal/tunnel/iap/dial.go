@@ -79,6 +79,7 @@ type options struct {
 	reconnectTimeout time.Duration
 	reconnectWait    time.Duration
 	maxReconnectWait time.Duration
+	netDial          func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 // WithTokenSource sets where access tokens come from. The default is
@@ -88,16 +89,23 @@ func WithTokenSource(ts oauth2.TokenSource) Option {
 	return func(o *options) { o.tokens = ts }
 }
 
-// WithRelayURL replaces DefaultRelayURL, as gcloud's
+// WithRelayURL replaces the relay the Config chooses, as gcloud's
 // --iap-tunnel-url-override does. It must use wss unless it is on this
 // machine, as a test relay is. A URL without a path gets /v4.
 func WithRelayURL(u string) Option {
 	return func(o *options) { o.relayURL = u }
 }
 
-// WithTLSConfig sets the TLS settings for the relay connection.
+// WithTLSConfig sets the TLS settings for the relay connection. A client
+// certificate from the Config is added to a copy.
 func WithTLSConfig(c *tls.Config) Option {
 	return func(o *options) { o.tlsConfig = c }
+}
+
+// withNetDial makes TCP connections to the relay with dial and no proxy,
+// for tests that stand in for a relay host name.
+func withNetDial(dial func(ctx context.Context, network, addr string) (net.Conn, error)) Option {
+	return func(o *options) { o.netDial = dial }
 }
 
 // WithUserAgent sets the User-Agent header. The default is tug/<version>.
@@ -163,11 +171,11 @@ type client struct {
 	maxReconnectWait time.Duration
 }
 
-// newClient applies opts. ctx is the tunnel's context, which lasts until
-// Close.
-func newClient(ctx context.Context, opts []Option) (*client, error) {
+// newClient applies opts for a tunnel with the settings cfg. ctx is the
+// tunnel's context, which lasts until Close.
+func newClient(ctx context.Context, cfg Config, opts []Option) (*client, error) {
 	o := options{
-		relayURL:         DefaultRelayURL,
+		relayURL:         relayFor(cfg),
 		userAgent:        "tug/" + version.String(),
 		reconnectTimeout: DefaultReconnectTimeout,
 		reconnectWait:    reconnectWait,
@@ -179,6 +187,18 @@ func newClient(ctx context.Context, opts []Option) (*client, error) {
 	relay, err := parseRelay(o.relayURL)
 	if err != nil {
 		return nil, err
+	}
+	tlsConfig, err := clientTLS(o.tlsConfig, cfg)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &websocket.Dialer{
+		Proxy:           http.ProxyFromEnvironment,
+		TLSClientConfig: tlsConfig,
+		Subprotocols:    []string{subprotocol},
+	}
+	if o.netDial != nil {
+		dialer.Proxy, dialer.NetDialContext = nil, o.netDial
 	}
 	if o.tokens == nil {
 		// A token source made for this tunnel alone refreshes with the
@@ -192,13 +212,9 @@ func newClient(ctx context.Context, opts []Option) (*client, error) {
 		o.logger = slog.New(slog.DiscardHandler)
 	}
 	return &client{
-		relay:  relay,
-		tokens: o.tokens,
-		dialer: &websocket.Dialer{
-			Proxy:           http.ProxyFromEnvironment,
-			TLSClientConfig: o.tlsConfig,
-			Subprotocols:    []string{subprotocol},
-		},
+		relay:            relay,
+		tokens:           o.tokens,
+		dialer:           dialer,
 		userAgent:        o.userAgent,
 		logger:           o.logger,
 		reconnectTimeout: o.reconnectTimeout,
@@ -253,7 +269,7 @@ func Dial(ctx context.Context, cfg Config, address string, opts ...Option) (net.
 	// The tunnel's own context keeps ctx's values but not its
 	// cancellation, which is Close's.
 	life, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	cl, err := newClient(life, opts)
+	cl, err := newClient(life, cfg, opts)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("opening an IAP tunnel to %s: %w", t, err)

@@ -24,6 +24,16 @@ func TestParseURL(t *testing.T) {
 			url:  "iap://?project=p1&region=europe-west2&network=default&group=gke-masters",
 			want: Config{Project: "p1", Region: "europe-west2", Network: "default", Group: "gke-masters"},
 		},
+		{
+			url:  "iap://bastion?project=p1&zone=z&cert=/etc/tug/client.pem&key=/etc/tug/client-key.pem",
+			want: Config{Project: "p1", Zone: "z", Instance: "bastion", CertFile: "/etc/tug/client.pem", KeyFile: "/etc/tug/client-key.pem"},
+		},
+		{
+			url:  "iap://?project=p1&region=r&network=n&group=g&cert=c.pem&key=k.pem",
+			want: Config{Project: "p1", Region: "r", Network: "n", Group: "g", CertFile: "c.pem", KeyFile: "k.pem"},
+		},
+		{url: "iap://bastion?project=p1&zone=z&cert=c.pem", wantErr: "needs both the certificate file (cert) and its key file (key)"},
+		{url: "iap://bastion?project=p1&zone=z&key=k.pem", wantErr: "needs both the certificate file (cert) and its key file (key)"},
 		{url: "https://bastion?project=p1&zone=z", wantErr: "not an iap:// URL"},
 		{url: "iap://bastion:22?project=p1&zone=z", wantErr: "give the port with the address"},
 		{url: "iap://bastion/path?project=p1&zone=z", wantErr: "only an instance name"},
