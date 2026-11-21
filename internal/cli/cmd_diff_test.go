@@ -948,6 +948,10 @@ func TestDiffExitCodes(t *testing.T) {
 		{"diff deploy/storefront -n shop -f x --all-fields", "--all-fields works only with --against"},
 		{"diff storefront -n shop -f " + other, "has no deployment/storefront in namespace shop"},
 		{"diff widget/x -n shop --managed-fields", `the cluster has no resource type "widget"`},
+		{"drift", "name the cluster to compare with"},
+		{"drift --against payments-staging -n shop -A", "-n and -A cannot be used together"},
+		{"drift --against payments-staging -n shop widgets", `the cluster has no resource type "widgets"`},
+		{"drift --against payments-staging -o name", "drift supports -o table, json or yaml"},
 	} {
 		r := tug(t, strings.Fields(tt.args)...)
 		if r.code != 2 || !strings.Contains(r.stderr, tt.want) {
@@ -1063,4 +1067,66 @@ func TestDiffManagedFields(t *testing.T) {
 		t.Errorf("tug diff secret/api-key --managed-fields -o json = %+v", v)
 	}
 	prod.check(t, "payments-prod")
+}
+
+func TestDrift(t *testing.T) {
+	prod, staging := diffClusters(t)
+
+	r := tug(t, "drift", "--against", "payments-staging", "-n", "shop")
+	if r.code != 1 {
+		t.Fatalf("tug drift: exit %d, want 1\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	for _, want := range []string{
+		"payments-prod (v1.35.1) against payments-staging (v1.34.2), namespace shop\n",
+		"\nAPI versions only on payments-prod: db.example.com/v1\n",
+		"\nDrift: 4 of 6 objects of deployments.apps, statefulsets.apps, daemonsets.apps, services, configmaps differ or are on one cluster only\n",
+	} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("tug drift lacks %q:\n%s", want, r.stdout)
+		}
+	}
+	for _, row := range [][]string{
+		{"CRD", "PAYMENTS-PROD", "PAYMENTS-STAGING"},
+		{"backups.db.example.com", "v1", "-"},
+		{"databases.db.example.com", "v1", "-"},
+		{"KIND", "NAME", "STATE", "FIELDS"},
+		{"configmap", "flags", "differs", "data.checkout"},
+		{"configmap", "prod-only", "only on payments-prod", "-"},
+		{"configmap", "staging-only", "only on payments-staging", "-"},
+		{"deployment", "storefront", "differs", `spec.template.spec.containers[name="web"].env, spec.template.spec.containers[name="web"].image`},
+	} {
+		if !hasRow(r.stdout, row...) {
+			t.Errorf("tug drift lacks the row %q:\n%s", row, r.stdout)
+		}
+	}
+	for _, line := range strings.Split(r.stdout, "\n") {
+		if strings.Contains(line, "kube-root-ca.crt") || strings.HasPrefix(line, "service ") {
+			t.Errorf("tug drift shows an object that differs only in what the clusters set: %q", line)
+		}
+	}
+	if !strings.Contains(r.stderr, "hint: `tug diff <kind>/<name> --against payments-staging` shows an object's differences in full") {
+		t.Errorf("tug drift stderr:\n%s", r.stderr)
+	}
+
+	r = tug(t, "drift", "--against", "payments-staging", "-n", "shop", "secrets", "-o", "json")
+	if r.code != 1 {
+		t.Fatalf("tug drift secrets -o json: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	var d diff.Drift
+	if err := json.Unmarshal([]byte(r.stdout), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Same || !slices.Equal(d.Resources, []string{"secrets"}) || len(d.Objects) != 1 ||
+		d.Objects[0].Name != "api-key" || d.Objects[0].Changes[0].Path.String() != "metadata.labels.rotated" || strings.Contains(r.stdout, "password") {
+		t.Errorf("tug drift secrets -o json:\n%s", r.stdout)
+	}
+
+	// payments-dr is prod under another name: nothing drifts.
+	r = tug(t, "drift", "--against", "payments-dr", "-n", "shop", "deploy", "cm", "secrets", "svc")
+	if r.code != 0 || !strings.Contains(r.stdout, "\nNo drift: 6 objects of deployments.apps, configmaps, secrets, services, the CRDs and the API versions match\n") {
+		t.Errorf("tug drift --against payments-dr: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+
+	prod.check(t, "payments-prod")
+	staging.check(t, "payments-staging")
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -23,12 +24,12 @@ import (
 	"github.com/paingha/tugcli/internal/version"
 )
 
-// diffErrorCode is what tug diff exits with on an error, as kubectl diff
-// does: 1 means that something differs.
+// diffErrorCode is what tug diff and tug drift exit with on an error, as
+// kubectl diff does: 1 means that something differs.
 const diffErrorCode = 2
 
-// diffFailed makes an error from tug diff exit with diffErrorCode once
-// printed, leaving an exit code it already has alone.
+// diffFailed makes an error from tug diff or tug drift exit with
+// diffErrorCode once printed, leaving an exit code it already has alone.
 func diffFailed(err error) error {
 	var ee *exitError
 	if err == nil || errors.As(err, &ee) {
@@ -503,4 +504,224 @@ func (a *app) printManagedFields(ctx context.Context, c diff.Clients, o resolve.
 		}
 	}
 	return nil
+}
+
+type driftOptions struct {
+	namespace     string
+	allNamespaces bool
+	against       string
+	allFields     bool
+	output        string
+}
+
+func newDriftCmd(a *app) *cobra.Command {
+	var o driftOptions
+	cmd := &cobra.Command{
+		Use:   "drift --against <cluster> [resource...]",
+		Short: "Compare this cluster's objects, CRDs and API versions with another cluster's",
+		Long: `Compare the session's cluster with another cluster in the catalog: the API
+versions each serves, the CustomResourceDefinitions on each and the versions
+they serve, and the objects of the resources named, in the session's namespace
+(or -n, or every namespace with -A). Name resources as kubectl does; without
+any, drift compares deployments, statefulsets, daemonsets, cronjobs, services,
+configmaps and ingresses.
+
+Objects are matched by namespace and name and compared as tug diff --against
+compares one: what the API server generates, status, and fields that only the
+clusters set themselves are left out unless --all-fields. Secrets are compared
+only when named, and then by their metadata alone: their data is never read.
+
+drift only reads. It exits 0 when the clusters match, 1 when they differ and 2
+on an error, so CI can gate on it; -o json gives the details.`,
+		Example: `  tug drift --against payments-staging
+  tug drift --against payments-staging deploy cm -n checkout
+  tug drift --against eu-prod -A certificates.cert-manager.io
+  tug drift --against payments-staging -o json | jq '.objects[] | select(.state == "differs")'`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.drift(cmd.Context(), args, o)
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&o.against, "against", "", "catalog cluster to compare with")
+	f.StringVarP(&o.namespace, "namespace", "n", "", "namespace (default: the session's)")
+	f.BoolVarP(&o.allNamespaces, "all-namespaces", "A", false, "compare every namespace")
+	f.BoolVar(&o.allFields, "all-fields", false, "also compare the fields that only the clusters set themselves")
+	f.StringVarP(&o.output, "output", "o", "", "output format: table, json or yaml")
+	return diffCommand(cmd)
+}
+
+func (a *app) drift(ctx context.Context, args []string, o driftOptions) error {
+	format, err := render.ParseFormat(o.output)
+	if err != nil {
+		return err
+	}
+	if format == render.FormatName {
+		return errors.New("drift supports -o table, json or yaml")
+	}
+	switch {
+	case o.against == "":
+		return errors.New("name the cluster to compare with, such as --against payments-staging")
+	case o.allNamespaces && o.namespace != "":
+		return errors.New("-n and -A cannot be used together")
+	}
+	env, err := a.opsEnv(ctx, o.namespace)
+	if err != nil {
+		return err
+	}
+	clients, mapper, err := a.objectClients(env)
+	if err != nil {
+		return err
+	}
+	opts := diff.DriftOptions{Namespace: env.namespace, AllFields: o.allFields}
+	if o.allNamespaces {
+		opts.Namespace = ""
+	}
+	named, defaults := args, false
+	if len(named) == 0 {
+		named, defaults = diff.DefaultDriftResources, true
+	}
+	for _, r := range named {
+		m, err := resolve.FindResource(mapper, r)
+		if err != nil {
+			if defaults {
+				continue // a cluster without ingresses, say, has none to compare
+			}
+			return err
+		}
+		if !slices.ContainsFunc(opts.Resources, func(x *meta.RESTMapping) bool { return x.Resource == m.Resource }) {
+			opts.Resources = append(opts.Resources, m)
+		}
+	}
+	other, err := a.againstCluster(ctx, env, o.against)
+	if err != nil {
+		return err
+	}
+	dc, err := discovery.NewDiscoveryClientForConfig(env.cfg)
+	if err != nil {
+		return err
+	}
+	here := diff.Cluster{
+		Name:      env.session.State.ClusterName,
+		Clients:   diff.Clients{Dynamic: clients.Dynamic, Metadata: clients.Metadata},
+		Discovery: dc,
+	}
+	d, err := diff.CompareClusters(ctx, here, other, opts)
+	if err != nil {
+		return err
+	}
+	if format != render.FormatTable {
+		err = render.Structured(a.stdout, format, d)
+	} else {
+		err = a.printDrift(d)
+	}
+	if err == nil && !d.Same {
+		return &exitError{code: 1}
+	}
+	return err
+}
+
+func (a *app) printDrift(d *diff.Drift) error {
+	c := a.colors()
+	w := a.stdout
+	scope := "namespace " + d.Namespace
+	if d.Namespace == "" {
+		scope = "every namespace"
+	}
+	fmt.Fprintf(w, "%s (%s) against %s (%s), %s\n", c.Bold(d.Here.Name), d.Here.Version, c.Bold(d.There.Name), d.There.Version, scope)
+	if v := d.APIVersions.OnlyHere; len(v) > 0 {
+		fmt.Fprintf(w, "\nAPI versions only on %s: %s\n", d.Here.Name, strings.Join(v, ", "))
+	}
+	if v := d.APIVersions.OnlyThere; len(v) > 0 {
+		fmt.Fprintf(w, "\nAPI versions only on %s: %s\n", d.There.Name, strings.Join(v, ", "))
+	}
+	if len(d.CRDs) > 0 {
+		fmt.Fprintln(w)
+		rows := make([][]string, 0, len(d.CRDs))
+		for _, crd := range d.CRDs {
+			rows = append(rows, []string{crd.Name, versionList(crd.HereVersions), versionList(crd.ThereVersions)})
+		}
+		if err := render.Table(w, []string{"CRD", strings.ToUpper(d.Here.Name), strings.ToUpper(d.There.Name)}, rows); err != nil {
+			return err
+		}
+	}
+	if len(d.Unserved) > 0 {
+		fmt.Fprintf(w, "\nNot served by %s: %s\n", d.There.Name, strings.Join(d.Unserved, ", "))
+	}
+	if len(d.Objects) > 0 {
+		fmt.Fprintln(w)
+		header := []string{"KIND", "NAME", "STATE", "FIELDS"}
+		if d.Namespace == "" {
+			header = []string{"KIND", "NAMESPACE", "NAME", "STATE", "FIELDS"}
+		}
+		rows := make([][]string, 0, len(d.Objects))
+		for _, o := range d.Objects {
+			state := o.State
+			switch o.State {
+			case diff.StateOnlyHere:
+				state = "only on " + d.Here.Name
+			case diff.StateOnlyThere:
+				state = "only on " + d.There.Name
+			}
+			row := []string{o.Kind, o.Name, state, changedFields(o.Changes)}
+			if d.Namespace == "" {
+				row = []string{o.Kind, cmp.Or(o.Namespace, "-"), o.Name, state, changedFields(o.Changes)}
+			}
+			rows = append(rows, row)
+		}
+		if err := render.Table(w, header, rows); err != nil {
+			return err
+		}
+	}
+	fmt.Fprintln(w)
+	resources := strings.Join(d.Resources, ", ")
+	if resources == "" {
+		resources = "no resources"
+	}
+	if d.Same {
+		fmt.Fprintf(w, "%s %d %s of %s, the CRDs and the API versions match\n",
+			c.Green("No drift:"), d.Compared, plural(d.Compared, "object", "objects"), resources)
+	} else {
+		fmt.Fprintf(w, "%s %d of %d %s of %s differ or are on one cluster only\n",
+			c.Red("Drift:"), len(d.Objects), d.Compared, plural(d.Compared, "object", "objects"), resources)
+	}
+	ec := render.ColorsFor(a.stderr)
+	for _, p := range d.Problems {
+		fmt.Fprintf(a.stderr, "%s %s\n", ec.Yellow("warning:"), p)
+	}
+	if d.Omitted > 0 {
+		fmt.Fprintf(a.stderr, "%s left out %d %s that only the clusters set themselves; --all-fields shows them\n",
+			ec.Dim("note:"), d.Omitted, plural(d.Omitted, "field", "fields"))
+	}
+	if slices.ContainsFunc(d.Objects, func(o diff.ObjectDrift) bool { return o.State == diff.StateDiffers }) {
+		fmt.Fprintf(a.stderr, "%s `tug diff <kind>/<name> --against %s` shows an object's differences in full\n", ec.Dim("hint:"), d.There.Name)
+	}
+	return nil
+}
+
+// versionList writes a CRD's served versions, or "-" when the cluster does
+// not have it.
+func versionList(v []string) string {
+	if len(v) == 0 {
+		return "-"
+	}
+	return strings.Join(v, ", ")
+}
+
+// changedFields names up to three of an object's differing fields and
+// counts the rest.
+func changedFields(changes []diff.Change) string {
+	if len(changes) == 0 {
+		return "-"
+	}
+	const show = 3
+	names := make([]string, 0, show)
+	for _, ch := range changes[:min(show, len(changes))] {
+		names = append(names, cmp.Or(ch.Path.String(), "(the whole object)"))
+	}
+	s := strings.Join(names, ", ")
+	if len(changes) > show {
+		s += fmt.Sprintf(" and %d more", len(changes)-show)
+	}
+	return s
 }
