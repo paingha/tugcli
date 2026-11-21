@@ -314,7 +314,7 @@ func findLeases(ctx context.Context, cs kubernetes.Interface, ns, base string, p
 	othersRead := false
 	for i := range list.Items {
 		l := leaseOf(&list.Items[i], now)
-		if pod := holderPod(l.Holder, pods); pod != "" {
+		if pod := holderPod(l, pods, base); pod != "" {
 			l.HolderPod, l.Basis = pod, BasisObserved
 			held = append(held, l)
 			continue
@@ -328,7 +328,7 @@ func findLeases(ctx context.Context, cs kubernetes.Interface, ns, base string, p
 				others = all.Items
 			}
 		}
-		if l.Holder != "" && !l.Expired && holderPod(l.Holder, others) != "" {
+		if l.Holder != "" && !l.Expired && holderPod(l, others, "") != "" {
 			continue // another workload's lease that happens to share a name
 		}
 		l.Basis = BasisInferred
@@ -365,21 +365,37 @@ func leaseOf(l *coordinationv1.Lease, now time.Time) Lease {
 	return out
 }
 
-// holderPod returns the pod whose identity a Lease holder is. Controllers
+// holderPod returns the pod whose identity a Lease's holder is. Controllers
 // built on client-go identify themselves by their hostname, which is their
-// pod's name, often followed by "_" and a random ID; a pod on the host's
-// network, as the control plane's static pods are, has its node's name.
-func holderPod(holder string, pods []corev1.Pod) string {
-	if holder == "" {
+// pod's name, often followed by "_" and a random ID. A static pod on the
+// host's network, as the control plane's are, has its node's name, which
+// every such pod on the node shares, so it counts only for a Lease named
+// after the controller.
+func holderPod(l Lease, pods []corev1.Pod, base string) string {
+	if l.Holder == "" {
 		return ""
 	}
 	for i := range pods {
 		p := &pods[i]
-		if startsWithName(holder, p.Name) || p.Spec.HostNetwork && p.Spec.NodeName != "" && startsWithName(holder, p.Spec.NodeName) {
+		if startsWithName(l.Holder, p.Name) {
+			return p.Name
+		}
+		if static(p) && p.Spec.HostNetwork && p.Spec.NodeName != "" && startsWithName(l.Holder, p.Spec.NodeName) && namedAfter(l.Name, base) {
 			return p.Name
 		}
 	}
 	return ""
+}
+
+// static reports whether the kubelet runs a pod from a file on its node, as
+// it does the control plane's on many clusters. The API server shows such a
+// pod as a mirror, owned by its node.
+func static(p *corev1.Pod) bool {
+	if _, ok := p.Annotations[corev1.MirrorPodAnnotationKey]; ok {
+		return true
+	}
+	ref := metav1.GetControllerOf(p)
+	return ref != nil && ref.Kind == "Node"
 }
 
 // startsWithName reports whether s is name or starts with it followed by a

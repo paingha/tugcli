@@ -250,24 +250,43 @@ func TestControllerStatusOfAHealthyOperator(t *testing.T) {
 func TestControllerStatusOfAStaticPod(t *testing.T) {
 	// kube-controller-manager runs as a static pod on the host's network,
 	// so its Lease is held in its node's name.
-	pod := whyPod("kube-controller-manager-cp-1", func(p *corev1.Pod) {
-		p.Namespace, p.Spec.NodeName, p.Spec.HostNetwork = "kube-system", "cp-1", true
-	})
-	lease := &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: "kube-controller-manager", Namespace: "kube-system"},
-		Spec: coordinationv1.LeaseSpec{
-			HolderIdentity: new("cp-1_0f3e"), LeaseDurationSeconds: new(int32(15)),
-			RenewTime: &metav1.MicroTime{Time: whyNow.Add(-time.Second)},
-		},
+	onNode := func(name string, static bool) *corev1.Pod {
+		return whyPod(name, func(p *corev1.Pod) {
+			p.Namespace, p.Spec.NodeName, p.Spec.HostNetwork = "kube-system", "cp-1", true
+			if static {
+				p.Annotations = map[string]string{corev1.MirrorPodAnnotationKey: "4f9c"}
+			}
+		})
 	}
-	c, _ := fakeClients(t, []runtime.Object{pod, lease})
+	pod := onNode("kube-controller-manager-cp-1", true)
+	proxy := onNode("kube-proxy-x2x4z", false) // a DaemonSet's pod, on the host's network too
+	heldByNode := func(name string) *coordinationv1.Lease {
+		return &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kube-system"},
+			Spec: coordinationv1.LeaseSpec{
+				HolderIdentity: new("cp-1_0f3e"), LeaseDurationSeconds: new(int32(15)),
+				RenewTime: &metav1.MicroTime{Time: whyNow.Add(-time.Second)},
+			},
+		}
+	}
+	c, _ := fakeClients(t, []runtime.Object{pod, proxy, heldByNode("kube-controller-manager"), heldByNode("kube-scheduler")})
 	st, err := ControllerStatusOf(context.Background(), c,
 		resolve.Target{Kind: resolve.KindPod, Name: pod.Name, Namespace: "kube-system"}, WhyOptions{Now: func() time.Time { return whyNow }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Leader != pod.Name || st.ServiceAccount != "kube-system/default" {
-		t.Errorf("leader %q, service account %q; want %s, kube-system/default", st.Leader, st.ServiceAccount, pod.Name)
+	if st.Leader != pod.Name || len(st.Leases) != 1 || st.Leases[0].Name != "kube-controller-manager" || st.ServiceAccount != "kube-system/default" {
+		t.Errorf("leader %q, leases %+v, service account %q; want %s with its own lease, kube-system/default", st.Leader, st.Leases, st.ServiceAccount, pod.Name)
+	}
+
+	// The node's name says nothing about a pod that is not static.
+	st, err = ControllerStatusOf(context.Background(), c,
+		resolve.Target{Kind: resolve.KindPod, Name: proxy.Name, Namespace: "kube-system"}, WhyOptions{Now: func() time.Time { return whyNow }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Leader != "" || len(st.Leases) != 0 {
+		t.Errorf("kube-proxy: leader %q, leases %+v; want none", st.Leader, st.Leases)
 	}
 }
 
