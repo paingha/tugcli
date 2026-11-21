@@ -36,36 +36,51 @@ type fakeCluster struct {
 	srv     *httptest.Server
 	deletes atomic.Int32
 	sawAuth atomic.Value // last Authorization header
+	// valid is the token it accepts, upstreamToken unless set.
+	valid atomic.Value
 }
 
 func newFakeCluster(t *testing.T) *fakeCluster {
 	t.Helper()
 	f := &fakeCluster{}
+	f.valid.Store(upstreamToken)
 	f.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.sawAuth.Store(r.Header.Get("Authorization"))
-		if r.Header.Get("Authorization") != "Bearer "+upstreamToken {
+		if r.Header.Get("Authorization") != "Bearer "+f.valid.Load().(string) {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"Unauthorized","reason":"Unauthorized","code":401}`)
 			return
 		}
+		last := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		q := r.URL.Query()
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces" && q.Get("watch") == "":
+			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"kind":"NamespaceList","apiVersion":"v1","items":[{"metadata":{"name":"default"}}]}`)
 		case r.Method == http.MethodDelete:
 			f.deletes.Add(1)
 			fmt.Fprint(w, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
-		case strings.HasSuffix(r.URL.Path, "/exec"):
-			// An upgraded connection that echoes what it is sent.
+		case r.Header.Get("Upgrade") != "" && (last == "exec" || last == "attach" || last == "portforward" ||
+			strings.Contains(r.URL.Path, "/proxy/exec/")):
+			// An upgraded connection, of the kind asked for, that echoes
+			// every line it is sent.
 			conn, buf, err := w.(http.Hijacker).Hijack()
 			if err != nil {
 				return
 			}
 			defer conn.Close()
-			fmt.Fprint(buf, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+			fmt.Fprintf(buf, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: %s\r\n\r\n", r.Header.Get("Upgrade"))
 			buf.Flush()
-			line, _ := buf.ReadString('\n')
-			fmt.Fprint(buf, "echo: "+line)
-			buf.Flush()
-		case r.URL.Path == "/stream":
+			for {
+				line, err := buf.ReadString('\n')
+				if err != nil {
+					return
+				}
+				fmt.Fprint(buf, "echo: "+line)
+				buf.Flush()
+			}
+		case r.URL.Path == "/stream", q.Get("watch") == "true", q.Get("follow") == "true":
 			fmt.Fprint(w, "first\n")
 			w.(http.Flusher).Flush()
 			select {
@@ -81,6 +96,7 @@ func newFakeCluster(t *testing.T) *fakeCluster {
 }
 
 type fixture struct {
+	cfg     Config
 	runtime string
 	sess    *session.Session
 	srv     *Server
@@ -89,6 +105,7 @@ type fixture struct {
 	token   string
 
 	upstreamCalls atomic.Int32
+	refreshes     atomic.Int32  // upstreams built with refresh
 	upstreamDelay time.Duration // how long building an upstream takes
 }
 
@@ -111,8 +128,11 @@ func setup(t *testing.T, opts ...func(*Config)) *fixture {
 	cfg := Config{
 		RuntimeDir: f.runtime,
 		Sessions:   mgr,
-		Upstream: func(context.Context, string) (*rest.Config, error) {
+		Upstream: func(_ context.Context, _ string, refresh bool) (*rest.Config, error) {
 			f.upstreamCalls.Add(1)
+			if refresh {
+				f.refreshes.Add(1)
+			}
 			time.Sleep(f.upstreamDelay)
 			return &rest.Config{Host: f.cluster.srv.URL, BearerToken: upstreamToken, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}, nil
 		},
@@ -120,6 +140,7 @@ func setup(t *testing.T, opts ...func(*Config)) *fixture {
 	for _, o := range opts {
 		o(&cfg)
 	}
+	f.cfg = cfg
 	f.srv = New(cfg)
 	if f.token, err = f.srv.Register(s.State.ID); err != nil {
 		t.Fatal(err)

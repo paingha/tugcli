@@ -1,12 +1,16 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,13 +21,25 @@ import (
 	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/session"
+	"github.com/paingha/tugcli/pkg/provider"
 )
 
 // upstream is a reverse proxy to one cluster's API server.
 type upstream struct {
 	proxy   *httputil.ReverseProxy
 	created time.Time
+	// refreshed says its credential was asked anew of the provider after
+	// the cluster refused the one before.
+	refreshed bool
 }
+
+// proxyRequest is what tugd knows about a request it forwards, for the
+// handlers of its response.
+type proxyRequest struct {
+	sess *session.Session
+}
+
+type proxyRequestKey struct{}
 
 // ProxyHandler serves /s/<session>/... by forwarding to the session's
 // cluster with its real credential, after the session token and the
@@ -58,8 +74,11 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 
 	up, err := s.upstream(r.Context(), sess.State.ClusterID)
 	if err != nil {
-		writeStatus(w, http.StatusBadGateway, metav1.StatusReasonServiceUnavailable,
-			fmt.Sprintf("tug proxy: cannot reach %s: %v", sess.State.ClusterName, err))
+		code, reason := http.StatusBadGateway, metav1.StatusReasonServiceUnavailable
+		if provider.CodeOf(err) == provider.Unauthenticated {
+			code, reason = http.StatusUnauthorized, metav1.StatusReasonUnauthorized
+		}
+		writeStatus(w, code, reason, fmt.Sprintf("tug proxy: cannot forward to %s: %s", sess.State.ClusterName, withHint(err)))
 		return
 	}
 	if !guard.IsRead(r.Method, &target) {
@@ -70,12 +89,21 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out := r.Clone(r.Context())
+	out := r.Clone(context.WithValue(r.Context(), proxyRequestKey{}, &proxyRequest{sess: sess}))
 	out.URL.Path, out.URL.RawPath = rest, ""
 	// The session token is for tugd only; the upstream gets the cluster's
 	// own credential from the transport.
 	out.Header.Del("Authorization")
 	up.proxy.ServeHTTP(w, out)
+}
+
+// withHint is err's message, followed by the hint of a provider error.
+func withHint(err error) string {
+	var pe *provider.Error
+	if errors.As(err, &pe) && pe.Hint != "" {
+		return err.Error() + "; " + pe.Hint
+	}
+	return err.Error()
 }
 
 // maxClient bounds the User-Agent kept in an audit entry.
@@ -151,16 +179,21 @@ func (s *Server) upstream(ctx context.Context, clusterID string) (*upstream, err
 		return up, nil // built while this request waited
 	}
 
-	cfg, err := s.cfg.Upstream(ctx, clusterID)
+	s.mu.Lock()
+	refresh := s.refresh[clusterID]
+	s.mu.Unlock()
+	cfg, err := s.cfg.Upstream(ctx, clusterID, refresh)
 	if err != nil {
 		return nil, err
 	}
-	up, err := newUpstream(cfg, s.cfg.Now())
+	up, err := s.newUpstream(clusterID, cfg)
 	if err != nil {
 		return nil, err
 	}
+	up.refreshed = refresh
 	s.mu.Lock()
 	s.upstreams[clusterID] = up
+	delete(s.refresh, clusterID)
 	s.mu.Unlock()
 	return up, nil
 }
@@ -175,7 +208,29 @@ func (s *Server) cachedUpstream(clusterID string) *upstream {
 	return nil
 }
 
-func newUpstream(cfg *rest.Config, now time.Time) (*upstream, error) {
+// refreshBackoff is how long after asking a provider for a new credential
+// tugd waits before asking again, when the cluster refuses the new one too.
+const refreshBackoff = 30 * time.Second
+
+// credentialRefused forgets the upstream a cluster refused the credential
+// of, so that the next request builds one with a new credential from the
+// cluster's provider. It reports whether one will be asked for: not when
+// the refused credential is one the provider gave moments ago.
+func (s *Server) credentialRefused(clusterID string, up *upstream) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch {
+	case s.upstreams[clusterID] != up:
+		return true // already replaced, perhaps with a new credential
+	case up.refreshed && s.cfg.Now().Sub(up.created) < refreshBackoff:
+		return false
+	}
+	delete(s.upstreams, clusterID)
+	s.refresh[clusterID] = true
+	return true
+}
+
+func (s *Server) newUpstream(clusterID string, cfg *rest.Config) (*upstream, error) {
 	target, err := url.Parse(cfg.Host)
 	if err != nil {
 		return nil, fmt.Errorf("parsing cluster address %q: %w", cfg.Host, err)
@@ -188,7 +243,8 @@ func newUpstream(cfg *rest.Config, now time.Time) (*upstream, error) {
 	if err != nil {
 		return nil, err
 	}
-	proxy := &httputil.ReverseProxy{
+	up := &upstream{created: s.cfg.Now()}
+	up.proxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.Host = target.Host
@@ -196,11 +252,38 @@ func newUpstream(cfg *rest.Config, now time.Time) (*upstream, error) {
 		Transport: rt,
 		// Flush at once so watches and logs -f stream.
 		FlushInterval: -1,
+		ModifyResponse: func(resp *http.Response) error {
+			pr, _ := resp.Request.Context().Value(proxyRequestKey{}).(*proxyRequest)
+			if resp.StatusCode == http.StatusUnauthorized && pr != nil {
+				explainRefusedCredential(resp, pr.sess.State.ClusterName, s.credentialRefused(clusterID, up))
+			}
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			writeStatus(w, http.StatusBadGateway, metav1.StatusReasonServiceUnavailable, "tug proxy: "+err.Error())
 		},
 	}
-	return &upstream{proxy: proxy, created: now}, nil
+	return up, nil
+}
+
+// explainRefusedCredential replaces the body of a cluster's 401 with a
+// Status that says it was tug's credential the cluster refused, not the
+// session's token, and what happens next: whether tugd will ask for a new
+// one. kubectl prints the message.
+func explainRefusedCredential(resp *http.Response, cluster string, renewing bool) {
+	_ = resp.Body.Close()
+	next := "tugd asks its provider for a new one for the next request. If this happens again, run `tug doctor` to check the credential"
+	if !renewing {
+		next = "tugd got it from its provider moments ago, so run `tug doctor` to check the credential"
+	}
+	body := statusBody(http.StatusUnauthorized, metav1.StatusReasonUnauthorized, fmt.Sprintf(
+		"tug proxy: %s refused tug's credential for it, which may have expired or been revoked; %s", cluster, next))
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.TransferEncoding = nil
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 }
 
 // writeStatus answers with a Kubernetes Status, which kubectl and other
@@ -208,11 +291,17 @@ func newUpstream(cfg *rest.Config, now time.Time) (*upstream, error) {
 func writeStatus(w http.ResponseWriter, code int, reason metav1.StatusReason, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(metav1.Status{
+	_, _ = w.Write(statusBody(code, reason, msg))
+}
+
+// statusBody is a Kubernetes Status in JSON.
+func statusBody(code int, reason metav1.StatusReason, msg string) []byte {
+	b, _ := json.Marshal(metav1.Status{
 		TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"},
 		Status:   metav1.StatusFailure,
 		Message:  msg,
 		Reason:   reason,
 		Code:     int32(code),
 	})
+	return append(b, '\n')
 }

@@ -48,8 +48,10 @@ type Config struct {
 	// tug unlock and tug lock take effect at once.
 	Sessions *session.Manager
 	// Upstream returns a client config, with credentials, for a catalog
-	// cluster. tugd applies the guard itself.
-	Upstream func(ctx context.Context, clusterID string) (*rest.Config, error)
+	// cluster. tugd applies the guard itself. With refresh set, the cluster
+	// refused the last credential, so a new one is asked of its provider
+	// rather than taken from the cache.
+	Upstream func(ctx context.Context, clusterID string, refresh bool) (*rest.Config, error)
 	// ProxyAddr is the proxy's listen address; by default a loopback port,
 	// reusing the previous one when it is free.
 	ProxyAddr string
@@ -79,6 +81,7 @@ type Server struct {
 	tokens     map[string]string // session ID to its proxy token
 	upstreams  map[string]*upstream
 	building   map[string]*sync.Mutex // per cluster, held while its upstream is built
+	refresh    map[string]bool        // clusters whose next upstream needs a new credential
 	forwards   map[string]*forwardRunner
 	proxyURL   string
 	proxyCA    []byte
@@ -105,6 +108,7 @@ func New(cfg Config) *Server {
 		tokens:    map[string]string{},
 		upstreams: map[string]*upstream{},
 		building:  map[string]*sync.Mutex{},
+		refresh:   map[string]bool{},
 		forwards:  map[string]*forwardRunner{},
 		shutdown:  make(chan struct{}),
 	}
