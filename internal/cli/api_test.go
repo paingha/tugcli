@@ -387,8 +387,19 @@ func TestAPIDiff(t *testing.T) {
 		"shop-staging-old": old, "shop-staging-new": cur, "shop-staging-twin": twin,
 	}))
 
+	// differ runs a diff that finds differences, which exits 1 as diff
+	// does.
+	differ := func(args ...string) string {
+		t.Helper()
+		r := tug(t, append([]string{"api", "diff"}, args...)...)
+		if r.code != 1 || r.stderr != "" {
+			t.Fatalf("tug api diff %v: exit %d, stderr %q; want exit 1 and nothing more on stderr\n%s", args, r.code, r.stderr, r.stdout)
+		}
+		return r.stdout
+	}
+
 	// No session is needed.
-	out := mustTug(t, "api", "diff", "staging-old", "shop-staging-new")
+	out := differ("staging-old", "shop-staging-new")
 	for _, want := range []string{
 		"shop-staging-old runs v1.24.17, shop-staging-new runs v1.35.1\n\n",
 		"RESOURCE                               KIND                      SHOP-STAGING-OLD         SHOP-STAGING-NEW\n",
@@ -407,14 +418,18 @@ func TestAPIDiff(t *testing.T) {
 	}
 
 	var d apiinfo.Diff
-	if err := json.Unmarshal([]byte(mustTug(t, "api", "diff", "shop-staging-old", "shop-staging-new", "-o", "json")), &d); err != nil {
+	if err := json.Unmarshal([]byte(differ("shop-staging-old", "shop-staging-new", "-o", "json")), &d); err != nil {
 		t.Fatal(err)
 	}
 	if d.A.Cluster != "shop-staging-old" || d.B.Server.Minor != "1.35" || len(d.Resources) != 5 {
 		t.Errorf("tug api diff -o json = %+v", d)
 	}
+	// Clusters that serve the same APIs exit 0.
 	if out := mustTug(t, "api", "diff", "shop-staging-new", "shop-staging-twin"); !strings.Contains(out, "They serve the same") {
-		t.Errorf("tug api diff of a cluster with itself:\n%s", out)
+		t.Errorf("tug api diff of two clusters that serve the same APIs:\n%s", out)
+	}
+	if out := mustTug(t, "api", "diff", "shop-staging-new", "shop-staging-twin", "-o", "json"); !strings.Contains(out, `"resources": []`) {
+		t.Errorf("tug api diff -o json of two clusters that serve the same APIs:\n%s", out)
 	}
 
 	for _, tt := range []struct{ args, want string }{

@@ -426,7 +426,8 @@ resource definition stores objects at a different version. Clusters are named
 as for tug connect, by name, prefix or fuzzy match, and need no session.
 
 diff only reads. Use it before promoting manifests from one cluster to another,
-or to see what an upgrade changed.`,
+or to see what an upgrade changed. It exits 1 when the clusters differ, as
+diff does, so scripts and CI can check that two clusters serve the same APIs.`,
 		Example: `  tug api diff payments-staging payments-prod
   tug api diff eu-prod us-prod -o json`,
 		Args:              cobra.ExactArgs(2),
@@ -461,9 +462,14 @@ or to see what an upgrade changed.`,
 			}
 			d := apiinfo.Compare(snaps[0], snaps[1])
 			if format != render.FormatTable {
-				return render.Structured(a.stdout, format, d)
+				err = render.Structured(a.stdout, format, d)
+			} else {
+				err = a.writeAPIDiff(d)
 			}
-			return a.writeAPIDiff(d)
+			if err == nil && len(d.Resources) > 0 {
+				return &exitError{code: 1}
+			}
+			return err
 		},
 	}
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: table, json or yaml")
