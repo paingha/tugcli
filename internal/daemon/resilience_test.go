@@ -3,6 +3,9 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -190,6 +193,129 @@ func (f *fixture) clientset(t *testing.T) kubernetes.Interface {
 		t.Fatal(err)
 	}
 	return cs
+}
+
+func TestProxyTokenErrors(t *testing.T) {
+	f := setup(t)
+	unknown, err := f.srv.cfg.Sessions.Create(1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, session, token, want string
+	}{
+		{"none", f.sess.State.ID, "", "no session token"},
+		{"wrong", f.sess.State.ID, "nope", "wrong session token"},
+		{"from an earlier tugd", unknown.State.ID, "old", "most likely because it restarted"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodGet, f.proxy.URL+"/s/"+tt.session+"/api/v1/namespaces", nil)
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var st metav1.Status
+			_ = json.NewDecoder(resp.Body).Decode(&st)
+			if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(st.Message, tt.want) {
+				t.Fatalf("GET = %d %q, want 401 saying %q", resp.StatusCode, st.Message, tt.want)
+			}
+		})
+	}
+}
+
+// runTugd runs a tugd with the fixture's config until the test ends and
+// returns it once it listens, with a client that trusts its certificate.
+func (f *fixture) runTugd(t *testing.T) (*Server, *http.Client, func()) {
+	t.Helper()
+	srv := New(f.cfg)
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(context.Background()) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for srv.ProxyURL() == "" {
+		if time.Now().After(deadline) {
+			t.Fatal("tugd did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(srv.ProxyCA())
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		srv.Shutdown()
+		if err := <-done; err != nil {
+			t.Errorf("tugd: %v", err)
+		}
+		client.CloseIdleConnections()
+	}
+	t.Cleanup(stop)
+	return srv, client, stop
+}
+
+// While tugd is down, a client of a proxied session fails: it has only
+// tugd's address, never the cluster's. A tugd started again on the same
+// address refuses the old token, which it did not issue, and forwards
+// nothing until the client fetches a new one.
+func TestRestartedTugdFailsClosed(t *testing.T) {
+	f := setup(t)
+	first, client, stop := f.runTugd(t)
+	tok, err := first.Register(f.sess.State.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := first.ProxyURL() + "/s/" + f.sess.State.ID + "/api/v1/namespaces"
+	get := func(token string) (int, string, error) {
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := client.Do(req)
+		if err != nil {
+			return 0, "", err
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b), nil
+	}
+	if code, body, err := get(tok); err != nil || code != http.StatusOK {
+		t.Fatalf("GET through tugd = %d %s %v", code, body, err)
+	}
+	seen := func() string { return f.cluster.sawAuth.Load().(string) }
+	f.cluster.sawAuth.Store("")
+
+	stop()
+	if _, _, err := get(tok); err == nil {
+		t.Fatal("GET while tugd is down succeeded")
+	}
+	if seen() != "" {
+		t.Fatal("a request reached the cluster while tugd was down")
+	}
+
+	second, _, _ := f.runTugd(t)
+	if second.ProxyURL() != first.ProxyURL() {
+		t.Fatalf("restarted on %s, want %s", second.ProxyURL(), first.ProxyURL())
+	}
+	code, body, err := get(tok)
+	if err != nil || code != http.StatusUnauthorized || !strings.Contains(body, "restarted") {
+		t.Fatalf("GET with the old token = %d %s %v; want 401 saying tugd restarted", code, body, err)
+	}
+	if seen() != "" {
+		t.Fatal("the restarted tugd forwarded a request with a token it did not issue")
+	}
+	newTok, err := second.Register(f.sess.State.ID)
+	if err != nil || newTok == tok {
+		t.Fatalf("register after the restart = %q, %v; want a new token", newTok, err)
+	}
+	if code, body, err := get(newTok); err != nil || code != http.StatusOK {
+		t.Fatalf("GET with the new token = %d %s %v", code, body, err)
+	}
 }
 
 // Connections the cluster drops, as a load balancer does or a network that

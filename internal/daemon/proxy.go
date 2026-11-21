@@ -57,9 +57,8 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, http.StatusNotFound, metav1.StatusReasonNotFound, "tug proxy: paths start with /s/<session>")
 		return
 	}
-	if !s.validToken(sessionID, bearer(r)) {
-		writeStatus(w, http.StatusUnauthorized, metav1.StatusReasonUnauthorized,
-			"tug proxy: missing or wrong session token; use the kubeconfig of a tug session")
+	if msg := s.checkToken(sessionID, bearer(r)); msg != "" {
+		writeStatus(w, http.StatusUnauthorized, metav1.StatusReasonUnauthorized, "tug proxy: "+msg)
 		return
 	}
 	sess, ok := s.usesProxy(sessionID)
@@ -100,6 +99,33 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 	// own credential from the transport.
 	out.Header.Del("Authorization")
 	up.proxy.ServeHTTP(w, out)
+}
+
+// checkToken returns why a presented session token is not accepted, or ""
+// when it is.
+func (s *Server) checkToken(sessionID, presented string) string {
+	switch {
+	case presented == "":
+		return "no session token; use the kubeconfig of a tug session"
+	case s.validToken(sessionID, presented):
+		return ""
+	case !s.knowsSession(sessionID):
+		// Tokens live only in tugd's memory, so a client that got one from
+		// an earlier tugd is told so. Clients that run an exec credential
+		// plugin, as kubectl does, ask for a new token on this answer.
+		return fmt.Sprintf("tugd has no token for session %s, most likely because it restarted after this client got one; "+
+			"run the command again, which asks for a new one", sessionID)
+	default:
+		return "wrong session token; use the kubeconfig of a tug session"
+	}
+}
+
+// knowsSession reports whether tugd has issued a token for a session.
+func (s *Server) knowsSession(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.tokens[sessionID]
+	return ok
 }
 
 // withHint is err's message, followed by the hint of a provider error.
