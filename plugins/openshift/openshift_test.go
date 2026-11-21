@@ -19,6 +19,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 // Offline tokens are JWTs that Red Hat's single sign-on signs; these only
@@ -395,13 +396,14 @@ const (
 // ocScript stands in for oc. It prints the kubeconfig above, and the
 // UserOAuthAccessToken of the token the test names, as the OAuth API
 // serves it; anything else fails, so the tests also check the arguments.
+// It uses only shell builtins and no here-documents, which macOS's sh
+// writes to /tmp, so that it also works in tug's sandbox: the JSON is in
+// single quotes, with the variables spliced in.
 var ocScript = `#!/bin/sh
 [ -n "$FAKE_OC_LOG" ] && echo "$*" >> "$FAKE_OC_LOG"
 case "$*" in
 "config view --raw -o json")
-	cat <<EOF
-` + kubeconfigJSON + `
-EOF
+	printf '%s\n' '` + strings.ReplaceAll(kubeconfigJSON, `$FAKE_OC_CURRENT`, `'"$FAKE_OC_CURRENT"'`) + `'
 	;;
 "get useroauthaccesstokens $FAKE_OC_TOKEN_NAME -o json --context=$FAKE_OC_CONTEXT")
 	case "$FAKE_OC_STATE" in
@@ -414,17 +416,16 @@ EOF
 		exit 1
 		;;
 	esac
-	cat <<EOF
-{
+	printf '%s\n' '{
     "apiVersion": "oauth.openshift.io/v1",
     "authorizeToken": "sha256~bm90LXRoZS1hdXRob3JpemUtdG9rZW4",
     "clientName": "openshift-cli-client",
     "expiresIn": 86400,
-    "inactivityTimeoutSeconds": ${FAKE_OC_INACTIVITY:-0},
+    "inactivityTimeoutSeconds": '"${FAKE_OC_INACTIVITY:-0}"',
     "kind": "UserOAuthAccessToken",
     "metadata": {
-        "creationTimestamp": "$FAKE_OC_CREATED",
-        "name": "$FAKE_OC_TOKEN_NAME",
+        "creationTimestamp": "'"$FAKE_OC_CREATED"'",
+        "name": "'"$FAKE_OC_TOKEN_NAME"'",
         "resourceVersion": "4471923",
         "uid": "5c0d3a2b-7e6f-4a1b-9c8d-0e1f2a3b4c5d"
     },
@@ -432,8 +433,7 @@ EOF
     "scopes": ["user:full"],
     "userName": "alice@example.com",
     "userUID": "9f8e7d6c-5b4a-4321-8765-0fedcba98765"
-}
-EOF
+}'
 	;;
 *)
 	echo "error: unexpected arguments: $*" >&2
@@ -665,4 +665,9 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the openshift plugin does not conform")
 	}
+	// The fake oc learns the token it answers for from the test's
+	// environment, which tug passes on only when told to.
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Name: Name, Manifest: "plugin.yaml", Bin: bin,
+		Settings: f.account(nil).Config, Secrets: secrets(goodOffline),
+		Env: []string{"FAKE_OC_CURRENT", "FAKE_OC_CONTEXT", "FAKE_OC_TOKEN_NAME", "FAKE_OC_CREATED", "FAKE_OC_STATE", "FAKE_OC_INACTIVITY"}})
 }

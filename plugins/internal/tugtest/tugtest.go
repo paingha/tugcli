@@ -40,6 +40,10 @@ type Plugin struct {
 	Settings map[string]any
 	// Secrets are the account's secrets, passed as TUG_SECRET_<NAME>.
 	Secrets map[string]string
+	// Env names more variables of the test's environment for tug to pass to
+	// the plugin, such as those a fake tool reads, by adding them to
+	// spec.env.
+	Env []string
 }
 
 // ConformInSandbox runs `tug plugin test` against p, which runs the
@@ -129,8 +133,9 @@ func Build(t *testing.T) string {
 }
 
 // pluginDir lays out a plugin directory for TUG_PLUGIN_PATH: the manifest,
-// with the ports of URL settings added to spec.network, and the executable
-// where the manifest says it is for this platform.
+// with the ports of URL settings added to spec.network and p.Env to
+// spec.env, and the executable where the manifest says it is for this
+// platform.
 func pluginDir(t *testing.T, p Plugin) string {
 	t.Helper()
 	raw, err := os.ReadFile(p.Manifest)
@@ -152,6 +157,11 @@ func pluginDir(t *testing.T, p Plugin) string {
 		}
 	}
 	spec["network"] = network
+	env, _ := spec["env"].([]any)
+	for _, name := range p.Env {
+		env = append(env, name)
+	}
+	spec["env"] = env
 
 	var bin string
 	platforms, _ := spec["platforms"].([]any)

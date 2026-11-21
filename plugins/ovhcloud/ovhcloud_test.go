@@ -32,6 +32,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 // Keys the fake API knows. They are made up.
@@ -456,4 +457,5 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the ovhcloud plugin does not conform")
 	}
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Name: Name, Manifest: "plugin.yaml", Bin: bin, Settings: f.account(nil).Config, Secrets: secrets(consumerKey)})
 }

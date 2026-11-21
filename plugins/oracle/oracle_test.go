@@ -31,6 +31,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 const (
@@ -789,12 +790,14 @@ func TestConformance(t *testing.T) {
 	// The plugin finds the config file through the environment, and the
 	// config names the key by its full path, so the test can leave HOME,
 	// where go build keeps its caches, alone.
-	dir := t.TempDir()
 	key := keys()[0]
-	writeFile(t, filepath.Join(dir, "key.pem"), apiKeyPEM(t, key))
-	writeFile(t, filepath.Join(dir, "config"), []byte("[DEFAULT]\nuser="+userID+"\nfingerprint="+fingerprint(&key.PublicKey)+
-		"\nkey_file="+filepath.Join(dir, "key.pem")+"\ntenancy="+tenancyID+"\nregion="+ashburn+"\n\n[CI]\nregion="+frankfurt+"\n"))
-	t.Setenv(EnvConfigFile, filepath.Join(dir, "config"))
+	writeConfig := func(dir string) string {
+		writeFile(t, filepath.Join(dir, "key.pem"), apiKeyPEM(t, key))
+		writeFile(t, filepath.Join(dir, "config"), []byte("[DEFAULT]\nuser="+userID+"\nfingerprint="+fingerprint(&key.PublicKey)+
+			"\nkey_file="+filepath.Join(dir, "key.pem")+"\ntenancy="+tenancyID+"\nregion="+ashburn+"\n\n[CI]\nregion="+frankfurt+"\n"))
+		return filepath.Join(dir, "config")
+	}
+	t.Setenv(EnvConfigFile, writeConfig(t.TempDir()))
 	bin := filepath.Join(t.TempDir(), "tug-provider-oracle")
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
@@ -813,4 +816,15 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the oracle plugin does not conform")
 	}
+
+	// In tug's sandbox the plugin may read ~/.oci, where `oci setup config`
+	// puts the config and the key, so that run gets a home with them there.
+	// tug is built first, while HOME still leads go to its caches.
+	tug := tugtest.Build(t)
+	home := t.TempDir()
+	writeConfig(filepath.Join(home, ".oci"))
+	t.Setenv("HOME", home)
+	t.Setenv(EnvConfigFile, "")
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Tug: tug, Name: Name, Manifest: "plugin.yaml", Bin: bin,
+		Settings: map[string]any{"apiURL": f.apiURL(), ConfigRegions: ashburn + "," + frankfurt}})
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/paingha/tugcli/pkg/conformance"
 	"github.com/paingha/tugcli/pkg/provider"
+	"github.com/paingha/tugcli/plugins/internal/tugtest"
 )
 
 const (
@@ -28,7 +29,9 @@ const (
 // runs the way omnictl does: get -o json prints one indented JSON object per
 // resource, kubeconfig writes the kubeconfig Omni's template makes to the
 // path it is given, and errors come out as cobra prints them. It fails on
-// anything else, so the tests also check the arguments.
+// anything else, so the tests also check the arguments. Where it answers,
+// it uses only shell builtins and no here-documents, which macOS's sh
+// writes to /tmp, so that it also works in tug's sandbox.
 const omnictlScript = `#!/bin/sh
 [ -n "$FAKE_OMNICTL_LOG" ] && echo "$*" >> "$FAKE_OMNICTL_LOG"
 if [ "$BROWSER" != echo ]; then
@@ -63,7 +66,7 @@ get)
 		exit 1
 	fi
 	[ "$FAKE_OMNICTL_STATE" = empty ] && exit 0
-	cat <<'EOF'
+	printf '%s\n' '
 {
     "metadata": {
         "created": "2026-10-01T09:12:44Z",
@@ -131,7 +134,7 @@ get)
         "talosversion": "1.7.4"
     }
 }
-EOF
+'
 	;;
 kubeconfig)
 	path=$2
@@ -163,7 +166,7 @@ kubeconfig)
 			echo 'Error: rpc error: code = PermissionDenied desc = failed to validate: insufficient role: "Reader"' >&2
 			exit 1
 		fi
-		cat >"$path" <<EOF
+		printf '%s\n' "
 apiVersion: v1
 clusters:
 - cluster:
@@ -182,10 +185,10 @@ users:
 - name: acme-$cluster-$user
   user:
     token: $FAKE_OMNICTL_TOKEN
-EOF
+" >"$path"
 		exit 0
 	fi
-	cat >"$path" <<EOF
+	printf '%s\n' "
 apiVersion: v1
 kind: Config
 clusters:
@@ -214,7 +217,7 @@ users:
       env: null
       interactiveMode: IfAvailable
       provideClusterInfo: false
-EOF
+" >"$path"
 	;;
 *)
 	echo "Error: unknown command \"$1\" for \"omnictl\"" >&2
@@ -642,4 +645,5 @@ func TestConformance(t *testing.T) {
 	if r.Failed() {
 		t.Fatal("the omni plugin does not conform")
 	}
+	tugtest.ConformInSandbox(t, tugtest.Plugin{Name: Name, Manifest: "plugin.yaml", Bin: bin})
 }
