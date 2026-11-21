@@ -228,6 +228,46 @@ database/orders                ✗ BackupFailing: the latest backup failed
 └── secret/orders-credentials  ·
 ```
 
+## Send it to someone who can help
+
+`tug support bundle` collects what someone helping you needs to see into one
+redacted archive to attach to a ticket: the object and everything it owns as
+YAML, `tug why` and `tug tree` as JSON, events, its containers' logs (the
+previous run's too, when one restarted), the nodes its pods run on, the
+cluster's version and resources, and `tug doctor`'s checks.
+
+```console
+$ tug support bundle deploy/api
+discovering the cluster's resources…
+reading deployment/api and what it owns…
+reading events…
+reading 2 nodes…
+reading 4 logs from 2 pods…
+running tug doctor's checks…
+tug-bundle-prod-eu-deployment-api-20261121T153000Z.tar.gz
+wrote 21 files (48.2 KiB before compression); review the bundle before you share it: its README.md says what was redacted
+```
+
+Name `namespace/<name>` for everything in a namespace, with a diagnosis of
+each workload. Events and logs cover the last hour; change it with `--since`.
+
+Redaction is always on. Secrets are copied from the metadata API, so no
+Secret's data is in the bundle. Environment variable values, ConfigMap values,
+fields named like a credential (`password`, `token`, `apiKey`) and kubectl's
+last-applied annotation become `<redacted>`, and so do bearer tokens,
+passwords in URLs, JSON Web Tokens, private keys and assignments such as
+`password=...` in logs, events and every other text. Add your own patterns
+with `--redact-pattern`, which may be repeated; the bundle counts them but
+never records them.
+
+Redaction can't know everything your applications treat as private, so review
+the bundle before you send it. `--preview` lists every file it would write,
+with its size and the API request it came from, and writes nothing;
+`--exclude <kind>` leaves a kind out. Inside the archive, `README.md` says what
+was redacted and how to search for what wasn't, and `manifest.json` lists each
+file, where it came from and how many values were redacted from it. The archive
+is readable by you only.
+
 ## Restart, scale and roll back
 
 ```bash

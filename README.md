@@ -50,6 +50,7 @@ tug bookmark add api deploy/api-server -n shop   # later, from any terminal: tug
 tug open deploy/api             # the file in this repository that defines it, in $EDITOR (and as path:line)
 tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's commands, or a write
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -294,6 +295,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Bookmarks and command aliases | [internal/bookmark](internal/bookmark), [internal/alias](internal/alias) |
 | Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |
