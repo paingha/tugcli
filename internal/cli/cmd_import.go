@@ -89,6 +89,7 @@ func (a *app) runImport(ctx context.Context, args []string, o importOptions) err
 			failed++
 		}
 	}
+	a.applyTeams(cat)
 	if err := cat.Save(a.catalogPath()); err != nil {
 		return err
 	}
@@ -321,6 +322,7 @@ func newSyncCmd(a *app) *cobra.Command {
 					failed++
 				}
 			}
+			a.applyTeams(cat)
 			if err := cat.Save(a.catalogPath()); err != nil {
 				return err
 			}
@@ -344,6 +346,10 @@ type clusterView struct {
 	Labels   map[string]string `json:"labels,omitempty"`
 	Stale    bool              `json:"stale,omitempty"`
 	LastSeen time.Time         `json:"lastSeen"`
+	// Aliases and Team come from a team catalog that describes the
+	// cluster.
+	Aliases []string `json:"aliases,omitempty"`
+	Team    string   `json:"team,omitempty"`
 }
 
 func newLsCmd(a *app) *cobra.Command {
@@ -379,6 +385,7 @@ func newLsCmd(a *app) *cobra.Command {
 						Name: cl.Name, ID: cl.ID, Provider: cl.Provider, Account: cl.Account,
 						Region: cl.Region, Version: cl.Version, Server: cl.Server,
 						Labels: cl.EffectiveLabels(), Stale: cl.Stale, LastSeen: cl.LastSeen,
+						Aliases: cl.Aliases(), Team: teamOf(cl),
 					})
 				}
 				return render.Structured(a.stdout, format, views)
@@ -418,6 +425,14 @@ func newLsCmd(a *app) *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output format: table, json, yaml or name")
 	cmd.Flags().StringVarP(&selector, "selector", "l", "", "filter by labels, e.g. env=prod,gpu=true")
 	return cmd
+}
+
+// teamOf names the team catalog that describes cl, or "".
+func teamOf(cl *catalog.Cluster) string {
+	if cl.Team == nil {
+		return ""
+	}
+	return cl.Team.Team
 }
 
 func dash(s string) string {
