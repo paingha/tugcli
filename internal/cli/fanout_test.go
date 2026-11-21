@@ -148,6 +148,7 @@ func TestAcrossClustersRunsOnlyReads(t *testing.T) {
 	}{
 		{[]string{"delete", "pod", "pod-eu", "--cluster-selector", "env=staging"}, "refused: `kubectl delete pod pod-eu` may write, and --cluster-selector runs only commands that read"},
 		{[]string{"--cluster-selector=env=staging", "exec", "pod-eu", "--", "rm", "-rf", "/"}, "refused: `kubectl exec pod-eu -- rm -rf /` may write"},
+		{[]string{"-n", "shop", "port-forward", "pod-eu", "8080", "--cluster-selector", "env=staging"}, "refused: `kubectl port-forward` listens or attaches on this machine"},
 		{[]string{"restart", "api", "--cluster-selector", "env=staging"}, "tug restart does not run across clusters; --cluster-selector works with kubectl commands that read and with tug logs, tug top, tug tree and tug why"},
 		{[]string{"ls", "--cluster-selector", "env=staging"}, "tug ls does not run across clusters"},
 		{[]string{"--cluster-selector", "env=staging"}, "name a command to run on each cluster"},

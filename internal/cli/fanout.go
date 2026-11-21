@@ -171,11 +171,19 @@ func (a *app) fanout(ctx context.Context, root *cobra.Command, args []string, o 
 	return a.fanoutSummary(names, results)
 }
 
+// fanoutLocal are kubectl commands that read but bind a local port or the
+// terminal, so they cannot run on several clusters at once.
+var fanoutLocal = []string{"port-forward", "proxy", "attach"}
+
 // fanoutRunner returns how to run args on one cluster and whether that runs
 // kubectl, or refuses a command that may write or that tug cannot run
 // across clusters.
 func (a *app) fanoutRunner(root *cobra.Command, args []string) (fanoutFunc, bool, error) {
 	if isPassthrough(root, args) {
+		if words := passthrough.Words(args); len(words) > 0 && slices.Contains(fanoutLocal, words[0]) {
+			verb := words[0]
+			return nil, false, fmt.Errorf("refused: `kubectl %s` listens or attaches on this machine, so every cluster would fight over the same port or terminal; run it on one cluster", verb)
+		}
 		if !passthrough.IsRead(args) {
 			return nil, false, fmt.Errorf("refused: `kubectl %s` may write, and %s runs only commands that read; "+
 				"to write, connect to one cluster with `tug connect`", strings.Join(args, " "), flagClusterSelector)
