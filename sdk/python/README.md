@@ -356,3 +356,47 @@ go test ./sdk/python                            # conformance and byte-for-byte 
 is a complete plugin. From a checkout it finds the SDK two directories up, so
 `tug plugin link sdk/python/examples/tug-provider-pyexample` works without
 installing anything.
+
+## Releasing
+
+[`publish-python-sdk.yml`](https://github.com/paingha/tugcli/blob/main/.github/workflows/publish-python-sdk.yml)
+publishes the SDK when a tag `sdk/python/v<version>` is pushed, where
+`<version>` is `__version__` in `tug_provider/__init__.py`, which
+`pyproject.toml` reads. It checks the tag against that version, runs the
+unit tests on Python 3.9 and the newest Python, builds the sdist and wheel
+with `python -m build`, publishes them to PyPI, and attaches them to a
+GitHub release for the tag. That release is not marked latest, so tug's own
+releases stay the latest.
+
+```bash
+# after the commit that sets __version__ = "0.1.0" is on main
+git tag sdk/python/v0.1.0
+git push origin sdk/python/v0.1.0
+```
+
+PyPI accepts the upload through trusted publishing: it trusts the
+workflow's OpenID Connect token, so no API token is stored anywhere. Before
+the first release, set it up once:
+
+1. On PyPI, sign in as the account that is to own the project, open
+   [Publishing](https://pypi.org/manage/account/publishing/) and add a
+   pending publisher of type GitHub. It is pending because the project does
+   not exist until the first upload creates it; from then on it is listed
+   under the project's own Publishing settings.
+
+   | Field | Value |
+   | --- | --- |
+   | PyPI Project Name | `tug-provider` |
+   | Owner | `paingha` |
+   | Repository name | `tugcli` |
+   | Workflow name | `publish-python-sdk.yml` |
+   | Environment name | `pypi` |
+
+2. On GitHub, add an environment named `pypi` under the repository's
+   Settings, Environments. Under deployment branches and tags, choose
+   selected branches and tags and add the tag rule `sdk/python/v*`, so that
+   only a release tag can publish. Add required reviewers too if you want a
+   person to approve each upload and the plan offers them.
+
+Until both are in place, the publish job fails with an `invalid-publisher`
+error, and nothing reaches PyPI or the releases page.
