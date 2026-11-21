@@ -117,9 +117,9 @@ func (a *app) connectTo(ctx context.Context, s *session.Session, cl *catalog.Clu
 		readOnly = false
 	}
 	auth := session.AuthCommand{Command: selfPath()}
-	if cl.Tunnel != "" && !o.proxy {
+	if tun := cl.EffectiveTunnel(); tun != "" && !o.proxy {
 		// kubectl cannot open tug's tunnels; tugd can, and keeps them open.
-		fmt.Fprintln(a.stderr, a.colors().Dim(cl.Name+" is reached through "+tunnel.Redacted(cl.Tunnel)+", so this session goes through tugd"))
+		fmt.Fprintln(a.stderr, a.colors().Dim(cl.Name+" is reached through "+tunnel.Redacted(tun)+", so this session goes through tugd"))
 		o.proxy = true
 	}
 	if o.proxy {

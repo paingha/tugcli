@@ -62,6 +62,63 @@ func TestTunnelCommands(t *testing.T) {
 	}
 }
 
+// tunnelPluginScript lists one cluster that its provider reaches through a
+// SOCKS proxy.
+const tunnelPluginScript = `#!/bin/sh
+cat >/dev/null
+case "$1" in
+  list) printf '{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[{"id":"e1","name":"edge","endpoints":{"public":"https://10.0.0.1:6443"},"tunnel":"socks5://127.0.0.1:1080"}]}\n' ;;
+  credential) printf '{"apiVersion":"provider/v1alpha1","kind":"CredentialResponse","credential":{"type":"token","token":"t"}}\n' ;;
+  *) exit 2 ;;
+esac
+`
+
+func TestProviderTunnels(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plugin")
+	}
+	isolate(t)
+	dir := t.TempDir()
+	manifest := strings.NewReplacer("idp", "edge", "GOOS", runtime.GOOS, "GOARCH", runtime.GOARCH).Replace(oidcPluginManifest)
+	for name, body := range map[string]string{"plugin.yaml": manifest, "tug-provider-edge": tunnelPluginScript} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustTug(t, "plugin", "link", dir)
+	mustTug(t, "import", "edge", "--account", "a")
+
+	type row struct{ Cluster, Tunnel, Source string }
+	ls := func() []row {
+		t.Helper()
+		var rows []row
+		if err := json.Unmarshal([]byte(mustTug(t, "tunnel", "ls", "-o", "json")), &rows); err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	if rows := ls(); len(rows) != 1 || rows[0] != (row{"edge", "socks5://127.0.0.1:1080", "provider"}) {
+		t.Fatalf("tunnel ls after import = %+v, want the provider's tunnel", rows)
+	}
+	if r := tug(t, "tunnel", "rm", "edge"); r.code == 0 || !strings.Contains(r.stderr, "which comes from edge; tug tunnel set replaces it with yours") {
+		t.Fatalf("tunnel rm of the provider's tunnel: %+v", r)
+	}
+
+	// The user's tunnel wins, and syncs keep it.
+	mustTug(t, "tunnel", "set", "edge", "http://proxy.corp:3128")
+	mustTug(t, "sync")
+	if rows := ls(); len(rows) != 1 || rows[0] != (row{"edge", "http://proxy.corp:3128", "user"}) {
+		t.Fatalf("tunnel ls after tunnel set and sync = %+v, want the user's tunnel", rows)
+	}
+	r := tug(t, "tunnel", "rm", "edge")
+	if r.code != 0 || !strings.Contains(r.stderr, "edge goes through socks5://127.0.0.1:1080 again, from edge") {
+		t.Fatalf("tunnel rm of the user's tunnel: %+v", r)
+	}
+	if rows := ls(); len(rows) != 1 || rows[0].Source != "provider" {
+		t.Fatalf("tunnel ls after tunnel rm = %+v, want the provider's tunnel back", rows)
+	}
+}
+
 // TestTunnelThroughTugd runs the real tug binary: connecting to a
 // tunnelled cluster routes the session through tugd, and an ordinary
 // client-go client using the session kubeconfig reaches the API server

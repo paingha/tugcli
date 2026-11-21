@@ -60,6 +60,16 @@ func TestList(t *testing.T) {
 	}
 }
 
+func TestListWithATunnel(t *testing.T) {
+	const tunnel = "ssh://admin@bastion.example.com"
+	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": "dev=https://10.0.0.1:6443", "tunnel": tunnel}}
+	out, _ := call(t, provider.OpList, provider.ListRequest{Account: acct, Secrets: goodToken})
+	clusters, err := provider.DecodeList(out)
+	if err != nil || len(clusters) != 1 || clusters[0].Tunnel != tunnel {
+		t.Fatalf("list = %+v, %v; want dev reached through %s", clusters, err, tunnel)
+	}
+}
+
 func TestListErrors(t *testing.T) {
 	tests := []struct {
 		name     string

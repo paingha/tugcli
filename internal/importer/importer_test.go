@@ -807,3 +807,30 @@ func TestRotateUnsupported(t *testing.T) {
 		})
 	}
 }
+
+func TestImportKeepsOnlyUsableTunnels(t *testing.T) {
+	const password = "s3cr3t-proxy-password"
+	p := newFake("fake")
+	p.clusters = []provider.Cluster{
+		{ID: "c-1", Name: "edge", Endpoints: provider.Endpoints{Public: "https://edge"}, Tunnel: "tsh://teleport.example.com:443/root/edge"},
+		{ID: "c-2", Name: "lab", Endpoints: provider.Endpoints{Public: "https://lab"}, Tunnel: "http://user:" + password + "@proxy.example.com:3128"},
+	}
+	svc, _, _ := newService(t, p)
+	cat := &catalog.Catalog{}
+	res := svc.Import(context.Background(), cat, catalog.Source{Provider: "fake", Account: "work"})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "lab: ignoring the tunnel fake lists for it") || strings.Contains(res.Err.Error(), password) {
+		t.Fatalf("Import error = %v, want the tunnel with a password named, without the password", res.Err)
+	}
+	if res.Clusters != 2 {
+		t.Fatalf("Import counted %d clusters, want both", res.Clusters)
+	}
+	for name, want := range map[string]string{"edge": "tsh://teleport.example.com:443/root/edge", "lab": ""} {
+		cl, err := cat.Get(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cl.ProviderTunnel != want || cl.Tunnel != "" {
+			t.Errorf("%s tunnels = %q from the provider, %q from the user; want %q and none", name, cl.ProviderTunnel, cl.Tunnel, want)
+		}
+	}
+}

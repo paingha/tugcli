@@ -65,26 +65,49 @@ func (p *Policy) Writable() bool {
 
 // Wrap returns a RoundTripper that refuses writes when p does not allow them.
 func Wrap(rt http.RoundTripper, p *Policy) http.RoundTripper {
-	return &roundTripper{next: rt, policy: p}
+	return WrapBase(rt, p, "")
+}
+
+// WrapBase is Wrap for an API server whose URL has a path, such as Rancher's
+// /k8s/clusters/<id> or tsh's local proxy: requests are judged by their
+// path below base, which is where the Kubernetes API's paths start.
+func WrapBase(rt http.RoundTripper, p *Policy, base string) http.RoundTripper {
+	return &roundTripper{next: rt, policy: p, base: strings.TrimSuffix(base, "/")}
 }
 
 type roundTripper struct {
 	next   http.RoundTripper
 	policy *Policy
+	base   string
 
 	mu        sync.Mutex
 	confirmed bool
 }
 
 func (g *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if IsRead(req.Method, req.URL) || g.policy.Writable() {
+	u := g.apiURL(req.URL)
+	if IsRead(req.Method, u) || g.policy.Writable() {
 		return g.next.RoundTrip(req)
 	}
-	action := Describe(req.Method, req.URL)
+	action := Describe(req.Method, u)
 	if g.allowedByConfirm(action) {
 		return g.next.RoundTrip(req)
 	}
 	return nil, &DeniedError{Cluster: g.policy.Cluster, Action: action}
+}
+
+// apiURL returns u with the server's base path taken off.
+func (g *roundTripper) apiURL(u *url.URL) *url.URL {
+	if g.base == "" {
+		return u
+	}
+	rest, ok := strings.CutPrefix(u.Path, g.base)
+	if !ok || rest != "" && rest[0] != '/' {
+		return u
+	}
+	api := *u
+	api.Path, api.RawPath = rest, ""
+	return &api
 }
 
 func (g *roundTripper) allowedByConfirm(action string) bool {

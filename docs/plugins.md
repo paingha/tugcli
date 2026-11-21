@@ -355,6 +355,7 @@ for tests; see [`plugins/internal/apiclient`](../plugins/internal/apiclient).
 | `TLSServerName` | `tlsServerName` | Server name to verify when it differs from the endpoint's host. |
 | `ProxyURL` | `proxyURL` | A proxy to reach the API server through. |
 | `DefaultNamespace` | `defaultNamespace` | The namespace a new session starts in. |
+| `Tunnel` | `tunnel` | How tug reaches an API server that kubectl cannot reach directly, written as for `tug tunnel set`, such as `ssm://i-0123456789abcdef0?region=eu-west-1`. A tunnel the user sets wins over it. It must not carry a password: tug drops such a tunnel at import, and the conformance suite fails it. |
 | `InsecureSkipTLSVerify` | `insecureSkipTLSVerify` | Turns off certificate checks. Avoid it; return `CAData` instead. |
 | `Credential` | `credential` | An inline credential (see below). Never written to the catalog. |
 
@@ -1008,7 +1009,7 @@ is the plugin's whole environment; leave it nil to inherit the test's.
 | `describe is valid` | `describe` answers a `DescribeResponse` whose `name` matches the manifest, whose `protocols` include `provider/v1alpha1`, and whose `capabilities` include `list` and `credential`. | Name in `Info()` differs from `plugin.yaml`; output before the JSON. |
 | `unknown operations are rejected` | An unknown operation exits non-zero with an `Error` on stdout. | Exiting 0, or printing usage text instead of JSON. |
 | `an empty list request is rejected` | `list` with empty stdin exits non-zero with an `Error`. | Treating empty input as an empty request. |
-| `list returns valid clusters` | `list` succeeds, and every cluster has an `id` (unique), a `name` and an endpoint that is a URL; inline credentials are valid. Skipped when no account was given and the plugin answers `InvalidConfig`, `NotFound` or `Unauthenticated`. | A bare host name as the endpoint (add `https://`); a cluster that is not ready yet; exiting non-zero after a valid response. |
+| `list returns valid clusters` | `list` succeeds, and every cluster has an `id` (unique), a `name` and an endpoint that is a URL; inline credentials are valid, and a `tunnel` is a URL without a password. Skipped when no account was given and the plugin answers `InvalidConfig`, `NotFound` or `Unauthenticated`. | A bare host name as the endpoint (add `https://`); a cluster that is not ready yet; a proxy password in the tunnel; exiting non-zero after a valid response. |
 | `list is stable across calls` | A second `list` returns the same IDs. | IDs built from something that changes, such as a timestamp or a random suffix. |
 | `credential is valid and unexpired` | `credential` for the first listed cluster returns a valid credential that is not already expired. Skipped when the account has no clusters. | Returning an expired token; leaving out a required field for the type. |
 | `invalid secrets give Unauthenticated` | `list` with every declared secret set to `tug-conformance-invalid` fails with `Unauthenticated`. Skipped when the plugin declares no secrets. | Checking account settings before secrets, so a request without settings answers `InvalidConfig`; mapping 401 to `Internal`; an API that answers 403 for a bad token (map it to `Unauthenticated` yourself). |

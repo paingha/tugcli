@@ -70,7 +70,7 @@ and a picker opens on ties. Add a kind to be explicit: `sts/db`, `pod/debug`.
 | `rancher` | plugin, [plugins/rancher](plugins/rancher) | `--set url=<Rancher server>` and an API token | a kubeconfig token generated per cluster |
 | `nebius` (mk8s) | plugin, [plugins/nebius](plugins/nebius) | the `nebius` CLI's profile, optional `project` | the CLI's `get-token`, run by kubectl |
 | `crusoe` (CMK) | plugin, [plugins/crusoe](plugins/crusoe) | API access key and secret key, optional `project` | the cluster's OIDC issuer (`tug auth login`), else the admin certificate |
-| `teleport` | plugin, [plugins/teleport](plugins/teleport) | your `tsh` sign-in, optional `proxy` and `cluster` | `tsh kube credentials`, run by kubectl |
+| `teleport` | plugin, [plugins/teleport](plugins/teleport) | your `tsh` sign-in, optional `proxy` and `cluster` | `tsh kube credentials`, run by kubectl; a `tsh://` tunnel when the proxy needs `tsh proxy kube` |
 | `tailscale` | plugin, [plugins/tailscale](plugins/tailscale) | your tailnet: operator API server proxies tagged `tag:k8s-operator` | tailnet identity; reached at the device's MagicDNS name |
 
 ```bash
@@ -121,7 +121,9 @@ them and `tug pf stop <name>|--all` ends them.
 A cluster whose API server is not directly reachable gets a tunnel, kept in
 the catalog across syncs. tug's own commands go through it, and connecting
 to the cluster routes kubectl, helm and k9s through tugd, which keeps the
-tunnel open.
+tunnel open. A provider can list a cluster with a tunnel, as the Teleport
+plugin does for clusters that need `tsh proxy kube`; a tunnel you set wins
+over it, and `tug tunnel ls` shows where each one comes from.
 
 ```bash
 tug tunnel set eks-private ssm://i-0123456789abcdef0?region=eu-west-1
@@ -138,10 +140,11 @@ tug tunnel ls | rm <cluster>
 | `ssm://<instance>[?region=&profile=]` | an AWS Systems Manager session through a managed instance that can reach the private endpoint; tug speaks Session Manager itself, so it needs only AWS credentials, not the session-manager-plugin |
 | `iap://<instance>?project=&zone=` | Google Cloud IAP TCP forwarding to a VM; needs only Application Default Credentials, not gcloud |
 | `iap://?project=&region=&network=&group=` | IAP to a host in a destination group, such as a private GKE endpoint; add `cert=` and `key=` (PEM files) for certificate-based access through the mTLS relay, and `universe=` for another Google Cloud universe |
+| `tsh://<proxy>/<Teleport cluster>/<Kubernetes cluster>` | Teleport's `tsh proxy kube`, for a Teleport cluster that kubectl cannot reach directly: behind a load balancer that needs connection upgrades, or with a hardware key. tsh keeps the Teleport certificate; tug runs it, and uses the CA and client certificate of its local proxy, which change each time it starts |
 
 Kubernetes clients honour a proxy for exec, attach and port-forward but not
-a custom dialer, so tug serves SSH, SSM and IAP tunnels as a SOCKS5 proxy on a
-loopback port, guarded by a random username and password that only tug
+a custom dialer, so tug serves SSH, SSM, IAP and tsh tunnels as a SOCKS5 proxy
+on a loopback port, guarded by a random username and password that only tug
 knows. `tug doctor` checks a tunnelled cluster through its tunnel.
 
 ## Directory pins
@@ -182,7 +185,7 @@ pins off.
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
 | Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
 | tugd: local API proxy, named port-forwards, control socket | [internal/daemon](internal/daemon) |
-| Tunnels: SSH, proxies, AWS SSM, Google IAP | [internal/tunnel](internal/tunnel) |
+| Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |

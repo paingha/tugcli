@@ -59,6 +59,7 @@ def full_cluster():
         insecure_skip_tls_verify=True,
         proxy_url="socks5://127.0.0.1:1080",
         default_namespace="payments",
+        tunnel="ssh://admin@bastion.example.com",
         labels={"team": "platform", "env": "prod", "gpu": "true"},
         credential=token("inline", EXPIRY),
     )

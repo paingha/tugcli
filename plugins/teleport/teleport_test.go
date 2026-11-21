@@ -295,20 +295,6 @@ func TestListFailures(t *testing.T) {
 			hint:    "run `tsh login --proxy=<your Teleport proxy>`",
 		},
 		{
-			name:    "load balancer needs a connection upgrade",
-			profile: tlsRoutingProfile + "tls_routing_conn_upgrade_required: true\n",
-			tsh:     tshScript,
-			code:    provider.Unimplemented,
-			hint:    "use `tsh proxy kube` or `tsh kubectl` for these clusters",
-		},
-		{
-			name:    "hardware key",
-			profile: strings.Replace(tlsRoutingProfile, "private_key_policy: none", "private_key_policy: hardware_key_touch", 1),
-			tsh:     tshScript,
-			code:    provider.Unimplemented,
-			hint:    "use `tsh proxy kube` or `tsh kubectl` for these clusters",
-		},
-		{
 			name:    "no Kubernetes proxy",
 			profile: strings.Replace(tlsRoutingProfile, "kube_proxy_addr: teleport.example.com:443\n", "", 1),
 			tsh:     tshScript,
@@ -325,6 +311,73 @@ func TestListFailures(t *testing.T) {
 				t.Errorf("List = %+v, want %s with hint %q", pe, tt.code, tt.hint)
 			}
 		})
+	}
+}
+
+func TestListThroughTshProxyKube(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile string
+		acct    provider.Account
+		tunnels []string
+	}{
+		{
+			name:    "load balancer needs a connection upgrade",
+			profile: tlsRoutingProfile + "tls_routing_conn_upgrade_required: true\n",
+			acct:    provider.Account{ID: "work"},
+			tunnels: []string{"tsh://teleport.example.com:443/root/eks-prod", "tsh://teleport.example.com:443/root/minikube"},
+		},
+		{
+			name:    "hardware key",
+			profile: strings.Replace(tlsRoutingProfile, "private_key_policy: none", "private_key_policy: hardware_key_touch", 1),
+			acct:    provider.Account{ID: "work"},
+			tunnels: []string{"tsh://teleport.example.com:443/root/eks-prod", "tsh://teleport.example.com:443/root/minikube"},
+		},
+		{
+			name:    "leaf cluster",
+			profile: tlsRoutingProfile + "tls_routing_conn_upgrade_required: true\n",
+			acct:    provider.Account{ID: "edge", Config: map[string]any{ConfigProxy: "teleport.example.com:443", ConfigCluster: "leaf"}},
+			tunnels: []string{"tsh://teleport.example.com:443/leaf/edge"},
+		},
+		{
+			name:    "direct",
+			profile: tlsRoutingProfile,
+			acct:    provider.Account{ID: "work"},
+			tunnels: []string{"", ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHome(t, tt.profile)
+			fakeTool(t, "tsh", tshScript)
+			clusters, err := New().List(context.Background(), provider.ListRequest{Account: tt.acct})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var tunnels []string
+			for _, c := range clusters {
+				tunnels = append(tunnels, c.Tunnel)
+				// The listed endpoint is still what tsh kube login writes;
+				// the tunnel's local proxy replaces it when tug connects.
+				if c.Endpoints.Public != "https://teleport.example.com:443" || !bytes.Equal(c.CAData, h.root.pem) || c.Credential == nil {
+					t.Errorf("%s: endpoint %q, CA %q, credential %+v; want tsh kube login's", c.ID, c.Endpoints.Public, c.CAData, c.Credential)
+				}
+			}
+			if !slices.Equal(tunnels, tt.tunnels) {
+				t.Errorf("tunnels = %q, want %q", tunnels, tt.tunnels)
+			}
+		})
+	}
+}
+
+func TestTshTunnel(t *testing.T) {
+	for _, tt := range []struct{ cluster, kube, want string }{
+		{"root", "eks-prod", "tsh://teleport.example.com:443/root/eks-prod"},
+		{"leaf.example.com", "a/b c", "tsh://teleport.example.com:443/leaf.example.com/a%2Fb%20c"},
+	} {
+		if got := tshTunnel("teleport.example.com:443", tt.cluster, tt.kube); got != tt.want {
+			t.Errorf("tshTunnel(%q, %q) = %q, want %q", tt.cluster, tt.kube, got, tt.want)
+		}
 	}
 }
 

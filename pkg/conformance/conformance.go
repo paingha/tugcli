@@ -302,6 +302,17 @@ func (r *runner) checkList() ([]provider.Cluster, bool) {
 				return nil, false
 			}
 		}
+		if c.Tunnel != "" {
+			u, err := url.Parse(c.Tunnel)
+			if err != nil || u.Scheme == "" {
+				r.fail(name, "%s: tunnel is not a URL", where)
+				return nil, false
+			}
+			if _, ok := u.User.Password(); ok {
+				r.fail(name, "%s: tunnel %s carries a password, which tug does not keep in its catalog", where, u.Redacted())
+				return nil, false
+			}
+		}
 		if c.Credential != nil {
 			if err := c.Credential.Validate(); err != nil {
 				r.fail(name, "%s: inline credential: %v", where, err)

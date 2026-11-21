@@ -84,6 +84,9 @@ type Cluster struct {
 	// reachable, such as ssh://user@bastion or ssm://i-0123456789abcdef0.
 	// The user sets it with `tug tunnel set`, and syncs keep it.
 	Tunnel string `json:"tunnel,omitempty"`
+	// ProviderTunnel is the tunnel the provider listed the cluster with,
+	// replaced at every sync. Tunnel wins over it.
+	ProviderTunnel string `json:"providerTunnel,omitempty"`
 
 	// Labels come from the provider and are normalised; UserLabels are set by
 	// the user and win over them.
@@ -93,6 +96,15 @@ type Cluster struct {
 	Stale     bool      `json:"stale,omitempty"`
 	FirstSeen time.Time `json:"firstSeen"`
 	LastSeen  time.Time `json:"lastSeen"`
+}
+
+// EffectiveTunnel returns the tunnel tug goes through: the user's, or else
+// the provider's, or "" to reach the API server directly.
+func (c *Cluster) EffectiveTunnel() string {
+	if c.Tunnel != "" {
+		return c.Tunnel
+	}
+	return c.ProviderTunnel
 }
 
 // EffectiveLabels merges provider and user labels.
@@ -249,6 +261,8 @@ func (c *Catalog) Merge(src Source, listed []provider.Cluster, now time.Time) Me
 		if existing := c.byID(id); existing != nil {
 			next.Name = existing.Name
 			next.UserLabels = existing.UserLabels
+			// A tunnel the user set wins; the provider's is replaced by
+			// what it lists now.
 			next.Tunnel = existing.Tunnel
 			next.FirstSeen = existing.FirstSeen
 			// A listing without a CA for an unchanged endpoint means the
@@ -296,6 +310,7 @@ func fromProvider(src Source, pc provider.Cluster, now time.Time) Cluster {
 		InsecureSkipTLSVerify: pc.InsecureSkipTLSVerify,
 		ProxyURL:              pc.ProxyURL,
 		DefaultNamespace:      pc.DefaultNamespace,
+		ProviderTunnel:        pc.Tunnel,
 		FirstSeen:             now,
 		LastSeen:              now,
 	}
