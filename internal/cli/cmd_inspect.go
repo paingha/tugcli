@@ -475,12 +475,13 @@ func (a *app) printInspection(r inspection) {
 	line("sockets", dash(strings.Join(r.Files.Sockets, ", ")))
 	programs := make([]string, 0, len(r.Programs))
 	for _, p := range r.Programs {
-		if p.Path == "" {
+		switch p.Path {
+		case "":
 			programs = append(programs, p.Name+" (not found here)")
-		} else if p.Path != p.Name {
-			programs = append(programs, p.Name+" ("+p.Path+")")
-		} else {
+		case p.Name:
 			programs = append(programs, p.Name)
+		default:
+			programs = append(programs, p.Name+" ("+p.Path+")")
 		}
 	}
 	line("programs", dash(strings.Join(programs, ", ")))
@@ -501,13 +502,9 @@ func (a *app) printInspection(r inspection) {
 	for i, s := range r.Settings {
 		label := ""
 		if i == 0 {
-			label = "settings"
+			label = "settings:"
 		}
-		if label == "" {
-			fmt.Fprintf(w, "  %-15s%s\n", "", s)
-		} else {
-			line(label, s)
-		}
+		fmt.Fprintf(w, "  %-15s%s\n", label, s)
 	}
 	if len(r.UnknownFields) > 0 {
 		fmt.Fprintf(a.stderr, "%s %s's plugin.yaml has fields this tug does not know, which it ignores: %s\n",

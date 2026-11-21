@@ -99,7 +99,7 @@ func TestIndexKeyRotation(t *testing.T) {
 	}
 
 	// An index signed by a superseded key is refused, whoever made it.
-	forgedSig := []byte(base64Std(ed25519.Sign(ed25519.PrivateKey(mustDecode(t, k2.private)), data)))
+	forgedSig := []byte(base64Std(ed25519.Sign(mustDecode(t, k2.private), data)))
 	if _, err := ParseIndex(data, forgedSig, k2.public); err == nil || !strings.Contains(err.Error(), "superseded") {
 		t.Fatalf("ParseIndex of an index signed by a superseded key = %v, want a refusal", err)
 	}
@@ -258,7 +258,7 @@ func mustRead(t *testing.T, path string) []byte {
 	return b
 }
 
-func mustDecode(t *testing.T, s string) []byte {
+func mustDecode(t *testing.T, s string) ed25519.PrivateKey {
 	t.Helper()
 	k, err := parsePrivateKey(s)
 	if err != nil {

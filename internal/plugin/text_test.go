@@ -13,7 +13,7 @@ func TestPluginTextIsCleaned(t *testing.T) {
 		{"\x1b[2J\x1b[31mred\x1b[0m", "[2J[31mred[0m"},
 		{"bell\a and del\x7f", "bell and del"},
 		{"csi \u009b31m", "csi 31m"},
-		{"evil‮gnp.exe", "evilgnp.exe"},
+		{"evil\u202egnp.exe", "evilgnp.exe"},
 		{"café ✓", "café ✓"},
 	}
 	for _, tt := range tests {
