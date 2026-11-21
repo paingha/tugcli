@@ -9,7 +9,7 @@ import (
 	"github.com/paingha/tugcli/internal/tunnel/ssm"
 )
 
-func init() { builders["ssm"] = newSSM }
+func init() { builders["ssm"] = dialOnly(newSSM) }
 
 // newSSM reads ssm://<instance>?region=..&profile=.. and opens one Session
 // Manager port-forwarding session per connection.

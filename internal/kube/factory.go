@@ -40,7 +40,12 @@ type Factory struct {
 	CacheDir  string
 	UserAgent string
 	// Tunnels opens the cluster's tunnel, when it has one.
-	Tunnels *tunnel.Pool
+	Tunnels Tunnels
+}
+
+// Tunnels opens tunnels; *tunnel.Pool is one.
+type Tunnels interface {
+	Route(ctx context.Context, spec string) (tunnel.Route, error)
 }
 
 // RESTConfig returns a client config for the cluster.
@@ -64,11 +69,21 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 		if f.Tunnels == nil {
 			return nil, fmt.Errorf("cluster %s is reached through a tunnel, which this command cannot open", cl.Name)
 		}
-		u, err := f.Tunnels.ProxyURL(ctx, cl.Tunnel)
+		route, err := f.Tunnels.Route(ctx, cl.Tunnel)
 		if err != nil {
 			return nil, fmt.Errorf("opening the tunnel to %s: %w", cl.Name, err)
 		}
-		cfg.Proxy = http.ProxyURL(u)
+		cfg.Proxy = http.ProxyURL(route.Proxy)
+		if ep := route.Endpoint; ep != nil {
+			// The tunnel ends in a local proxy, such as tsh's, that signs
+			// in to the cluster itself. Its address, CA and client
+			// certificate take the place of the cluster's endpoint and
+			// credential.
+			cfg.Host = ep.Server
+			cfg.TLSClientConfig = rest.TLSClientConfig{CAData: ep.CAData, ServerName: ep.ServerName, CertData: ep.CertData, KeyData: ep.KeyData}
+			f.wrapGuard(cfg)
+			return cfg, nil
+		}
 	case cl.ProxyURL != "":
 		u, err := url.Parse(cl.ProxyURL)
 		if err != nil {
@@ -90,10 +105,16 @@ func (f *Factory) RESTConfig(ctx context.Context) (*rest.Config, error) {
 		ts := &brokerTokenSource{broker: f.Broker, clusterID: cl.ID, first: r}
 		cfg.Wrap(transport.TokenSourceWrapTransport(ts))
 	}
+	f.wrapGuard(cfg)
+	return cfg, nil
+}
+
+// wrapGuard puts the factory's guard, when it has one, in front of cfg's
+// requests.
+func (f *Factory) wrapGuard(cfg *rest.Config) {
 	if f.Guard != nil {
 		cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper { return guard.Wrap(rt, f.Guard) })
 	}
-	return cfg, nil
 }
 
 // Clientset returns a typed client.

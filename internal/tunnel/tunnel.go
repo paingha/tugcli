@@ -3,7 +3,9 @@
 // Google IAP. Every tunnel is handed to Kubernetes clients as a proxy URL,
 // because client-go's exec, attach and port-forward upgrades honour a proxy
 // but not a custom dialer. Tunnels that are not proxies already are served
-// as a SOCKS5 proxy on a loopback port, guarded by random credentials.
+// as a SOCKS5 proxy on a loopback port, guarded by random credentials. A
+// tunnel that ends in a local proxy holding the cluster's credential also
+// hands out the endpoint clients must use there, as a Route.
 package tunnel
 
 import (
@@ -70,13 +72,72 @@ func Redacted(spec string) string {
 	return u.Redacted()
 }
 
-// builder makes the dial function of one tunnel kind.
-type builder func(u *url.URL, p *Pool) (DialFunc, io.Closer, error)
+// Endpoint is an API server address and TLS identity that a tunnel hands
+// out in place of the cluster's own. A tunnel has one when it ends in a
+// local proxy, such as tsh's, that terminates TLS with a certificate
+// authority of its own, accepts only a client certificate it issued, and
+// signs in to the cluster itself. Both are made each time the local proxy
+// starts, so they cannot be kept in the catalog.
+type Endpoint struct {
+	// Server is the URL to send requests to.
+	Server string
+	// CAData and ServerName verify the local proxy's certificate.
+	CAData     []byte
+	ServerName string
+	// CertData and KeyData are the client certificate the local proxy
+	// accepts, in PEM. They take the place of the cluster's credential.
+	CertData, KeyData []byte
+}
 
-// builders holds the kinds that need a dialer of their own; ssm and iap
+// Route is how a Kubernetes client reaches an API server through a tunnel.
+type Route struct {
+	// Proxy is the proxy URL to give the client.
+	Proxy *url.URL
+	// Endpoint, when set, replaces the cluster's server, CA, server name and
+	// credential.
+	Endpoint *Endpoint
+}
+
+// opened is a tunnel that a builder has opened.
+type opened struct {
+	dial DialFunc
+	// closer, when set, is closed with the tunnel.
+	closer io.Closer
+	// endpoint is set for tunnels that end in a local proxy.
+	endpoint *Endpoint
+	// done, when set, is closed if the tunnel ends on its own, such as a
+	// local proxy process that exits; the pool then opens it again.
+	done <-chan struct{}
+}
+
+// builder opens one tunnel of a kind. ctx bounds the opening only; the
+// tunnel stays open until it is closed.
+type builder func(ctx context.Context, u *url.URL, p *Pool) (opened, error)
+
+// builders holds the kinds that need a dialer of their own; ssm, iap and tsh
 // register themselves from their files.
 var builders = map[string]builder{
-	"ssh": newSSH,
+	"ssh": dialOnly(newSSH),
+}
+
+// endpointKinds are the kinds whose tunnels end in a local proxy that
+// replaces the cluster's endpoint and credential.
+var endpointKinds []string
+
+// ReplacesEndpoint reports whether spec's tunnel ends in a local proxy that
+// replaces the cluster's endpoint and credential, so that the cluster's own
+// CA and credential are not what clients use.
+func ReplacesEndpoint(spec string) bool {
+	u, err := url.Parse(spec)
+	return err == nil && slices.Contains(endpointKinds, u.Scheme)
+}
+
+// dialOnly adapts the builder of a kind whose tunnels only dial.
+func dialOnly(open func(u *url.URL, p *Pool) (DialFunc, io.Closer, error)) builder {
+	return func(_ context.Context, u *url.URL, p *Pool) (opened, error) {
+		dial, closer, err := open(u, p)
+		return opened{dial: dial, closer: closer}, err
+	}
 }
 
 // Pool keeps tunnels open for the life of a process, so a command or tugd
@@ -87,8 +148,36 @@ type Pool struct {
 	getenv func(string) string
 
 	mu      sync.Mutex
-	proxies map[string]*localProxy
+	tunnels map[string]*poolEntry
 	closed  bool
+}
+
+// poolEntry is a tunnel the pool has opened, or is opening. Its fields are
+// set under the pool's lock before ready is closed.
+type poolEntry struct {
+	ready    chan struct{}
+	err      error
+	lp       *localProxy
+	endpoint *Endpoint
+	done     <-chan struct{}
+}
+
+// ended reports whether an open tunnel has ended on its own.
+func (e *poolEntry) ended() bool {
+	select {
+	case <-e.ready:
+	default:
+		return false
+	}
+	if e.err != nil || e.done == nil {
+		return false
+	}
+	select {
+	case <-e.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // Option configures a Pool.
@@ -110,7 +199,7 @@ func NewPool(opts ...Option) *Pool {
 		log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		home:    home,
 		getenv:  os.Getenv,
-		proxies: map[string]*localProxy{},
+		tunnels: map[string]*poolEntry{},
 	}
 	for _, o := range opts {
 		o(p)
@@ -122,34 +211,81 @@ func NewPool(opts ...Option) *Pool {
 // spec. SOCKS and HTTP tunnels are returned as they are; the others are
 // opened, once per pool, behind a local SOCKS5 proxy.
 func (p *Pool) ProxyURL(ctx context.Context, spec string) (*url.URL, error) {
+	r, err := p.Route(ctx, spec)
+	return r.Proxy, err
+}
+
+// Route returns how a Kubernetes client reaches its cluster through spec:
+// the proxy to use, and the endpoint that replaces the cluster's when the
+// tunnel ends in a local proxy. The pool opens each tunnel once; callers
+// that ask while it opens wait for it, and a tunnel that has ended on its
+// own is opened again.
+func (p *Pool) Route(ctx context.Context, spec string) (Route, error) {
 	u, err := Parse(spec)
 	if err != nil {
-		return nil, err
+		return Route{}, err
 	}
 	if slices.Contains(proxyKinds, u.Scheme) {
-		return u, nil
+		return Route{Proxy: u}, nil
+	}
+	for {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return Route{}, errors.New("the tunnel pool is closed")
+		}
+		e, ok := p.tunnels[spec]
+		if ok && e.ended() {
+			delete(p.tunnels, spec)
+			p.mu.Unlock()
+			p.log.Info("the tunnel ended; opening it again", "tunnel", Redacted(spec))
+			_ = e.lp.close()
+			continue
+		}
+		if !ok {
+			e = &poolEntry{ready: make(chan struct{})}
+			p.tunnels[spec] = e
+			p.mu.Unlock()
+			p.open(ctx, u, spec, e)
+		} else {
+			p.mu.Unlock()
+		}
+		select {
+		case <-e.ready:
+		case <-ctx.Done():
+			return Route{}, ctx.Err()
+		}
+		if e.err != nil {
+			return Route{}, e.err
+		}
+		return Route{Proxy: e.lp.url(), Endpoint: e.endpoint}, nil
+	}
+}
+
+// open opens spec's tunnel behind a local SOCKS5 proxy and fills in e.
+func (p *Pool) open(ctx context.Context, u *url.URL, spec string, e *poolEntry) {
+	defer close(e.ready)
+	o, err := builders[u.Scheme](ctx, u, p)
+	var lp *localProxy
+	if err == nil {
+		if lp, err = startLocalProxy(o.dial, o.closer, p.log.With("tunnel", Redacted(spec))); err != nil && o.closer != nil {
+			_ = o.closer.Close()
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closed {
-		return nil, errors.New("the tunnel pool is closed")
+	if err == nil && p.closed {
+		_ = lp.close()
+		err = errors.New("the tunnel pool is closed")
 	}
-	if lp, ok := p.proxies[spec]; ok {
-		return lp.url(), nil
-	}
-	dial, closer, err := builders[u.Scheme](u, p)
 	if err != nil {
-		return nil, err
-	}
-	lp, err := startLocalProxy(dial, closer, p.log.With("tunnel", Redacted(spec)))
-	if err != nil {
-		if closer != nil {
-			_ = closer.Close()
+		e.err = err
+		if p.tunnels[spec] == e {
+			delete(p.tunnels, spec)
 		}
-		return nil, err
+		return
 	}
-	p.proxies[spec] = lp
-	return lp.url(), nil
+	e.lp, e.endpoint, e.done = lp, o.endpoint, o.done
 }
 
 // Dial opens one connection to address through spec, for checking a tunnel.
@@ -167,9 +303,12 @@ func (p *Pool) Close() error {
 	defer p.mu.Unlock()
 	p.closed = true
 	var errs []error
-	for spec, lp := range p.proxies {
-		errs = append(errs, lp.close())
-		delete(p.proxies, spec)
+	for spec, e := range p.tunnels {
+		// A tunnel still opening is closed by open, which sees p.closed.
+		if e.lp != nil {
+			errs = append(errs, e.lp.close())
+		}
+		delete(p.tunnels, spec)
 	}
 	return errors.Join(errs...)
 }
