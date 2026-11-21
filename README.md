@@ -50,6 +50,7 @@ tug bookmark add api deploy/api-server -n shop   # later, from any terminal: tug
 tug open deploy/api             # the file in this repository that defines it, in $EDITOR (and as path:line)
 tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's commands, or a write
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug gitops status               # Flux and Argo CD: ready, synced, suspended, revision offered vs applied
 tug gitops explain apps         # where delivery fails: dependsOn, source, admission, apply, or what it manages
@@ -222,7 +223,7 @@ in tug's config directory.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `logs`, `top` and `gitops`. Each line is prefixed with
+reads, and `tug why`, `tree`, `watch`, `logs`, `top` and `gitops`. Each line is prefixed with
 the cluster's name, failures are listed at the end, and tug exits 1 if any
 cluster failed. `--parallel` (default 8) caps how many run together. Writes,
 and commands that bind a local port or the terminal, are refused before
