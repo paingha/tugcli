@@ -58,21 +58,21 @@ func (l *clusterList) load(msg catalogMsg, current string) {
 	if msg.err != nil {
 		return
 	}
-	l.all, l.loaded, l.current = msg.clusters, true, current
-	l.apply()
-}
-
-// apply filters the catalog again and keeps the cursor on the same cluster
-// when it is still shown.
-func (l *clusterList) apply() {
-	was := ""
+	was := current
 	if c := l.selected(); c != nil {
 		was = c.ID
 	}
+	l.all, l.loaded, l.current = msg.clusters, true, current
+	l.apply(was)
+}
+
+// apply filters the catalog again. The cursor goes to the cluster with ID
+// was when it is still shown, and else to the best match.
+func (l *clusterList) apply(was string) {
 	l.shown = filterClusters(l.all, l.filter)
 	l.cursor = 0
 	for i, idx := range l.shown {
-		if l.all[idx].ID == was || (was == "" && l.all[idx].ID == l.current) {
+		if l.all[idx].ID == was {
 			l.cursor = i
 		}
 	}
@@ -198,7 +198,7 @@ func (m *model) clustersKey(msg tea.KeyMsg) tea.Cmd {
 		switch {
 		case l.filter != "" || l.filtering:
 			l.filter, l.filtering = "", false
-			l.apply()
+			l.apply(l.current)
 		case m.state.Connected():
 			return m.enterWorkloads()
 		}
@@ -222,7 +222,7 @@ func (m *model) clustersKey(msg tea.KeyMsg) tea.Cmd {
 	case l.filter == "" && !l.filtering && key.Matches(msg, m.keys.Filter):
 		l.filtering = true
 	case edit(&l.filter, msg):
-		l.apply()
+		l.apply("") // the best match
 	}
 	return nil
 }

@@ -80,7 +80,7 @@ func (m *model) enterClusters() tea.Cmd {
 	m.ticker.stop()
 	m.view = viewClusters
 	m.clusters.filter, m.clusters.filtering = "", false
-	m.clusters.apply()
+	m.clusters.apply(m.clusters.current)
 	return m.loadCatalog()
 }
 
@@ -158,17 +158,22 @@ func (m *model) loadedWorkloads(msg workloadsMsg) {
 	if msg.err != nil {
 		return // keep showing what was there, under the error
 	}
+	was := l.selectedName()
 	l.items, l.loaded, l.updated = msg.items, true, m.now()
-	l.apply()
+	l.apply(was)
 }
 
-// apply filters the workloads again and keeps the cursor on the same one
-// when it is still shown.
-func (l *workloadList) apply() {
-	was := ""
+// selectedName names the selected workload, or is "" when there is none.
+func (l *workloadList) selectedName() string {
 	if w := l.selected(); w != nil {
-		was = w.Target.String()
+		return w.Target.String()
 	}
+	return ""
+}
+
+// apply filters the workloads again and puts the cursor on the workload
+// named was when it is still shown.
+func (l *workloadList) apply(was string) {
 	l.shown = l.shown[:0]
 	if l.filter == "" {
 		for i := range l.items {
@@ -243,14 +248,14 @@ func (m *model) workloadsKey(msg tea.KeyMsg) tea.Cmd {
 			l.filtering = false
 		case tea.KeyEsc:
 			l.filter, l.filtering = "", false
-			l.apply()
+			l.apply(l.selectedName())
 		case tea.KeyUp:
 			l.move(-1)
 		case tea.KeyDown:
 			l.move(1)
 		default:
 			if edit(&l.filter, msg) {
-				l.apply()
+				l.apply(l.selectedName())
 			}
 		}
 		return nil
@@ -266,7 +271,7 @@ func (m *model) workloadsKey(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, k.Back):
 		if l.filter != "" {
 			l.filter = ""
-			l.apply()
+			l.apply(l.selectedName())
 		}
 	case key.Matches(msg, k.Filter):
 		l.filtering = true

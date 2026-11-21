@@ -212,6 +212,35 @@ func TestWorkloadsRefresh(t *testing.T) {
 	}
 }
 
+// Reloads that bring fewer items keep the selection when they can.
+func TestReloadsThatShrinkTheLists(t *testing.T) {
+	b := newFakeBackend(shop()...).connectedTo("staging", "shop", false)
+	h := newHarness(t, b)
+	h.waitFor("the workloads", func(m *model) bool { return len(m.workloads.items) == 3 })
+	h.press("end")
+	if w := h.m.workloads.selected(); w.Target.String() != "pod/debug" {
+		t.Fatalf("end selected %s", w.Target)
+	}
+	for _, name := range []string{"billing", "checkout"} {
+		if err := b.cs.AppsV1().Deployments("shop").Delete(t.Context(), name, metav1.DeleteOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.press("ctrl+r")
+	h.waitFor("the smaller list", func(m *model) bool { return !m.workloads.loading && len(m.workloads.items) == 1 })
+	if w := h.m.workloads.selected(); w == nil || w.Target.String() != "pod/debug" {
+		t.Fatalf("after the reload, selected = %v, want pod/debug still", w)
+	}
+
+	h.press("c")
+	h.waitFor("the catalog", func(m *model) bool { return m.clusters.loaded })
+	h.press("end")
+	h.update(catalogMsg{clusters: testClusters[:1]})
+	if got := shownClusters(h.m); !slices.Equal(got, []string{"prod-eu"}) || h.m.clusters.selected().Name != "prod-eu" {
+		t.Fatalf("after the catalog shrank, shown = %v, selected %v", got, h.m.clusters.selected())
+	}
+}
+
 func TestTickerStopsWithItsView(t *testing.T) {
 	b := newFakeBackend(shop()...).connectedTo("staging", "shop", false)
 	h := newHarness(t, b, WithRefresh(time.Hour))
