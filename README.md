@@ -205,9 +205,9 @@ pins off.
 A plugin is an executable named `tug-provider-<name>` that reads one JSON
 request on stdin and writes one JSON response on stdout, in any language.
 [docs/plugins.md](docs/plugins.md) is the guide to writing, testing,
-packaging and installing one, with the protocol and manifest reference. While
-this repository is private, a Go plugin gets the SDK from a local checkout:
-`tug plugin new acme --sdk-replace <path to tugcli>`.
+packaging and installing one, with the protocol and manifest reference. To
+build a Go plugin against SDK changes that aren't on `main` yet, scaffold it
+from a local checkout: `tug plugin new acme --sdk-replace <path to tugcli>`.
 
 ```bash
 tug plugin new acme                    # Go, with the SDK, tests and a release workflow

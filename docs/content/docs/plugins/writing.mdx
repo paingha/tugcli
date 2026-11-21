@@ -64,10 +64,10 @@ The generated plugin **already works**: it lists clusters from an account
 setting and accepts any token starting with `demo_`, so it passes tug's
 conformance tests before you change a line. Use `--dir` to choose the folder.
 
-<Callout type="info" title="While tug's repository is private">
-  A Go plugin fetches the SDK from `github.com/paingha/tugcli`. If `go mod tidy`
-  can't reach it, set `GOPRIVATE=github.com/paingha/tugcli` with access to the
-  repository, or scaffold against a local checkout:
+<Callout type="info" title="Trying unreleased SDK changes?">
+  A Go plugin fetches the SDK, `github.com/paingha/tugcli/pkg/provider`, like
+  any other module. To build against changes that aren't on `main` yet,
+  scaffold against a local checkout of tugcli instead:
   `tug plugin new acme --sdk-replace ~/src/tugcli`.
 </Callout>
 
