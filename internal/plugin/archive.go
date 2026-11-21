@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
@@ -199,7 +200,46 @@ func archiveExt(p string) string {
 // Staged is an archive extracted into the plugins directory, not yet live.
 type Staged struct {
 	Plugin *Plugin
-	dir    string
+	// Receipt is recorded beside the plugin when it is committed. Stage
+	// fills in the archive's sha256; the caller adds where it came from.
+	Receipt Receipt
+	dir     string
+}
+
+// Receipt records where an installed plugin came from, so that tug can
+// tell later whether its index has revoked it, and who signed it.
+type Receipt struct {
+	// SHA256 is the sha256 of the archive it was installed from.
+	SHA256 string `json:"sha256"`
+	// Source is the file or URL of the archive.
+	Source string `json:"source,omitempty"`
+	// Index is the plugin index it was installed from by name.
+	Index string `json:"index,omitempty"`
+	// Signer is the Sigstore identity whose signature on the archive tug
+	// checked.
+	Signer string `json:"signer,omitempty"`
+	// InstalledAt is when it was installed.
+	InstalledAt time.Time `json:"installedAt,omitzero"`
+}
+
+// receiptSuffix names a receipt, which sits beside the version directory
+// it describes rather than in it, where the archive's own files are.
+const receiptSuffix = ".receipt.yaml"
+
+func receiptPath(versionDir string) string { return versionDir + receiptSuffix }
+
+// Receipt returns the record of how p was installed. Plugins installed
+// before tug kept receipts, and linked ones, have none.
+func (d Dirs) Receipt(p *Plugin) (Receipt, bool) {
+	var r Receipt
+	if p.Dev {
+		return r, false
+	}
+	b, err := os.ReadFile(receiptPath(p.Dir))
+	if err != nil || yaml.Unmarshal(b, &r) != nil || r.SHA256 == "" {
+		return Receipt{}, false
+	}
+	return r, true
 }
 
 // Discard removes a staged plugin.
@@ -208,6 +248,41 @@ func (s *Staged) Discard() { os.RemoveAll(s.dir) }
 // Stage verifies an archive against wantSHA256 (when given), extracts it
 // safely and loads it, checking every binary against the manifest's sha256.
 func (d Dirs) Stage(archive, wantSHA256 string) (*Staged, error) {
+	if err := os.MkdirAll(d.Installed, 0o700); err != nil {
+		return nil, err
+	}
+	u, err := d.unpack(archive, wantSHA256, d.Installed, ".staging-")
+	if err != nil {
+		return nil, err
+	}
+	s := &Staged{Plugin: u.Plugin, dir: u.dir, Receipt: Receipt{SHA256: u.SHA256, Source: archive}}
+	if err := u.Plugin.Manifest.CheckTugVersion(d.TugVersion); err != nil {
+		s.Discard()
+		return nil, err
+	}
+	return s, nil
+}
+
+// Unpacked is an archive extracted into a temporary directory to be looked
+// at, not installed.
+type Unpacked struct {
+	Plugin *Plugin
+	// SHA256 is the archive's sha256.
+	SHA256 string
+	dir    string
+}
+
+// Close removes the extracted files.
+func (u *Unpacked) Close() error { return os.RemoveAll(u.dir) }
+
+// Unpack extracts an archive into a temporary directory and loads it, as
+// Stage does, checking every binary against the manifest's sha256 but not
+// whether this tug is new enough to run it.
+func (d Dirs) Unpack(archive string) (*Unpacked, error) {
+	return d.unpack(archive, "", "", "tug-plugin-")
+}
+
+func (d Dirs) unpack(archive, wantSHA256, parent, pattern string) (*Unpacked, error) {
 	sum, err := fileSHA256(archive)
 	if err != nil {
 		return nil, err
@@ -215,33 +290,25 @@ func (d Dirs) Stage(archive, wantSHA256 string) (*Staged, error) {
 	if wantSHA256 != "" && !strings.EqualFold(sum, wantSHA256) {
 		return nil, fmt.Errorf("checksum mismatch: %s is %s, expected %s", filepath.Base(archive), sum, wantSHA256)
 	}
-	if err := os.MkdirAll(d.Installed, 0o700); err != nil {
-		return nil, err
-	}
-	staging, err := os.MkdirTemp(d.Installed, ".staging-")
+	dir, err := os.MkdirTemp(parent, pattern)
 	if err != nil {
 		return nil, err
 	}
-	s := &Staged{dir: staging}
-	if err := extract(archive, staging); err != nil {
-		s.Discard()
+	u := &Unpacked{SHA256: strings.ToLower(sum), dir: dir}
+	if err := extract(archive, dir); err != nil {
+		_ = u.Close()
 		return nil, err
 	}
-	root, err := pluginRoot(staging)
+	root, err := pluginRoot(dir)
 	if err != nil {
-		s.Discard()
+		_ = u.Close()
 		return nil, err
 	}
-	p, err := d.load(root, false)
-	if err == nil {
-		err = p.Manifest.CheckTugVersion(d.TugVersion)
-	}
-	if err != nil {
-		s.Discard()
+	if u.Plugin, err = d.load(root, false); err != nil {
+		_ = u.Close()
 		return nil, err
 	}
-	s.Plugin = p
-	return s, nil
+	return u, nil
 }
 
 // Commit moves a staged plugin to <plugins>/<name>/<version>. An existing
@@ -263,6 +330,17 @@ func (d Dirs) Commit(s *Staged, force bool) (*Plugin, error) {
 	}
 	if err := os.Rename(s.Plugin.Dir, dest); err != nil {
 		return nil, err
+	}
+	rc := s.Receipt
+	if rc.InstalledAt.IsZero() {
+		rc.InstalledAt = time.Now().UTC()
+	}
+	b, err := yaml.Marshal(rc)
+	if err == nil {
+		err = config.WriteFileAtomic(receiptPath(dest), b, 0o600)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("recording how %s %s was installed: %w", m.Metadata.Name, m.Metadata.Version, err)
 	}
 	return d.load(dest, false)
 }

@@ -43,10 +43,23 @@ const (
 // binary. A version may also name a Sigstore signature over its archive and
 // who must have made it, which ties the archive to the publisher's own
 // release workflow as well as to the index.
+//
+// An index can also withdraw archives it listed, in Revoked, and name the
+// keys it is no longer signed with, in SupersededKeys. A tug older than
+// these fields refuses an index that has them, rather than installing a
+// revoked plugin.
 type Index struct {
 	APIVersion string        `json:"apiVersion"`
 	Kind       string        `json:"kind"`
 	Plugins    []IndexPlugin `json:"plugins"`
+	// Revoked lists archives that must not be installed.
+	Revoked []Revocation `json:"revoked,omitempty"`
+	// SupersededKeys lists keys the index was signed with before, each
+	// with the key that took its place, if one did.
+	SupersededKeys []SupersededKey `json:"supersededKeys,omitempty"`
+
+	// signer is the key the signature was checked with.
+	signer ed25519.PublicKey
 }
 
 // IndexPlugin is one plugin in an index.
@@ -105,10 +118,16 @@ func (s *IndexSigstore) Validate() error {
 
 // Latest returns the highest version, or false when there is none.
 func (p IndexPlugin) Latest() (IndexVersion, bool) {
-	if len(p.Versions) == 0 {
+	return p.LatestFunc(func(IndexVersion) bool { return true })
+}
+
+// LatestFunc returns the highest version for which ok is true, or false
+// when there is none.
+func (p IndexPlugin) LatestFunc(ok func(IndexVersion) bool) (IndexVersion, bool) {
+	vs := slices.DeleteFunc(slices.Clone(p.Versions), func(v IndexVersion) bool { return !ok(v) })
+	if len(vs) == 0 {
 		return IndexVersion{}, false
 	}
-	vs := slices.Clone(p.Versions)
 	slices.SortFunc(vs, func(a, b IndexVersion) int { return compareVersions(b.Version, a.Version) })
 	return vs[0], true
 }
@@ -150,6 +169,16 @@ func (ix *Index) Validate() error {
 			}
 		}
 	}
+	for _, r := range ix.Revoked {
+		if err := r.validate(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, k := range ix.SupersededKeys {
+		if err := k.validate(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -160,21 +189,36 @@ func secureURL(rawURL string) bool {
 	return err == nil && u.Host != "" && (u.Scheme == "https" || u.Scheme == "http" && isLoopback(u.Hostname()))
 }
 
-// ParseIndex reads an index after checking its signature against key.
+// ParseIndex reads an index after checking its signature against key. When
+// key has been superseded, the signature may instead be by a successor that
+// key handed over to, through the index's supersededKeys; SignedBy then
+// returns that successor, which the caller should trust from then on. A
+// key the index lists as superseded never signs it.
 func ParseIndex(data, sig []byte, key ed25519.PublicKey) (*Index, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig)))
 	if err != nil || len(raw) != ed25519.SignatureSize {
 		return nil, errors.New("the index signature is not a base64 ed25519 signature")
 	}
-	if !ed25519.Verify(key, data, raw) {
-		return nil, errors.New("the index signature does not match its key; it may have been changed")
-	}
+	// The handovers come from the index itself, so it is read before its
+	// signature is checked; nothing in it is used until one has been.
 	ix := &Index{}
 	if err := yaml.UnmarshalStrict(data, ix); err != nil {
-		return nil, fmt.Errorf("reading the index: %w", err)
+		if ed25519.Verify(key, data, raw) {
+			return nil, fmt.Errorf("reading the index: %w", err)
+		}
+		return nil, errors.New("the index signature does not match its key; it may have been changed")
 	}
+	chain := ix.successors(key)
+	i := slices.IndexFunc(chain, func(k ed25519.PublicKey) bool { return ed25519.Verify(k, data, raw) })
+	if i < 0 {
+		return nil, errors.New("the index signature does not match its key; it may have been changed, or the publisher may have changed keys without handing over to the new one")
+	}
+	ix.signer = chain[i]
 	if err := ix.Validate(); err != nil {
 		return nil, err
+	}
+	if ix.superseded(ix.signer) {
+		return nil, errors.New("the index is signed with a key it lists as superseded")
 	}
 	return ix, nil
 }
@@ -198,7 +242,8 @@ func NewIndexKey() (private, public string, err error) {
 }
 
 // SignIndex signs data with a base64 private key from NewIndexKey, after
-// checking that it is a valid index.
+// checking that it is a valid index that the key has not been superseded
+// in.
 func SignIndex(data []byte, privateKey string) ([]byte, error) {
 	ix := &Index{}
 	if err := yaml.UnmarshalStrict(data, ix); err != nil {
@@ -207,11 +252,14 @@ func SignIndex(data []byte, privateKey string) ([]byte, error) {
 	if err := ix.Validate(); err != nil {
 		return nil, err
 	}
-	b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(privateKey))
-	if err != nil || len(b) != ed25519.PrivateKeySize {
-		return nil, errors.New("the signing key is not a base64 ed25519 private key")
+	key, err := parsePrivateKey(privateKey)
+	if err != nil {
+		return nil, err
 	}
-	sig := ed25519.Sign(ed25519.PrivateKey(b), data)
+	if ix.superseded(key.Public().(ed25519.PublicKey)) {
+		return nil, errors.New("the index lists this key as superseded; sign it with the key that replaced it")
+	}
+	sig := ed25519.Sign(key, data)
 	return []byte(base64.StdEncoding.EncodeToString(sig) + "\n"), nil
 }
 
@@ -231,12 +279,8 @@ type IndexAddition struct {
 // added. It reads the archive's manifest and hashes it, so the entry
 // matches what install will check.
 func AddToIndex(path, archive string, add IndexAddition) (*IndexPlugin, IndexVersion, error) {
-	ix := &Index{APIVersion: IndexAPIVersion, Kind: IndexKind}
-	if b, err := os.ReadFile(path); err == nil {
-		if err := yaml.UnmarshalStrict(b, ix); err != nil {
-			return nil, IndexVersion{}, fmt.Errorf("%s: %w", path, err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	ix, err := readIndexFile(path)
+	if err != nil {
 		return nil, IndexVersion{}, err
 	}
 	sum, err := fileSHA256(archive)
@@ -276,15 +320,7 @@ func AddToIndex(path, archive string, add IndexAddition) (*IndexPlugin, IndexVer
 		p.Versions = append(p.Versions, v)
 	}
 	slices.SortFunc(ix.Plugins, func(a, b IndexPlugin) int { return strings.Compare(a.Name, b.Name) })
-	if err := ix.Validate(); err != nil {
-		return nil, IndexVersion{}, err
-	}
-	b, err := yaml.Marshal(ix)
-	if err != nil {
-		return nil, IndexVersion{}, err
-	}
-	// The index is published, so it is readable like other release files.
-	if err := config.WriteFileAtomic(path, b, 0o644); err != nil {
+	if err := writeIndexFile(path, ix); err != nil {
 		return nil, IndexVersion{}, err
 	}
 	added := ix.Plugins[slices.IndexFunc(ix.Plugins, func(p IndexPlugin) bool { return p.Name == m.Metadata.Name })]
@@ -304,6 +340,11 @@ type IndexCache struct {
 	Dir  string
 	HTTP *http.Client
 	Now  func() time.Time
+	// KeysFile, when set, records each index's newest key once the index
+	// has handed over to it from the key in config.yaml. Later loads start
+	// from the recorded key, so an index signed with the old one, which
+	// may have leaked, is refused from then on.
+	KeysFile string
 }
 
 // Load returns the index from src, from the cache when it is fresh. The
@@ -313,14 +354,15 @@ func (c *IndexCache) Load(ctx context.Context, src IndexSource) (*Index, error) 
 	if c.Now != nil {
 		now = c.Now
 	}
+	key := c.trustedKey(src)
 	dataPath := filepath.Join(c.Dir, src.Name+".yaml")
 	sigPath := dataPath + SignatureSuffix
 	if st, err := os.Stat(dataPath); err == nil && now().Sub(st.ModTime()) < indexTTL {
 		data, err1 := os.ReadFile(dataPath)
 		sig, err2 := os.ReadFile(sigPath)
 		if err1 == nil && err2 == nil {
-			if ix, err := ParseIndex(data, sig, src.PublicKey); err == nil {
-				return ix, nil
+			if ix, err := ParseIndex(data, sig, key); err == nil {
+				return ix, c.recordKey(src, key, ix)
 			}
 		}
 	}
@@ -332,7 +374,7 @@ func (c *IndexCache) Load(ctx context.Context, src IndexSource) (*Index, error) 
 	if err != nil {
 		return nil, fmt.Errorf("index %s signature: %w", src.Name, err)
 	}
-	ix, err := ParseIndex(data, sig, src.PublicKey)
+	ix, err := ParseIndex(data, sig, key)
 	if err != nil {
 		return nil, fmt.Errorf("index %s: %w", src.Name, err)
 	}
@@ -340,7 +382,108 @@ func (c *IndexCache) Load(ctx context.Context, src IndexSource) (*Index, error) 
 		_ = config.WriteFileAtomic(dataPath, data, 0o600) // a cache; a failed write only costs a download
 		_ = config.WriteFileAtomic(sigPath, sig, 0o600)
 	}
-	return ix, nil
+	return ix, c.recordKey(src, key, ix)
+}
+
+// keyRecord is what KeysFile holds for one index: the key config.yaml
+// names, and the key tug has moved to from it.
+type keyRecord struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+func (c *IndexCache) keyRecords() map[string]keyRecord {
+	records := map[string]keyRecord{}
+	if c.KeysFile == "" {
+		return records
+	}
+	if b, err := os.ReadFile(c.KeysFile); err == nil {
+		_ = yaml.Unmarshal(b, &records) // an unreadable file holds no records
+	}
+	return records
+}
+
+// trustedKey returns the key to check src's index with: the one tug moved
+// to from src's key, or src's key.
+func (c *IndexCache) trustedKey(src IndexSource) ed25519.PublicKey {
+	rec, ok := c.keyRecords()[src.Name]
+	if !ok || rec.From != base64.StdEncoding.EncodeToString(src.PublicKey) {
+		return src.PublicKey
+	}
+	if key, err := ParsePublicKey(rec.To); err == nil {
+		return key
+	}
+	return src.PublicKey
+}
+
+// recordKey records the key ix was signed with, when it is not the key the
+// load started from.
+func (c *IndexCache) recordKey(src IndexSource, started ed25519.PublicKey, ix *Index) error {
+	if c.KeysFile == "" || ix.signer.Equal(started) {
+		return nil
+	}
+	records := c.keyRecords()
+	records[src.Name] = keyRecord{From: base64.StdEncoding.EncodeToString(src.PublicKey), To: base64.StdEncoding.EncodeToString(ix.signer)}
+	b, err := yaml.Marshal(records)
+	if err != nil {
+		return err
+	}
+	if err := config.WriteFileAtomic(c.KeysFile, b, 0o600); err != nil {
+		return fmt.Errorf("index %s: recording its new key: %w", src.Name, err)
+	}
+	return nil
+}
+
+// Loaded is an index that loaded, and where it came from.
+type Loaded struct {
+	Source IndexSource
+	Index  *Index
+}
+
+// KeyChanged reports whether the index is now trusted under a key other
+// than the one config.yaml names, and returns that key, base64.
+func (l Loaded) KeyChanged() (string, bool) {
+	if l.Index.signer.Equal(l.Source.PublicKey) {
+		return "", false
+	}
+	return base64.StdEncoding.EncodeToString(l.Index.signer), true
+}
+
+// LoadAll loads every index. An index that cannot be loaded is reported in
+// errs; the others still load.
+func (c *IndexCache) LoadAll(ctx context.Context, srcs []IndexSource) (loaded []Loaded, errs []error) {
+	for _, src := range srcs {
+		ix, err := c.Load(ctx, src)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if ix != nil {
+			loaded = append(loaded, Loaded{Source: src, Index: ix})
+		}
+	}
+	return loaded, errs
+}
+
+// FindRevoked returns the revocation of the archive with this sha256 in any
+// of the indexes, and the index that revoked it.
+func FindRevoked(loaded []Loaded, sha256 string) (Revocation, string, bool) {
+	for _, l := range loaded {
+		if r, ok := l.Index.RevocationFor(sha256); ok {
+			return r, l.Source.Name, true
+		}
+	}
+	return Revocation{}, "", false
+}
+
+// FindRevokedVersion returns a revocation that names this plugin and
+// version in any of the indexes, and the index that revoked it.
+func FindRevokedVersion(loaded []Loaded, name, version string) (Revocation, string, bool) {
+	for _, l := range loaded {
+		if r, ok := l.Index.RevocationForVersion(name, version); ok {
+			return r, l.Source.Name, true
+		}
+	}
+	return Revocation{}, "", false
 }
 
 func (c *IndexCache) get(ctx context.Context, rawURL string) ([]byte, error) {
@@ -394,19 +537,22 @@ type Match struct {
 // (all of them for an empty query) in every index. An index that cannot be
 // loaded is reported in errs; the others still answer.
 func (c *IndexCache) Search(ctx context.Context, srcs []IndexSource, query string) (matches []Match, errs []error) {
+	loaded, errs := c.LoadAll(ctx, srcs)
+	return Search(loaded, query), errs
+}
+
+// Search finds plugins whose name, description or publisher contains query
+// (all of them for an empty query) in the loaded indexes.
+func Search(loaded []Loaded, query string) []Match {
 	q := strings.ToLower(query)
-	for _, src := range srcs {
-		ix, err := c.Load(ctx, src)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		for _, p := range ix.Plugins {
+	var matches []Match
+	for _, l := range loaded {
+		for _, p := range l.Index.Plugins {
 			hay := strings.ToLower(p.Name + " " + p.Description + " " + p.Publisher)
 			if strings.Contains(hay, q) {
-				matches = append(matches, Match{Index: src.Name, Plugin: p})
+				matches = append(matches, Match{Index: l.Source.Name, Plugin: p})
 			}
 		}
 	}
-	return matches, errs
+	return matches
 }

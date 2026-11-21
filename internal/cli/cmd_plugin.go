@@ -72,9 +72,50 @@ func newPluginLsCmd(a *app) *cobra.Command {
 			for _, p := range a.problems {
 				fmt.Fprintf(a.stderr, "%s %s: %v\n", a.colors().Yellow("skipped"), p.Location, p.Err)
 			}
+			a.warnRevoked(cmd.Context(), reg)
 			return nil
 		},
 	}
+}
+
+// warnRevoked warns about installed plugins that a configured index has
+// revoked.
+func (a *app) warnRevoked(ctx context.Context, reg *registry.Registry) {
+	var installed []*plugin.Plugin
+	for _, name := range reg.Names() {
+		e, _ := reg.Entry(name)
+		if pp, ok := e.Provider.(*plugin.Provider); ok && !pp.Plugin().Dev {
+			installed = append(installed, pp.Plugin())
+		}
+	}
+	if len(installed) == 0 || len(a.cfg.Plugins.Indexes) == 0 {
+		return
+	}
+	c := a.colors()
+	loaded, errs, err := a.loadIndexes(ctx)
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for _, err := range errs {
+		fmt.Fprintf(a.stderr, "%s cannot check for revoked plugins: %v\n", c.Yellow("warning:"), err)
+	}
+	dirs := a.pluginDirs()
+	for _, p := range installed {
+		if r, by, revoked := revokedInstall(dirs, loaded, p); revoked {
+			fmt.Fprintf(a.stderr, "%s index %s has revoked %s %s: %s; remove it with tug plugin remove %s, or install another version\n",
+				c.Red("revoked:"), by, p.Name(), p.Manifest.Metadata.Version, dash(r.Reason), p.Name())
+		}
+	}
+}
+
+// revokedInstall returns the revocation of an installed plugin: of the
+// archive it was installed from or, for one installed before tug kept
+// receipts, of its name and version.
+func revokedInstall(dirs plugin.Dirs, loaded []plugin.Loaded, p *plugin.Plugin) (plugin.Revocation, string, bool) {
+	if rc, ok := dirs.Receipt(p); ok {
+		return plugin.FindRevoked(loaded, rc.SHA256)
+	}
+	return plugin.FindRevokedVersion(loaded, p.Name(), p.Manifest.Metadata.Version)
 }
 
 type installOptions struct {
@@ -92,6 +133,10 @@ type installOptions struct {
 	// signature there, if it has one.
 	index string
 	sig   *plugin.IndexSigstore
+	// indexes are the indexes already loaded, which say what is revoked;
+	// loaded is set once they have been.
+	indexes []plugin.Loaded
+	loaded  bool
 }
 
 func newPluginInstallCmd(a *app) *cobra.Command {
@@ -160,7 +205,15 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		if err != nil {
 			return err
 		}
-		m, v, err := a.resolveIndexed(ctx, ref)
+		if len(a.cfg.Plugins.Indexes) == 0 {
+			return errNoIndex
+		}
+		loaded, errs, err := a.loadIndexes(ctx)
+		if err != nil {
+			return err
+		}
+		o.indexes, o.loaded = loaded, true
+		m, v, err := resolveIndexed(loaded, errs, ref)
 		if err != nil {
 			return err
 		}
@@ -186,6 +239,16 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		return err
 	}
 	defer staged.Discard()
+	if err := a.checkRevoked(ctx, staged.Receipt.SHA256, o); err != nil {
+		return err
+	}
+	staged.Receipt.Source, staged.Receipt.Index = src, o.index
+	if abs, err := filepath.Abs(src); err == nil && archive == src {
+		staged.Receipt.Source = abs
+	}
+	if signer != nil {
+		staged.Receipt.Signer = signer.Subject
+	}
 	m := staged.Plugin.Manifest
 	if o.wantName != "" && m.Metadata.Name != o.wantName {
 		return fmt.Errorf("the index lists %s, but the archive holds %s; not installed", o.wantName, m.Metadata.Name)
@@ -251,6 +314,27 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		}
 	}
 	fmt.Fprintf(a.stdout, "Next: tug import %s --account <id>\n", p.Name())
+	return nil
+}
+
+// checkRevoked refuses an archive that any configured index has revoked.
+// An index that cannot be loaded is a warning, since the archive's own
+// checks have passed.
+func (a *app) checkRevoked(ctx context.Context, sha256 string, o installOptions) error {
+	loaded := o.indexes
+	if !o.loaded {
+		var errs []error
+		var err error
+		if loaded, errs, err = a.loadIndexes(ctx); err != nil {
+			return err
+		}
+		for _, err := range errs {
+			fmt.Fprintf(a.stderr, "%s cannot check for revoked plugins: %v\n", a.colors().Yellow("warning:"), err)
+		}
+	}
+	if r, by, revoked := plugin.FindRevoked(loaded, sha256); revoked {
+		return fmt.Errorf("index %s has revoked this archive, %s; not installed", by, r)
+	}
 	return nil
 }
 

@@ -190,6 +190,8 @@ func FuzzIndex(f *testing.F) {
     sigstore: {bundle: "https://example.com/b.json", identity: "https://github.com/a/b/.github/workflows/r.yml@refs/tags/v1", issuer: "https://token.actions.githubusercontent.com"}
 `))
 	f.Add([]byte("apiVersion: tug.plugin.index/v1alpha1\nkind: PluginIndex\nplugins: []\n"))
+	f.Add([]byte("apiVersion: tug.plugin.index/v1alpha1\nkind: PluginIndex\nplugins: []\nrevoked:\n- {sha256: " + sum + ", plugin: acme, version: 0.1.0, reason: leaks}\n" +
+		"supersededKeys:\n- {publicKey: " + base64.StdEncoding.EncodeToString(fuzzIndexKey.Public().(ed25519.PublicKey)) + "}\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		sig := []byte(base64.StdEncoding.EncodeToString(ed25519.Sign(fuzzIndexKey, data)))
 		ix, err := ParseIndex(data, sig, fuzzIndexKey.Public().(ed25519.PublicKey))
@@ -206,6 +208,14 @@ func FuzzIndex(f *testing.F) {
 				}
 			}
 			_, _ = p.Latest()
+		}
+		for _, r := range ix.Revoked {
+			if len(r.SHA256) != 64 {
+				t.Fatalf("index accepted the revocation %+v", r)
+			}
+		}
+		if ix.superseded(ix.SignedBy()) {
+			t.Fatal("index accepted a signature by a key it lists as superseded")
 		}
 	})
 }

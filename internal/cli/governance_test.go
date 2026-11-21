@@ -146,3 +146,87 @@ func TestPluginPins(t *testing.T) {
 		t.Fatalf("plugin ls with a pin to a missing version: %+v", r)
 	}
 }
+
+func TestPluginRevocation(t *testing.T) {
+	s := newPluginSite(t, "", "1.0.0", "2.0.0")
+	mustTug(t, "plugin", "install", "idx@1.0.0", "--yes")
+	if r := tug(t, "plugin", "ls"); r.code != 0 || strings.Contains(r.stderr, "revoked") {
+		t.Fatalf("plugin ls before any revocation: %+v", r)
+	}
+
+	// The publisher revokes 1.0.0, from its archive.
+	out := mustTug(t, "plugin", "index", "revoke", s.index, s.archives["1.0.0"], "--reason", "sends tokens to a third party")
+	if !strings.Contains(out, "Revoked idx 1.0.0 (sends tokens to a third party)") {
+		t.Fatalf("index revoke: %s", out)
+	}
+	s.sign(t)
+
+	r := tug(t, "plugin", "ls")
+	if r.code != 0 || !strings.Contains(r.stderr, "revoked: index test has revoked idx 1.0.0: sends tokens to a third party; remove it with tug plugin remove idx") {
+		t.Fatalf("plugin ls after the revocation: %+v", r)
+	}
+	if r := tug(t, "plugin", "install", "idx@1.0.0", "--yes", "--force"); r.code == 0 || !strings.Contains(r.stderr, "index test has revoked idx 1.0.0: sends tokens to a third party; not installed") {
+		t.Fatalf("install of a revoked version by name: %+v", r)
+	}
+	if r := tug(t, "plugin", "install", s.archives["1.0.0"], "--yes", "--force"); r.code == 0 || !strings.Contains(r.stderr, "index test has revoked this archive, idx 1.0.0") {
+		t.Fatalf("install of a revoked archive from a file: %+v", r)
+	}
+	// The latest version that is not revoked is the one installed by name.
+	if r := tug(t, "plugin", "install", "idx", "--yes"); r.code != 0 || !strings.Contains(r.stdout, "Installed idx 2.0.0") {
+		t.Fatalf("install by name with one version revoked: %+v", r)
+	}
+
+	// With every version revoked, there is nothing to install or find.
+	if out := mustTug(t, "plugin", "index", "revoke", s.index, s.archives["2.0.0"]); !strings.Contains(out, "Revoked idx 2.0.0") {
+		t.Fatalf("index revoke: %s", out)
+	}
+	s.sign(t)
+	if r := tug(t, "plugin", "install", "idx", "--yes", "--force"); r.code == 0 || !strings.Contains(r.stderr, "revoked every version of idx") {
+		t.Fatalf("install by name with every version revoked: %+v", r)
+	}
+	if out := mustTug(t, "plugin", "search"); strings.Contains(out, "idx") {
+		t.Fatalf("plugin search lists a plugin with every version revoked: %s", out)
+	}
+}
+
+func TestPluginIndexKeyRotation(t *testing.T) {
+	s := newPluginSite(t, "", "1.0.0")
+	next := strings.TrimSpace(mustTug(t, "plugin", "index", "keygen", "--name", "next"))
+
+	// The publisher hands over to the new key and signs with it.
+	if out := mustTug(t, "plugin", "index", "rotate", s.index, "--to", "next"); !strings.Contains(out, "hands over from "+s.pub+" to "+next) {
+		t.Fatalf("index rotate: %s", out)
+	}
+	if r := tug(t, "plugin", "index", "sign", s.index); r.code == 0 || !strings.Contains(r.stderr, "superseded") {
+		t.Fatalf("index sign with the replaced key: %+v", r)
+	}
+	mustTug(t, "plugin", "index", "sign", s.index, "--name", "next")
+	if out := mustTug(t, "plugin", "index", "verify", s.index, "--public-key", s.pub); !strings.Contains(out, "signed by "+next+", which that key handed over to,") {
+		t.Fatalf("index verify with the old key: %s", out)
+	}
+	if err := os.RemoveAll(filepath.Join(s.home, "cache", "plugin-index")); err != nil {
+		t.Fatal(err)
+	}
+
+	// A user whose config.yaml names the old key follows the handover and
+	// is told to update it.
+	r := tug(t, "plugin", "search")
+	if r.code != 0 || !strings.Contains(r.stdout, "idx") || !strings.Contains(r.stderr, "index test has handed over from the key in config.yaml to "+next) {
+		t.Fatalf("plugin search after a key rotation: %+v", r)
+	}
+
+	// Someone with the old key cannot then serve an index of their own:
+	// tug has moved to the new key.
+	forged := filepath.Join(t.TempDir(), "index.yaml")
+	if err := os.Rename(s.index, forged); err != nil {
+		t.Fatal(err)
+	}
+	mustTug(t, "plugin", "index", "add", s.index, s.archives["1.0.0"], "--url", s.srv.URL+"/"+filepath.Base(s.archives["1.0.0"]), "--description", "trust me")
+	mustTug(t, "plugin", "index", "sign", s.index)
+	if err := os.RemoveAll(filepath.Join(s.home, "cache", "plugin-index")); err != nil {
+		t.Fatal(err)
+	}
+	if r := tug(t, "plugin", "search"); strings.Contains(r.stdout, "idx") || !strings.Contains(r.stderr, "index test: the index signature does not match its key") {
+		t.Fatalf("plugin search of an index signed with the replaced key: %+v", r)
+	}
+}
