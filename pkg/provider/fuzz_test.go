@@ -216,8 +216,9 @@ func validRaw(b []byte) json.RawMessage {
 }
 
 // FuzzDecode feeds plugin responses to every decoder, as the host reads
-// them, and checks what comes back: errors are *Error with a code, and
-// credentials are valid.
+// them, and checks what comes back: errors are *Error with a code,
+// credentials are valid, and a suggested wait is neither negative nor
+// longer than a day.
 func FuzzDecode(f *testing.F) {
 	exp := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	for _, msg := range []any{
@@ -237,6 +238,8 @@ func FuzzDecode(f *testing.F) {
 			f.Add(byte(i), b)
 		}
 	}
+	f.Add(byte(0), []byte(`{"kind":"Error","code":"RateLimited","retryAfterSeconds":9223372036854775807}`))
+	f.Add(byte(0), []byte(`{"kind":"Error","code":"RateLimited","retryAfterSeconds":-30}`))
 	f.Add(byte(3), []byte(`{"apiVersion":"provider/v1alpha1","kind":"CredentialResponse","credential":{"type":"delegate","exec":{"command":"x","clusterConfig":"{"}}}`))
 	f.Add(byte(2), []byte(`{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[{"caData":"!!"}]}`))
 	f.Fuzz(func(t *testing.T, pick byte, data []byte) {
@@ -257,6 +260,9 @@ func FuzzDecode(f *testing.F) {
 		}
 		if pe.Code == "" {
 			t.Fatalf("decoding %s gave an error without a code: %+v", op, pe)
+		}
+		if d := pe.RetryAfter(); d < 0 || d > maxRetryAfter {
+			t.Fatalf("RetryAfter() = %s for retryAfterSeconds %d, want 0 to %s", d, pe.RetryAfterSeconds, maxRetryAfter)
 		}
 	})
 }
