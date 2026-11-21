@@ -74,12 +74,13 @@ spec:
 `
 
 // FuzzManifest loads plugin.yaml files and checks what tug relies on once
-// one is accepted: the builds are inside the plugin directory, and checking
-// the manifest again agrees.
+// one is accepted: the builds and the install directory are inside the
+// places tug puts them, and checking the manifest again agrees.
 func FuzzManifest(f *testing.F) {
 	f.Add([]byte(fuzzManifest))
 	f.Add([]byte(strings.Replace(fuzzManifest, "version: 0.1.0", "version: v1.2.3-rc.1", 1)))
 	f.Add([]byte(strings.Replace(fuzzManifest, "bin/acme.wasm", "../acme.wasm", 1)))
+	f.Add([]byte(strings.Replace(fuzzManifest, "version: 0.1.0", "version: ../../../evil", 1)))
 	f.Add([]byte("apiVersion: 1\nkind: [x]\nspec: {platforms: 3}\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		dir := t.TempDir()
@@ -97,6 +98,10 @@ func FuzzManifest(f *testing.F) {
 			if !inside(dir, filepath.Join(dir, filepath.FromSlash(p.Bin))) {
 				t.Fatalf("build %q is outside the plugin directory", p.Bin)
 			}
+		}
+		plugins := filepath.Join(dir, "plugins")
+		if dest := filepath.Join(plugins, m.Metadata.Name, m.Metadata.Version); !inside(filepath.Join(plugins, m.Metadata.Name), dest) || dest == filepath.Join(plugins, m.Metadata.Name) {
+			t.Fatalf("version %q installs to %s, outside the plugin's own directory", m.Metadata.Version, dest)
 		}
 		for _, port := range m.SandboxPorts() {
 			if port == 0 {
@@ -119,7 +124,7 @@ func inside(dir, path string) bool {
 var fuzzIndexKey = ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize))
 
 // FuzzIndex reads signed plugin indexes and checks that an index tug
-// accepts names only plugins it can install.
+// accepts names only plugins and versions it can install safely.
 func FuzzIndex(f *testing.F) {
 	sum := strings.Repeat("a", 64)
 	f.Add([]byte(strings.NewReplacer("%s", sum).Replace(indexYAML)))
@@ -138,6 +143,11 @@ func FuzzIndex(f *testing.F) {
 		for _, p := range ix.Plugins {
 			if !validName.MatchString(p.Name) {
 				t.Fatalf("index accepted the plugin name %q", p.Name)
+			}
+			for _, v := range p.Versions {
+				if !validPluginVersion.MatchString(v.Version) {
+					t.Fatalf("index accepted the version %q of %s", v.Version, p.Name)
+				}
 			}
 			_, _ = p.Latest()
 		}

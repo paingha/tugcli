@@ -140,6 +140,8 @@ func (ix *Index) Validate() error {
 		for _, v := range p.Versions {
 			if v.Version == "" || !secureURL(v.URL) || len(v.SHA256) != 64 {
 				errs = append(errs, fmt.Errorf("plugin %s version %q needs a version, an https url and a sha256", p.Name, v.Version))
+			} else if !validPluginVersion.MatchString(v.Version) {
+				errs = append(errs, fmt.Errorf("plugin %s version %q is not a version such as 0.1.0", p.Name, v.Version))
 			}
 			if v.Sigstore != nil {
 				if err := v.Sigstore.Validate(); err != nil {
