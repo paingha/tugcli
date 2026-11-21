@@ -124,6 +124,17 @@ per-session token that exists only in tugd's memory, fetched through
 port-forward, `logs -f` and watches pass through. tugd stops after 30 minutes
 without a live session or a named port-forward.
 
+A proxied session fails closed: its kubeconfig names only tugd, so when tugd
+is down clients fail rather than reach the cluster directly, and a restarted
+tugd refuses the old tokens until clients fetch new ones. Expiring
+credentials are replaced mid-session; one the cluster refuses is reported as
+such, and tugd asks the provider for a new one. After the machine wakes from
+sleep, tugd drops its idle connections to clusters. tugd is a safety rail, not
+a security boundary: it sees only clients that use the session's kubeconfig
+and only the credential tug keeps, so RBAC, cloud IAM, admission control and
+the API server's audit log remain the enforcement (see
+[What tugd protects](docs/content/docs/concepts/proxy-limits.mdx)).
+
 tugd also keeps named port-forwards open: `tug pf <target> <ports> --name
 <name>` hands one to tugd, which keeps the same local ports and starts the
 forward again on a running pod when the old one goes away. `tug pf ls` lists

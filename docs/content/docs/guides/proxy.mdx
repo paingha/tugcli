@@ -55,6 +55,18 @@ Everything kubectl can do works through tugd: `exec`, `attach`,
 `port-forward`, `logs -f` and watches all stream through as normal. Only
 requests that would change something on a read-only session are refused.
 
+tugd records each change it forwards and how the cluster answered, each one
+it refuses, and unlocks that run out, in the local log `tug audit` shows:
+
+```console
+$ tug audit --since 1h
+TIME                 CLUSTER  SESSION       SOURCE          EVENT             DETAIL                                         RESULT
+2026-11-21 15:31:09  prod-eu  7f3a9c41d2e8  tugd (kubectl)  write (unlocked)  DELETE pods/api-0 -n web (kubectl delete)      200
+2026-11-21 15:30:58  prod-eu  7f3a9c41d2e8  tug             unlock            until 2026-11-21 15:45:58                      -
+2026-11-21 15:30:41  prod-eu  7f3a9c41d2e8  tugd (Helm)     refused           PATCH deployments/api -n web                   read-only
+2026-11-21 15:30:02  prod-eu  7f3a9c41d2e8  tug             session-start     namespace web, read-only, through tugd         -
+```
+
 ## How it stays safe
 
 - tugd listens on **your machine only** (a loopback address) and speaks TLS.
@@ -65,6 +77,21 @@ requests that would change something on a read-only session are refused.
 - tug talks to tugd over a private control socket that only your user can use.
   tug refuses to use a runtime folder other users could change.
 - Only one tugd runs per user.
+- If tugd isn't running, a proxied session's tools **fail**; they never fall
+  back to talking to the cluster directly. The next `kubectl` starts tugd
+  again. After a restart, tugd refuses the old session tokens and clients
+  fetch new ones.
+- Expiring credentials are replaced during a session. If the cluster refuses
+  one, tugd says so, and asks the cluster's provider for a new one for the next
+  request.
+- After your laptop sleeps or changes network, tugd drops connections that may
+  no longer work, and watches and `logs -f` start again.
+
+<Callout type="warn" title="A safety rail, not a security boundary">
+  tugd only sees tools that use the session's kubeconfig, and only the
+  credential tug keeps. [What tugd protects, and what it
+  doesn't](/docs/concepts/proxy-limits) says exactly where it stops.
+</Callout>
 
 ## Managing tugd
 
