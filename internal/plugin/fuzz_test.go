@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -56,6 +57,61 @@ func FuzzServeResponses(f *testing.F) {
 		}
 	})
 }
+
+// FuzzPluginResponses decodes what a plugin might answer through the host's
+// own decoding, and checks that text the plugin controls and tug prints,
+// such as an error's message and hint, cannot carry terminal control
+// sequences.
+func FuzzPluginResponses(f *testing.F) {
+	for _, s := range []string{
+		`{"apiVersion":"provider/v1alpha1","kind":"Error","code":"Unauthenticated","message":"bad token","hint":"run tug import"}`,
+		`{"apiVersion":"provider/v1alpha1","kind":"Error","code":"Internal","message":"line one\nline two\ttabbed"}`,
+		`{"apiVersion":"provider/v1alpha1","kind":"CheckAccessResponse","findings":[{"severity":"error","message":"blocked","fix":"allow 192.0.2.1/32"}]}`,
+		`{"apiVersion":"provider/v1alpha1","kind":"DescribeResponse","name":"x","description":"Acme clusters","protocols":["provider/v1alpha1"],"capabilities":["list"]}`,
+		`{"apiVersion":"provider/v1alpha1","kind":"AccountsResponse","accounts":[{"id":"a","description":"from ~/.acme"}]}`,
+	} {
+		for op := range len(fuzzOps) {
+			f.Add(byte(op), []byte(s))
+		}
+	}
+	f.Fuzz(func(t *testing.T, pick byte, out []byte) {
+		p := &Provider{plugin: &Plugin{Manifest: &Manifest{Metadata: Metadata{Name: "fuzz"}}}, runner: &Runner{Name: "fuzz"}}
+		var texts []string
+		var err error
+		switch op := fuzzOps[int(pick)%len(fuzzOps)]; op {
+		case provider.OpDescribe:
+			var d provider.Description
+			d, err = decode(p, out, provider.DecodeDescribe)
+			texts = append(texts, d.Description)
+		case provider.OpAccounts:
+			var accts []provider.Account
+			accts, err = decode(p, out, provider.DecodeAccounts)
+			for _, a := range accts {
+				texts = append(texts, a.Description)
+			}
+		case provider.OpCheckAccess:
+			var fs []provider.Finding
+			fs, err = decode(p, out, provider.DecodeCheckAccess)
+			for _, f := range fs {
+				texts = append(texts, f.Message, f.Fix)
+			}
+		default:
+			_, err = decode(p, out, provider.DecodeList)
+		}
+		var pe *provider.Error
+		if errors.As(err, &pe) {
+			texts = append(texts, pe.Message, pe.Hint, string(pe.Code))
+		}
+		for _, s := range texts {
+			if i := strings.IndexFunc(s, unprintable); i >= 0 {
+				t.Fatalf("plugin text %q keeps the control character %U", s, []rune(s[i:])[0])
+			}
+		}
+	})
+}
+
+// fuzzOps are the operations whose responses FuzzPluginResponses decodes.
+var fuzzOps = []string{provider.OpDescribe, provider.OpAccounts, provider.OpList, provider.OpCheckAccess}
 
 const fuzzManifest = `apiVersion: tug.plugin/v1alpha1
 kind: ProviderPlugin
