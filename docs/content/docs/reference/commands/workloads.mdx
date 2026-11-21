@@ -173,3 +173,36 @@ tug tree <target> [-o table|json|yaml]
 tug tree checkout
 tug tree cronjob/nightly-backup
 ```
+
+## tug gitops
+
+See what Flux and Argo CD deliver, tied to the live objects they manage. tug
+finds each tool through the cluster's API discovery and leaves out one the
+cluster doesn't serve. It only reads, and never syncs, reconciles or rolls
+anything back. See [Flux and Argo CD](/docs/guides/gitops).
+
+```bash
+tug gitops status [-n <namespace> | -A] [-o table|json|yaml|name]
+tug gitops explain <name> [-n <namespace>] [-o table|json|yaml]
+tug gitops drift <name> [-n <namespace>] [-o table|json|yaml]
+tug gitops dependencies <name> [-n <namespace>] [-o table|json|yaml]
+```
+
+| Command | What it does |
+| --- | --- |
+| `status` | Flux sources, Kustomizations and HelmReleases and Argo CD Applications, with readiness (sync and health for an Application), the suspended flag, the revision the source offers against the one last applied, and how long ago the controller last reported. Without `-A`, what concerns the namespace. |
+| `explain` | Where delivering one Kustomization, HelmRelease or Application fails: suspended, a dependency, the source, not yet reconciled, admission, build or apply, or the health of what it manages, with evidence and next steps. Exits 1 when it isn't healthy. |
+| `drift` | The objects Flux or Argo CD itself reports out of sync with the source. Exits 1 when something has drifted. |
+| `dependencies` | The `spec.dependsOn` graph both ways, with each object's readiness; for an Application, the app of apps. Alias: `deps`. |
+
+`explain`, `drift` and `dependencies` take a name alone or with a kind, such
+as `ks/apps`, `hr/podinfo` or `app/guestbook`, and search every namespace
+unless `-n` is given.
+
+```bash
+tug gitops status -A
+tug gitops explain apps
+tug gitops explain hr/podinfo -n shop -o json
+tug gitops drift app/guestbook
+tug gitops deps tenants
+```
