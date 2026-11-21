@@ -49,6 +49,9 @@ func TestFilterObjects(t *testing.T) {
 		{"api", []string{"deploy/api-server", "pod/api-server-7d9f-x2x4z", "cm/api-config", "pod/rapid-importer"}},
 		{"api-server", []string{"deploy/api-server", "pod/api-server-7d9f-x2x4z"}},
 		{"deploy/", []string{"deploy/api-server", "deploy/billing"}},
+		// The kind's letters never join a fuzzy match: "dap" would otherwise
+		// find d in "deploy/" or "pod/", then a and p in the name.
+		{"dap", []string{}},
 		// Words narrow: each must match the name or another column.
 		{"billing crash", []string{"pod/billing-5d4f-x2x4z"}},
 		{"payments", []string{"pod/rapid-importer"}},

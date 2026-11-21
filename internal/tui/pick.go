@@ -123,11 +123,14 @@ func FilterObjects(objects []ops.ObjectState, query string) []int {
 const otherField = 100
 
 // termScore scores how well one term matches an object; lower is better.
+// Only the name itself matches fuzzily: with the kind in front, as in
+// "cronjob/nightly-backup", "bil" would find b, i and l across the two.
 func termScore(o ops.ObjectState, term string) (int, bool) {
-	for _, name := range []string{o.Object.Name, ObjectLabel(o)} {
-		if m := resolve.All(term, []string{name}); len(m) == 1 {
-			return int(m[0].Rank), true
-		}
+	if m := resolve.All(term, []string{o.Object.Name}); len(m) == 1 {
+		return int(m[0].Rank), true
+	}
+	if m := resolve.All(term, []string{ObjectLabel(o)}); len(m) == 1 && m[0].Rank < resolve.RankFuzzy {
+		return int(m[0].Rank), true
 	}
 	others := []string{strings.ToLower(o.Object.Kind), o.Object.Namespace, strings.ToLower(o.Status), strings.ToLower(o.Owner)}
 	for _, f := range others {
