@@ -202,7 +202,7 @@ func watchShopEvents(t *testing.T, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprintf(w, "%s\n", b)
-	http.NewResponseController(w).Flush() //nolint:errcheck // a test server that cannot flush fails the test anyway
+	_ = http.NewResponseController(w).Flush() // a server that cannot flush fails the test anyway
 	<-r.Context().Done()
 }
 

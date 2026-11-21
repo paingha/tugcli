@@ -143,10 +143,9 @@ func (a *app) resolveController(ctx context.Context, env *opsEnv, arg string, na
 	where := "namespace " + env.namespace
 	if !namespaced {
 		all, err := ops.ControllerTargets(ctx, env.cs)
-		switch {
-		case err != nil:
+		if err != nil {
 			a.log.Debug("not looking for the controller in other namespaces", "err", err)
-		default:
+		} else {
 			where = "any namespace"
 			for _, t := range all {
 				if t.Namespace != env.namespace {
