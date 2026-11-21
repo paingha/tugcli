@@ -264,7 +264,7 @@ func (a *app) inspectNamed(ctx context.Context, ref string, loaded []plugin.Load
 		}
 		return a.inspectInstalled(pp.Plugin(), e.Kind, loaded), nil
 	}
-	if len(a.cfg.Plugins.Indexes) == 0 {
+	if len(loaded) == 0 && len(errs) == 0 { // none in config.yaml or from a team
 		if strings.ContainsAny(ref, `/\`) || strings.HasSuffix(ref, ".gz") || strings.HasSuffix(ref, ".zip") {
 			return nil, fmt.Errorf("%s does not exist", ref)
 		}

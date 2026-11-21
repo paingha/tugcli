@@ -22,12 +22,25 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
 <Files>
   <Folder name="~/.config/tug" defaultOpen>
     <File name="config.yaml" />
+    <Folder name="profiles">
+      <File name="payments.yaml" />
+    </Folder>
+    <File name="aliases.yaml" />
+    <File name="bookmarks.yaml" />
   </Folder>
   <Folder name="~/.local/share/tug" defaultOpen>
     <File name="catalog.yaml" />
     <File name="pins.yaml" />
     <File name="plugin-index-keys.yaml" />
     <File name="secrets.enc" />
+    <Folder name="teams">
+      <File name="teams.yaml" />
+      <Folder name="platform">
+        <File name="catalog.yaml" />
+        <File name="catalog.yaml.sig" />
+        <File name="state.json" />
+      </Folder>
+    </Folder>
     <Folder name="plugins" defaultOpen>
       <File name="links.yaml" />
       <Folder name="acme">
@@ -51,6 +64,7 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
         <File name="prompt" />
       </Folder>
     </Folder>
+    <Folder name="open" />
     <File name="tugd.sock" />
     <File name="tugd.log" />
   </Folder>
@@ -59,15 +73,20 @@ under one folder instead, as `config/`, `data/`, `cache/` and `run/`.
 | File | What it is |
 | --- | --- |
 | `config.yaml` | Your [settings](/docs/reference/configuration). Optional. |
+| `profiles/<name>.yaml` | Your [profiles](/docs/guides/profiles): cluster, namespace, safety, aliases and port-forwards. |
+| `aliases.yaml`, `bookmarks.yaml` | Your [aliases and bookmarks](/docs/reference/commands/shortcuts), written by `tug alias` and `tug bookmark`. |
 | `catalog.yaml` | Imported sources and their clusters, with labels and [tunnels](/docs/guides/tunnels). No secrets. |
 | `pins.yaml` | The [pin files](/docs/guides/pins) you've allowed, by path and content. |
 | `secrets.enc` | The encrypted secret store, only if you use the `file` backend. |
+| `teams/teams.yaml` | The [team catalogs](/docs/guides/teams) added with `tug team add`. |
+| `teams/<team>/` | The last good version of a team's catalog and its signature, checked again on every read, and the version accepted, so an older one is refused. |
 | `plugins/<name>/<version>/` | Installed plugins. `links.yaml` lists linked ones. |
 | `plugins/<name>/<version>.receipt.yaml` | How that version was installed: the archive's SHA-256, where it came from and who signed it, for [revocation](/docs/plugins/managing#revoked-plugins) checks and `tug plugin inspect`. |
 | `plugin-index-keys.yaml` | The newer signing key each [plugin index](/docs/plugins/indexes#changing-the-signing-key) has handed over to, so that one signed with the old key is refused. |
 | cache | API discovery data, to make commands faster. |
-| `sessions/<id>/` | One folder per terminal: its kubeconfig (no secrets), prompt text and state. |
+| `sessions/<id>/` | One folder per terminal: its kubeconfig (no secrets), prompt text (which the hook reads, with when an unlock ends) and state. |
 | `tugd.sock`, `tugd.log` | tugd's private control socket and its log. |
+| `open/` | Read-only copies of live YAML that `tug open` shows when no file defines an object, removed after a day. |
 
 ## Permissions
 

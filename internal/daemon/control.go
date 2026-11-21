@@ -89,6 +89,25 @@ func (s *Server) ControlHandler() http.Handler {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"stopped": r.PathValue("name")})
 	})
+	mux.HandleFunc("POST /v1/groups/{group}", func(w http.ResponseWriter, r *http.Request) {
+		var forwards []Forward
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&forwards); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "decoding the forwards: " + err.Error()})
+			return
+		}
+		res, err := s.StartGroup(r.Context(), r.PathValue("group"), forwards)
+		switch {
+		case errors.Is(err, ErrPortInUse), errors.Is(err, ErrForwardExists):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		case err != nil:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		default:
+			writeJSON(w, http.StatusOK, res)
+		}
+	})
+	mux.HandleFunc("DELETE /v1/groups/{group}", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string][]string{"stopped": s.StopGroup(r.PathValue("group"))})
+	})
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
 		s.Shutdown()
@@ -221,4 +240,23 @@ func (c *Client) Forwards(ctx context.Context) ([]ForwardState, error) {
 // StopForward ends a named port-forward.
 func (c *Client) StopForward(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/v1/forwards/"+url.PathEscape(name), nil, nil)
+}
+
+// StartGroup asks tugd to start the forwards of a group that are not
+// running, and waits until each is listening or has failed.
+func (c *Client) StartGroup(ctx context.Context, group string, forwards []Forward) (GroupResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, startWait+requestTimeout)
+	defer cancel()
+	var res GroupResult
+	err := c.do(ctx, http.MethodPost, "/v1/groups/"+url.PathEscape(group), forwards, &res)
+	return res, err
+}
+
+// StopGroup ends every forward of a group and returns their names.
+func (c *Client) StopGroup(ctx context.Context, group string) ([]string, error) {
+	var out struct {
+		Stopped []string `json:"stopped"`
+	}
+	err := c.do(ctx, http.MethodDelete, "/v1/groups/"+url.PathEscape(group), nil, &out)
+	return out.Stopped, err
 }

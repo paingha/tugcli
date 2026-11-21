@@ -8,12 +8,12 @@ points each terminal at one cluster without touching `~/.kube/config`.
 has the full user guide: installing, every provider and command, and writing
 plugins.
 
-> Status: early development, for individual developers. Phases 0 and 1 are in
-> place, and most of v1: tugd (the local API proxy, tunnels to private
-> clusters, named port-forwards), OIDC sign-in, credential rotation,
-> directory pins, signed plugin indexes, plugin serve mode, a Python SDK and
-> seventeen providers. Not built yet: the team catalog, and the "Later" items
-> (a TUI, commands across clusters, an audit log).
+> Status: early development. Phases 0 and 1 are in place, and most of v1:
+> tugd (the local API proxy, tunnels to private clusters, named
+> port-forwards), OIDC sign-in, credential rotation, directory pins, signed
+> plugin indexes, plugin serve mode, a Python SDK and seventeen providers,
+> as well as a TUI, commands across clusters, an audit log, and signed team
+> catalogs with safety policies.
 
 ## Quick start
 
@@ -26,6 +26,11 @@ Add the shell hook to your rc file (after any prompt theme):
 ```bash
 eval "$(tug init zsh)"          # bash: tug init bash, fish: tug init fish | source
 ```
+
+The prompt then shows the terminal's cluster, namespace and env label, whether
+it is read-only or how long an unlock has left, and `proxy` when it goes
+through tugd. A production cluster gets a red badge in every mode, and an
+unlock ends in the prompt on time, using the shell's own clock.
 
 Then:
 
@@ -40,7 +45,12 @@ tug logs api -f                 # deploy/api-server: every pod, coloured prefixe
 tug sh api                      # shell into a pod (bash, else sh; a debug container for distroless images)
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
+tug pick                        # fuzzy-pick an object, then why, tree, logs, describe or pf on it
+tug bookmark add api deploy/api-server -n shop   # later, from any terminal: tug bookmark open api [logs|tree|pf]
+tug open deploy/api             # the file in this repository that defines it, in $EDITOR (and as path:line)
+tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's commands, or a write
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -50,10 +60,12 @@ tug auth rotate lke-prod        # new credential from the provider; the old one 
 tug auth login cks-train        # sign in to the cluster's OIDC issuer in the browser (--device over SSH)
 tug tunnel set eks-private ssm://i-0123456789abcdef0   # reach a private cluster; see Tunnels
 tug pin set payments-staging -n payments  # this directory pins the terminal to a cluster
+tug profile up payments         # a saved environment: cluster, namespace, safety, aliases and forwards
 tug plugin install digitalocean # from a signed plugin index
 tug ui                          # full-screen: clusters, workloads, logs, why, tree, shells, forwards
 tug get pods --cluster-selector env=staging   # any read, on every matching cluster at once
-tug audit --since 24h           # the writes tug let through, per cluster
+tug audit --since 24h           # what tug let through and refused, per cluster
+tug team add platform https://teams.example.com/platform/team.yaml --public-key <key>  # shared names, labels and policies
 ```
 
 Targets are fuzzy: exact beats prefix beats fuzzy, workloads beat bare pods,
@@ -124,10 +136,24 @@ per-session token that exists only in tugd's memory, fetched through
 port-forward, `logs -f` and watches pass through. tugd stops after 30 minutes
 without a live session or a named port-forward.
 
+A proxied session fails closed: its kubeconfig names only tugd, so when tugd
+is down clients fail rather than reach the cluster directly, and a restarted
+tugd refuses the old tokens until clients fetch new ones. Expiring
+credentials are replaced mid-session; one the cluster refuses is reported as
+such, and tugd asks the provider for a new one. After the machine wakes from
+sleep, tugd drops its idle connections to clusters. tugd is a safety rail, not
+a security boundary: it sees only clients that use the session's kubeconfig
+and only the credential tug keeps, so RBAC, cloud IAM, admission control and
+the API server's audit log remain the enforcement (see
+[What tugd protects](docs/content/docs/concepts/proxy-limits.mdx)).
+
 tugd also keeps named port-forwards open: `tug pf <target> <ports> --name
 <name>` hands one to tugd, which keeps the same local ports and starts the
 forward again on a running pod when the old one goes away. `tug pf ls` lists
-them and `tug pf stop <name>|--all` ends them.
+them, with their state, restarts and when a dropped one retries, and
+`tug pf stop <name>|--all` ends them. `tug pf profile up|down|ls <profile>`
+starts and stops a profile's forwards as a group; every local port is checked
+first, and none start when one is taken.
 
 ## Tunnels
 
@@ -173,6 +199,23 @@ in tugd, and `r` and `S` restart and scale, through the session's guard.
 `n` switches namespace, `c` goes back to clusters and `?` lists every key.
 `tug ui --k9s` launches k9s on the session instead.
 
+## Shortcuts
+
+`tug pick [kind]` is a full-screen fuzzy picker over the namespace's
+objects, with each one's status, age and owner; choose one and run `why`,
+`tree`, `logs`, `describe` or `pf` on it. `tug bookmark add <name> [target]`
+saves an object, resolved exactly, or a cluster and namespace, and `tug
+bookmark open <name> [action]` runs the action on it from any terminal,
+through a temporary read-only session when it is on another cluster. `tug
+open <target>` finds the file that defines an object, from kustomize's
+origin annotation, the path of the Flux Kustomization or Argo CD Application
+that applied it, its Helm chart or a search of the repository, and opens it
+in `$VISUAL` or `$EDITOR`; without one, it opens the live YAML read-only.
+`tug alias set <name> <expansion>` adds your own commands: an alias can't
+hide one of tug's, and one that may write says what it runs and goes through
+the guard. Bookmarks and aliases live in `bookmarks.yaml` and `aliases.yaml`
+in tug's config directory.
+
 ## Across clusters
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
@@ -185,14 +228,61 @@ anything runs. Tunnelled clusters go through their tunnels.
 
 ## Audit log
 
-tug records every write it lets through, in `<data>/audit/audit.jsonl`:
-writes by tug's own commands, by kubectl, helm or k9s through tugd, and
-kubectl writes on direct sessions, where tug sees only the command line. It
-keeps the cluster, session, method and path, the command with values
-masked, and whether the write was confirmed, unlocked or read-write; never a
-request body or a secret. A write that cannot be recorded is not sent.
-`tug audit [--cluster x] [--since 24h] [-o json|yaml]` lists them, newest
-first.
+tug records in `<data>/audit/audit.jsonl` what it lets through and what it
+refuses: writes by tug's own commands, by kubectl, helm or k9s through tugd,
+and kubectl writes on direct sessions, where tug sees only the command line;
+writes the guard refuses; sessions starting and ending on a cluster, with
+the namespace, read-only or read-write, and whether they go through tugd;
+and unlocks starting, being locked and running out. A write keeps apart the
+intent (the tug or kubectl command, which kubectl names in a header), the
+request tug or tugd saw (method and path), and the outcome (the HTTP status,
+or kubectl's exit code). Entries never hold a request body, a query string, a
+token or a command-line value that could be a secret. A write that cannot be
+recorded is not sent, and an unlock that cannot be recorded is taken back.
+`tug audit [--cluster x] [--session id] [-n ns] [--event write|refused|...]
+[--since 24h] [-o json|yaml]` lists them, newest first. The log is a local
+record kept with your own permissions, not evidence that nobody changed it.
+
+## Team catalogs
+
+A team publishes a signed catalog with names, aliases and labels for its
+clusters, provider account settings, approved plugin indexes and safety
+policies. It never carries credentials: each person imports the team's
+accounts and reaches every cluster as themselves, through their own cloud or
+OIDC sign-in, and publishing a catalog grants nobody any Kubernetes
+permission.
+
+```bash
+tug team add platform https://teams.example.com/platform/team.yaml --public-key <key>
+tug team add infra --git git@github.com:acme/tug-team.git --path infra.yaml --public-key <key>
+tug team sync                   # fetch, check, show what changes, ask, apply
+tug team ls | show platform | remove platform
+tug team keygen | sign team.yaml | verify team.yaml --public-key <key>   # for publishers
+```
+
+The catalog is signed with ed25519, as plugin indexes are, and has a version
+that must go up: tug refuses a bad signature, a lower version and a changed
+catalog that kept its version, and keeps the last good version for offline
+use. A sync shows what a new version changes before it applies (`--yes` skips
+the question, and is needed without a terminal). Every entry records its team
+and version, your own labels, names and accounts win over the team's, and
+each conflict is listed. Teams can also be listed under `teams` in
+`config.yaml`.
+
+Policies map label selectors to read-only defaults and limits:
+
+```yaml
+policies:
+- {name: production-read-only, selector: {env: prod}, readOnly: true, maxUnlock: 30m}
+- {name: staging-write, selector: {env: staging}}
+```
+
+On a cluster under `production-read-only`, `tug unlock 2h` is refused,
+`tug unlock` lasts at most 30 minutes, and `tug connect --read-write` is
+refused. Policies combine with `guard.readOnlyLabels` so that the stricter
+always wins, and they see a cluster's labels with the team's winning, so a
+label set by hand cannot take a cluster out of one. Like the guard itself,
+they are a seatbelt, not access control.
 
 ## Directory pins
 
@@ -210,6 +300,31 @@ uses one only after `tug pin allow`, and again only after any change to it is
 allowed too. `tug pin set <cluster> -n <ns>` writes and allows one; `tug pin
 show` and `tug pin revoke` check and withdraw. Set `TUG_PIN_DISABLE=1` to turn
 pins off.
+
+## Profiles
+
+A profile is a YAML file in `profiles/` in tug's config directory that bundles
+a cluster, a namespace, a safety mode, command aliases and named
+port-forwards, so it can be reviewed like any other file:
+
+```yaml
+cluster: payments-prod
+namespace: shop
+safety: read-only           # or auto: the cluster's labels decide
+proxy: true
+aliases:
+  api-logs: logs api -f     # tug profile run api-logs
+forwards:
+  - {name: db, target: sts/postgres, ports: [5432]}
+```
+
+`tug profile use <name>` connects the terminal as it says, `tug profile up`
+also starts its forwards through tugd and `tug profile down` stops them.
+`tug profile edit <name>` writes one in your editor and saves it only once it
+parses (or reads it from stdin in a script); `ls`, `show` and `run <alias>` do
+the rest. A profile can make a session read-only but never read-write: on a
+cluster whose labels make it read-only, writes still ask first or need
+`tug unlock`. Profiles are chosen only by name, never by a pin.
 
 ## How it fits together
 
@@ -235,7 +350,12 @@ pins off.
 | Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
+| Team catalogs: signing, fetching, merging, policies | [internal/team](internal/team) |
+| Working-environment profiles | [internal/profile](internal/profile) |
+| Bookmarks and command aliases | [internal/bookmark](internal/bookmark), [internal/alias](internal/alias) |
+| Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |

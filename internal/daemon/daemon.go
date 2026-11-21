@@ -15,10 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +40,9 @@ const (
 	// upstreamTTL bounds how long a cluster's proxy is reused, so catalog
 	// changes (a new CA, a moved endpoint) are picked up.
 	upstreamTTL = time.Minute
+	// wakeGap is how far the wall clock may run ahead of the monotonic
+	// clock between two ticks before tugd takes it that the machine slept.
+	wakeGap = 10 * time.Second
 )
 
 // Config is what tugd needs from its host.
@@ -48,8 +53,10 @@ type Config struct {
 	// tug unlock and tug lock take effect at once.
 	Sessions *session.Manager
 	// Upstream returns a client config, with credentials, for a catalog
-	// cluster. tugd applies the guard itself.
-	Upstream func(ctx context.Context, clusterID string) (*rest.Config, error)
+	// cluster. tugd applies the guard itself. With refresh set, the cluster
+	// refused the last credential, so a new one is asked of its provider
+	// rather than taken from the cache.
+	Upstream func(ctx context.Context, clusterID string, refresh bool) (*rest.Config, error)
 	// ProxyAddr is the proxy's listen address; by default a loopback port,
 	// reusing the previous one when it is free.
 	ProxyAddr string
@@ -58,15 +65,16 @@ type Config struct {
 	IdleTimeout time.Duration
 	// Forward runs named port-forwards; without it tugd refuses them.
 	Forward ForwardFunc
-	// Audit, when set, records every write the proxy forwards. A write
-	// that cannot be recorded is not forwarded.
+	// Audit, when set, records every write the proxy forwards and how it
+	// was answered, every write it refuses, and unlocks that run out. A
+	// write that cannot be recorded is not forwarded.
 	Audit   Recorder
 	Version string
 	Now     func() time.Time
 	Log     *slog.Logger
 }
 
-// Recorder notes a write the proxy is about to forward.
+// Recorder notes what the proxy forwards and refuses in the audit log.
 type Recorder interface {
 	Record(ctx context.Context, e audit.Entry) error
 }
@@ -75,11 +83,15 @@ type Recorder interface {
 type Server struct {
 	cfg Config
 
-	mu         sync.Mutex
-	tokens     map[string]string // session ID to its proxy token
-	upstreams  map[string]*upstream
-	building   map[string]*sync.Mutex // per cluster, held while its upstream is built
-	forwards   map[string]*forwardRunner
+	mu        sync.Mutex
+	tokens    map[string]string // session ID to its proxy token
+	upstreams map[string]*upstream
+	building  map[string]*sync.Mutex // per cluster, held while its upstream is built
+	refresh   map[string]bool        // clusters whose next upstream needs a new credential
+	forwards  map[string]*forwardRunner
+	// probe checks that a local port is free before a group of forwards
+	// asks for it.
+	probe      func(addresses []string, port uint16) error
 	proxyURL   string
 	proxyCA    []byte
 	lastActive time.Time
@@ -105,7 +117,9 @@ func New(cfg Config) *Server {
 		tokens:    map[string]string{},
 		upstreams: map[string]*upstream{},
 		building:  map[string]*sync.Mutex{},
+		refresh:   map[string]bool{},
 		forwards:  map[string]*forwardRunner{},
+		probe:     listenProbe,
 		shutdown:  make(chan struct{}),
 	}
 }
@@ -231,6 +245,33 @@ func (s *Server) idle() bool {
 	return len(s.tokens) == 0 && len(s.forwards) == 0 && s.cfg.Now().Sub(s.lastActive) > s.cfg.IdleTimeout
 }
 
+// slept reports whether the machine seems to have slept between two
+// readings of the clock, prev and now: the wall clock, which counts time
+// asleep, ran ahead of the monotonic clock, which on most systems does not,
+// by more than wakeGap. A clock set forwards looks the same, which costs
+// only a few new connections.
+func slept(prev, now time.Time) bool {
+	return sleptFor(now.Round(0).Sub(prev.Round(0)), now.Sub(prev))
+}
+
+// sleptFor is slept for the time that passed on the wall clock and on the
+// monotonic clock.
+func sleptFor(wall, monotonic time.Duration) bool { return wall-monotonic > wakeGap }
+
+// endExpiredUnlocks records the unlocks of proxied sessions that have run
+// out, so the audit log has them even when no request comes after.
+func (s *Server) endExpiredUnlocks(ctx context.Context) {
+	s.mu.Lock()
+	ids := slices.Collect(maps.Keys(s.tokens))
+	s.mu.Unlock()
+	now := s.cfg.Now()
+	for _, id := range ids {
+		if sess, ok := s.usesProxy(id); ok {
+			s.endExpiredUnlock(ctx, sess, now)
+		}
+	}
+}
+
 // Run listens on the control socket and the proxy address and serves until
 // ctx ends, Shutdown is called, or tugd has been idle for IdleTimeout.
 func (s *Server) Run(ctx context.Context) error {
@@ -307,6 +348,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	tick := time.NewTicker(min(s.cfg.IdleTimeout/2, 30*time.Second))
 	defer tick.Stop()
+	lastTick := time.Now()
 	var runErr error
 loop:
 	for {
@@ -316,6 +358,13 @@ loop:
 		case <-s.shutdown:
 			break loop
 		case <-tick.C:
+			now := time.Now()
+			if slept(lastTick, now) {
+				s.cfg.Log.Info("the machine woke from sleep; closing idle connections to clusters")
+				s.dropUpstreams()
+			}
+			lastTick = now
+			s.endExpiredUnlocks(ctx)
 			if s.idle() {
 				s.cfg.Log.Info("tugd idle; stopping")
 				break loop

@@ -80,6 +80,13 @@ coloured so you can tell at a glance whether changes are allowed:
 
 <PromptModes />
 
+It also shows the cluster's `env` label in brackets, `proxy` when the session
+goes through [tugd](/docs/guides/proxy), and how long an unlock has left. A
+production cluster (one whose labels make it read-only, `env=prod` by default)
+gets a red badge in every mode, including when you opened it with
+`--read-write`. When an unlock runs out, the prompt goes back to read-only by
+itself; drawing it never starts a program, so it stays fast.
+
 ### Keep your own prompt
 
 If you'd rather tug left your prompt alone, set `TUG_PROMPT_DISABLE=1`

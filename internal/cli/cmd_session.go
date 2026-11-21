@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/session"
 )
 
@@ -25,7 +26,11 @@ func newInitCmd(a *app) *cobra.Command {
   powershell  Invoke-Expression (& tug init powershell | Out-String)
 
 The hook exports KUBECONFIG for this terminal only and adds the cluster to
-your prompt. Set TUG_PROMPT_DISABLE=1 to leave the prompt alone.`,
+your prompt: its namespace and env label, whether it is read-only or
+unlocked and for how long, and whether the session goes through tugd. A
+production cluster gets a red badge whatever the mode. Set
+TUG_PROMPT_DISABLE=1 to leave the prompt alone and use $TUG_PROMPT
+yourself.`,
 		Args:      cobra.ExactArgs(1),
 		ValidArgs: []string{"zsh", "bash", "fish", "powershell"},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,13 +68,18 @@ func newSessionCmd(a *app) *cobra.Command {
 				return err
 			}
 			mgr := a.sessions()
-			if _, err := mgr.Sweep(a.cfg.Sessions.MaxAge.Duration); err != nil {
+			removed, err := mgr.Sweep(a.cfg.Sessions.MaxAge.Duration)
+			if err != nil {
 				a.log.Debug("sweeping sessions", "err", err)
+			}
+			for _, st := range removed {
+				a.noteSession(cmd.Context(), audit.KindSessionEnd, st)
 			}
 			s, err := mgr.Create(pid, parent)
 			if err != nil {
 				return err
 			}
+			a.noteSession(cmd.Context(), audit.KindSessionStart, s.State) // connected like its parent
 			_, err = fmt.Fprint(a.stdout, session.ExportScript(sh, sessionEnv(s, mgr, pid)))
 			return err
 		},
@@ -90,7 +100,15 @@ func newSessionCmd(a *app) *cobra.Command {
 			if id == "" {
 				return session.ErrNoSession
 			}
-			return a.sessions().Remove(id)
+			mgr := a.sessions()
+			ending, openErr := mgr.Open(id)
+			if err := mgr.Remove(id); err != nil {
+				return err
+			}
+			if openErr == nil {
+				a.noteSession(cmd.Context(), audit.KindSessionEnd, ending.State)
+			}
+			return nil
 		},
 	}
 	endCmd.Flags().StringVar(&id, "id", "", "session ID (default $TUG_SESSION)")

@@ -88,7 +88,7 @@ func (a *app) warnRevoked(ctx context.Context, reg *registry.Registry) {
 			installed = append(installed, pp.Plugin())
 		}
 	}
-	if len(installed) == 0 || len(a.cfg.Plugins.Indexes) == 0 {
+	if len(installed) == 0 {
 		return
 	}
 	c := a.colors()
@@ -205,12 +205,12 @@ func (a *app) installPlugin(ctx context.Context, src string, o installOptions) e
 		if err != nil {
 			return err
 		}
-		if len(a.cfg.Plugins.Indexes) == 0 {
-			return errNoIndex
-		}
 		loaded, errs, err := a.loadIndexes(ctx)
 		if err != nil {
 			return err
+		}
+		if len(loaded) == 0 && len(errs) == 0 {
+			return errNoIndex // none in config.yaml or from a team
 		}
 		o.indexes, o.loaded = loaded, true
 		m, v, err := resolveIndexed(loaded, errs, ref)

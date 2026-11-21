@@ -18,6 +18,7 @@ terminal. Any command not listed here is passed to
 | [`tug tunnel`](/docs/reference/commands/connect#tug-tunnel) | Reach private clusters through SSH, a proxy, AWS SSM or Google IAP. |
 | [`tug ns`](/docs/reference/commands/connect#tug-ns) | Switch this session's namespace. |
 | [`tug pin`](/docs/reference/commands/connect#tug-pin) | Pin a directory to a cluster with `.tug.yaml`. |
+| [`tug profile`](/docs/reference/commands/connect#tug-profile) | Switch to a saved environment: cluster, namespace, safety, aliases and port-forwards. |
 | [`tug shell`](/docs/reference/commands/connect#tug-shell) | Start a subshell with its own session. |
 | [`tug init`](/docs/reference/commands/connect#tug-init) | Print the shell hook. |
 | [`tug ui`](/docs/reference/commands/connect#tug-ui) | Open k9s on this session's cluster. |
@@ -36,6 +37,10 @@ terminal. Any command not listed here is passed to
 | [`tug top`](/docs/reference/commands/workloads#tug-top) | CPU and memory of a workload's pods. |
 | [`tug why`](/docs/reference/commands/workloads#tug-why) | Explain why a workload or any other object isn't ready, and what to do next. |
 | [`tug tree`](/docs/reference/commands/workloads#tug-tree) | Show what a workload or any other object owns, with the health of each part. |
+| [`tug support bundle`](/docs/reference/commands/workloads#tug-support-bundle) | Collect an object's or a namespace's YAML, diagnosis, events, logs and nodes into a redacted archive. |
+| [`tug pick`](/docs/reference/commands/shortcuts#tug-pick) | Fuzzy-pick an object, then run why, tree, logs, describe or pf on it. |
+| [`tug bookmark`](/docs/reference/commands/shortcuts#tug-bookmark) | Save objects and places under short names, and open them from any terminal. |
+| [`tug open`](/docs/reference/commands/shortcuts#tug-open) | Open the file that defines an object in your editor, or else its live YAML. |
 
 ## Discover
 
@@ -47,6 +52,7 @@ terminal. Any command not listed here is passed to
 | [`tug label`](/docs/reference/commands/catalog#tug-label) | Set or remove your labels on a cluster. |
 | [`tug forget`](/docs/reference/commands/catalog#tug-forget) | Remove a source, its clusters and their credentials. |
 | [`tug plugin`](/docs/reference/commands/plugin) | Install (by name from an index, or from an archive), inspect, pin, write, test and publish provider plugins. |
+| [`tug team`](/docs/reference/commands/catalog#tug-team) | Follow team catalogs: shared cluster names, labels, accounts, plugin indexes and safety policies. |
 
 ## Safety
 
@@ -54,6 +60,7 @@ terminal. Any command not listed here is passed to
 | --- | --- |
 | [`tug unlock`](/docs/reference/commands/safety#tug-unlock) | Allow writes on a read-only session for a while. |
 | [`tug lock`](/docs/reference/commands/safety#tug-lock) | Make it read-only again now. |
+| [`tug audit`](/docs/reference/commands/safety#tug-audit) | List what tug let through and refused, and sessions and unlocks. |
 
 ## Other
 
@@ -65,6 +72,7 @@ terminal. Any command not listed here is passed to
 | [`tug auth token`](/docs/reference/commands/other#tug-auth-token) | The credential helper kubectl calls. |
 | [`tug daemon`](/docs/reference/commands/other#tug-daemon) | Manage tugd, the local API proxy. |
 | [`tug version`](/docs/reference/commands/other#tug-version) | Print tug's version. |
+| [`tug alias`](/docs/reference/commands/shortcuts#tug-alias) | Name your own shortcuts for tug and kubectl commands. |
 | [`tug completion`](/docs/reference/commands/other#tug-completion) | Generate tab completion for your shell. |
 
 ## Global flags

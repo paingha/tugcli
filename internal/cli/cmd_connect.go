@@ -13,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/paingha/tugcli/internal/audit"
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/kube"
@@ -39,8 +40,9 @@ func newConnectCmd(a *app) *cobra.Command {
 touched. The cluster can be a name, a prefix, or a fuzzy match; label=value
 arguments filter first, for example: tug connect gpu=true.
 
-Clusters labelled env=prod open read-only. Use tug unlock to allow writes for a
-while, or --read-write to connect without the guard.`,
+Clusters labelled env=prod open read-only, as do those a team policy makes
+read-only. Use tug unlock to allow writes for a while, or --read-write to
+connect without the guard where no policy limits unlocks.`,
 		Aliases: []string{"c"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := a.currentSession()
@@ -69,6 +71,12 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	if err != nil {
 		return err
 	}
+	limits := a.limits(cl)
+	if o.readWrite {
+		if err := limits.CheckReadWrite(cl.Name); err != nil {
+			return err
+		}
+	}
 	readOnly, auth, err := a.connectByHand(ctx, s, cl, o)
 	if err != nil {
 		return err
@@ -77,7 +85,7 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	c := a.colors()
 	mode := c.Green("read-write")
 	if readOnly {
-		mode = c.Red("read-only") + c.Dim(" (tug unlock 15m to allow writes)")
+		mode = c.Red("read-only") + c.Dim(" (tug unlock "+guard.ShortDuration(limits.Unlock(defaultUnlock))+" to allow writes)")
 	}
 	fmt.Fprintf(a.stdout, "Connected to %s, namespace %s, %s\n", c.Bold(cl.Name), s.State.Namespace, mode)
 	if auth.ProxyURL != "" {
@@ -117,11 +125,19 @@ func (a *app) connectByHand(ctx context.Context, s *session.Session, cl *catalog
 // connectTo points session s at cl: read-only by its labels unless o says
 // otherwise, and through tugd when o asks or the cluster has a tunnel.
 func (a *app) connectTo(ctx context.Context, s *session.Session, cl *catalog.Cluster, o connectOptions) (bool, session.AuthCommand, error) {
-	readOnly := guard.ReadOnlyFor(cl.EffectiveLabels(), a.cfg.Guard.ReadOnlyLabels)
+	limits := a.limits(cl)
+	readOnly := limits.ReadOnly
 	switch {
 	case o.readOnly:
 		readOnly = true
 	case o.readWrite:
+		// tug connect refuses --read-write where a policy limits unlocks;
+		// putting a connection back, as leaving a pinned directory does,
+		// opens read-only there instead.
+		if err := limits.CheckReadWrite(cl.Name); err != nil {
+			fmt.Fprintf(a.stderr, "%s %v\n", a.colors().Yellow("warning:"), err)
+			break
+		}
 		readOnly = false
 	}
 	auth := session.AuthCommand{Command: selfPath()}
@@ -141,7 +157,24 @@ func (a *app) connectTo(ctx context.Context, s *session.Session, cl *catalog.Clu
 		}
 		auth.ProxyURL, auth.ProxyCA = reg.ProxyURL, reg.ProxyCA
 	}
-	return readOnly, auth, s.Connect(cl, o.namespace, readOnly, auth)
+	prev := s.State
+	if err := s.Connect(cl, o.namespace, readOnly, auth); err != nil {
+		return readOnly, auth, err
+	}
+	a.noteSession(ctx, audit.KindSessionEnd, prev)
+	a.noteSession(ctx, audit.KindSessionStart, s.State)
+	return readOnly, auth, nil
+}
+
+// disconnect points session s at no cluster, and records that it left the
+// one it was on.
+func (a *app) disconnect(ctx context.Context, s *session.Session) error {
+	prev := s.State
+	if err := s.Disconnect(); err != nil {
+		return err
+	}
+	a.noteSession(ctx, audit.KindSessionEnd, prev)
+	return nil
 }
 
 // chooseCluster resolves a target and label filters to one cluster.
@@ -197,7 +230,7 @@ func newDisconnectCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return s.Disconnect()
+			return a.disconnect(cmd.Context(), s)
 		},
 	}
 }
@@ -213,6 +246,9 @@ type statusView struct {
 	UnlockedUntil *time.Time `json:"unlockedUntil,omitempty"`
 	Kubeconfig    string     `json:"kubeconfig,omitempty"`
 	ProxyURL      string     `json:"proxyURL,omitempty"`
+	Env           string     `json:"env,omitempty"`
+	Production    bool       `json:"production,omitempty"`
+	Profile       string     `json:"profile,omitempty"`
 }
 
 func newStatusCmd(a *app) *cobra.Command {
@@ -233,13 +269,16 @@ func newStatusCmd(a *app) *cobra.Command {
 			}
 			st := s.State
 			v := statusView{
-				Session:   st.ID,
-				Cluster:   st.ClusterName,
-				ClusterID: st.ClusterID,
-				Namespace: st.Namespace,
-				ReadOnly:  st.ReadOnly,
-				Writable:  st.Writable(a.now()),
-				ProxyURL:  st.ProxyURL,
+				Session:    st.ID,
+				Cluster:    st.ClusterName,
+				ClusterID:  st.ClusterID,
+				Namespace:  st.Namespace,
+				ReadOnly:   st.ReadOnly,
+				Writable:   st.Writable(a.now()),
+				ProxyURL:   st.ProxyURL,
+				Env:        st.Env,
+				Production: st.Production,
+				Profile:    st.Profile,
 			}
 			if st.Connected() {
 				v.Kubeconfig = s.KubeconfigPath()
@@ -270,6 +309,16 @@ func newStatusCmd(a *app) *cobra.Command {
 				c.Bold(st.ClusterName), st.Namespace, mode, v.Kubeconfig)
 			if st.ProxyURL != "" {
 				fmt.Fprintf(a.stdout, "proxy:      %s (tugd guards every client)\n", st.ProxyURL)
+			}
+			if st.Env != "" || st.Production {
+				env := st.Env
+				if st.Production {
+					env = c.Red(strings.TrimSpace(env + " (production)"))
+				}
+				fmt.Fprintf(a.stdout, "env:        %s\n", env)
+			}
+			if st.Profile != "" {
+				fmt.Fprintf(a.stdout, "profile:    %s\n", st.Profile)
 			}
 			return nil
 		},
@@ -366,7 +415,9 @@ func (a *app) factory(s *session.Session) (*kube.Factory, error) {
 		Confirm: func(action string) bool {
 			return a.confirm(fmt.Sprintf("%s is read-only. Allow %s?", cl.Name, action), false)
 		},
-		Audit: a.audit(),
+		Audit:  a.audit(),
+		Intent: a.command,
+		Log:    a.log,
 	}
 	return &kube.Factory{
 		Cluster:   cl,
@@ -403,13 +454,20 @@ func (a *app) namespaces(ctx context.Context, s *session.Session) ([]string, err
 	return names, nil
 }
 
+// defaultUnlock is how long tug unlock allows writes when no duration is
+// given and no policy says less.
+const defaultUnlock = 15 * time.Minute
+
 func newUnlockCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock [duration]",
 		Short: "Allow writes on a read-only session for a while (default 15m)",
-		Args:  cobra.MaximumNArgs(1),
+		Long: `Allow writes on a read-only session for a while, 15 minutes by default. A
+team policy can limit how long an unlock lasts; tug unlock then refuses a
+longer one, and without a duration unlocks for the limit if it is shorter.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d := 15 * time.Minute
+			d := defaultUnlock
 			if len(args) == 1 {
 				var err error
 				if d, err = time.ParseDuration(args[0]); err != nil || d <= 0 {
@@ -427,8 +485,28 @@ func newUnlockCmd(a *app) *cobra.Command {
 				_, err := fmt.Fprintf(a.stdout, "%s is already read-write\n", s.State.ClusterName)
 				return err
 			}
+			cat, err := a.loadCatalog()
+			if err != nil {
+				return err
+			}
+			if cl, err := cat.Get(s.State.ClusterID); err == nil {
+				limits := a.limits(cl)
+				if len(args) == 1 {
+					if err := limits.CheckUnlock(cl.Name, d); err != nil {
+						return err
+					}
+				}
+				d = limits.Unlock(d)
+			}
 			if err := s.Unlock(d); err != nil {
 				return err
+			}
+			// Every write is recorded anyway, but an unlock that cannot be
+			// recorded is taken back, so none goes unrecorded.
+			e := a.sessionEntry(audit.KindUnlock, s.State)
+			e.Time, e.Until = s.State.UnlockedUntil.Add(-d), s.State.UnlockedUntil
+			if err := a.audit().Record(cmd.Context(), e); err != nil {
+				return errors.Join(fmt.Errorf("not unlocked, since the unlock could not be recorded in the audit log: %w", err), s.Lock())
 			}
 			c := a.colors()
 			_, err = fmt.Fprintf(a.stdout, "%s writes allowed on %s until %s\n", c.Yellow("Unlocked:"), c.Bold(s.State.ClusterName),
@@ -448,7 +526,16 @@ func newLockCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return s.Lock()
+			until, unlocked := s.State.UnlockedUntil, s.State.ReadOnly && s.State.Writable(a.now())
+			if err := s.Lock(); err != nil {
+				return err
+			}
+			if unlocked {
+				e := a.sessionEntry(audit.KindLock, s.State)
+				e.Until = until
+				a.note(cmd.Context(), e)
+			}
+			return nil
 		},
 	}
 }
@@ -466,9 +553,11 @@ func newShellCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			a.noteSession(cmd.Context(), audit.KindSessionStart, s.State) // connected like its parent
 			if len(args) > 0 {
 				if err := a.connect(cmd.Context(), s, args, o); err != nil {
 					_ = mgr.Remove(s.State.ID)
+					a.noteSession(cmd.Context(), audit.KindSessionEnd, s.State)
 					return err
 				}
 			}

@@ -62,6 +62,15 @@ sessions:
 oidc:
   # Where the browser comes back to after an OpenID Connect sign-in.
   listenAddresses: [127.0.0.1:8000, 127.0.0.1:18000]
+
+# Team catalogs to follow, besides those added with tug team add.
+teams:
+  - name: platform
+    url: https://teams.acme.example/platform/team.yaml
+    publicKey: <base64 ed25519 public key>
+  - name: infra
+    git: {repo: git@github.com:acme/tug-team.git, path: infra.yaml, ref: main}
+    publicKey: <base64 ed25519 public key>
 ```
 
 ## keyring
@@ -96,7 +105,7 @@ oidc:
       type: 'list of label sets',
       default: '[{env: prod}]',
       description:
-        'A cluster opens read-only when it has every label in at least one set. Setting this replaces the default, so include env: prod if you still want it.',
+        'A cluster opens read-only when it has every label in at least one set. Setting this replaces the default, so include env: prod if you still want it. Team policies add to these: where both apply, the stricter wins.',
     },
   }}
 />
@@ -169,6 +178,34 @@ oidc:
       default: '["127.0.0.1:8000", "127.0.0.1:18000"]',
       description:
         'Loopback addresses tried, in order, for the browser’s return after tug auth login (it comes back to http://localhost:<port>). Change them only if your identity provider allows other redirect URLs.',
+    },
+  }}
+/>
+
+## teams
+
+[Team catalogs](/docs/guides/teams) to follow, in order, besides those added
+with `tug team add`. `tug team sync` fetches them; nothing is applied until
+you review it.
+
+<TypeTable
+  type={{
+    name: {
+      type: 'string',
+      description: 'The team’s name in tug: lowercase letters, digits and dashes.',
+    },
+    url: {
+      type: 'string',
+      description: 'The https URL of the catalog. Its signature is at the same URL plus .sig.',
+    },
+    git: {
+      type: '{repo, path, ref}',
+      description:
+        'A catalog in a git repository instead of a URL: repo is what git clone takes, path defaults to team.yaml, and ref to the default branch. tug clones it with your own git credentials.',
+    },
+    publicKey: {
+      type: 'string',
+      description: 'The base64 ed25519 key the catalog must be signed with, from tug team keygen.',
     },
   }}
 />

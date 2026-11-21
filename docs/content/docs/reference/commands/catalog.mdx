@@ -52,7 +52,8 @@ tug ls [flags]
 
 Table columns: `NAME`, `PROVIDER`, `ACCOUNT`, `REGION`, `VERSION`, `ENV`,
 `LABELS`, `STATUS`. JSON fields: `name`, `id`, `provider`, `account`,
-`region`, `version`, `server`, `labels`, `stale`, `lastSeen`.
+`region`, `version`, `server`, `labels`, `stale`, `lastSeen`, and `aliases`
+and `team` for a cluster a [team catalog](/docs/guides/teams) describes.
 
 ## tug label
 
@@ -79,3 +80,79 @@ tug forget <provider>/<account>
 ```bash
 tug forget aws/work
 ```
+
+## tug team
+
+Follow [team catalogs](/docs/guides/teams): signed files in which a team
+publishes names, aliases and labels for its clusters, provider accounts,
+plugin indexes and safety policies. A team catalog holds no credentials and
+grants no Kubernetes permission.
+
+### tug team add
+
+Fetch a team's catalog, check its signature, show what it can do and what it
+would change, and ask before following it.
+
+```bash
+tug team add <name> <url> --public-key <key> [--yes]
+tug team add <name> --git <repository> [--path <file>] [--ref <branch>] --public-key <key> [--yes]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--public-key <key>` | The base64 ed25519 key the catalog must be signed with. Required. |
+| `--git <repository>` | Read the catalog from a git repository instead of a URL, with your own git credentials. |
+| `--path <file>` | The catalog's path in the repository. Default `team.yaml`. |
+| `--ref <branch>` | Branch or tag to read. Default: the repository's default branch. |
+| `-y`, `--yes` | Follow the team without asking. Needed without a terminal. |
+
+### tug team sync
+
+Fetch every team's catalog, or the ones named, and apply new versions after
+showing what they change. Your own entries win, and conflicts are listed. A
+catalog that cannot be fetched or checked leaves the last good version in
+place. Exits 1 when a team could not be checked, or a new version needs a
+review nobody can give without a terminal.
+
+```bash
+tug team sync [team...] [--yes]
+```
+
+### tug team ls
+
+List the teams you follow: where each catalog is, the version you have, when
+it was last checked, and whether it is set in `config.yaml` or with
+`tug team add`. `-o json|yaml|name` as for `tug ls`.
+
+### tug team show
+
+Show a team's catalog as last accepted, the clusters it names here, its
+policies and plugin indexes, and the conflicts with your own entries.
+Works offline.
+
+```bash
+tug team show <team> [-o json|yaml]
+```
+
+### tug team remove
+
+Stop following a team. Its policies and plugin indexes stop applying, and
+its names, aliases and labels come off your clusters, which keep their
+names. Accounts it added stay as yours; `tug forget` removes them.
+
+```bash
+tug team remove <team>
+```
+
+### tug team keygen, sign and verify
+
+For whoever publishes a catalog.
+
+```bash
+tug team keygen [--name default]            # prints the public key; the private key stays in the credential store
+tug team sign team.yaml [--name default]    # checks the catalog and writes team.yaml.sig
+tug team verify team.yaml --public-key <key>
+```
+
+In CI, set `TUG_TEAM_KEY` to the private key instead of using the credential
+store.

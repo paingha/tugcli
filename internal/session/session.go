@@ -46,8 +46,17 @@ type State struct {
 	Namespace     string    `json:"namespace,omitempty"`
 	ReadOnly      bool      `json:"readOnly,omitempty"`
 	UnlockedUntil time.Time `json:"unlockedUntil,omitempty"`
+	// Env is the cluster's env label, which the prompt shows.
+	Env string `json:"env,omitempty"`
+	// Production is set when the cluster's labels make it production (by
+	// default env=prod), whatever the session's mode, so the prompt marks
+	// it even on a session opened read-write.
+	Production bool `json:"production,omitempty"`
 	// ProxyURL is set when the session goes through tugd's API proxy.
 	ProxyURL string `json:"proxyURL,omitempty"`
+	// Profile is the profile the session was connected with, until it
+	// connects some other way.
+	Profile string `json:"profile,omitempty"`
 	// Pin is set while a .tug.yaml chose the connection.
 	Pin *Pin `json:"pin,omitempty"`
 	// PinNoticed is the pin file, path and hash, the user was last told
@@ -72,6 +81,7 @@ type Connection struct {
 	Namespace string `json:"namespace,omitempty"`
 	ReadOnly  bool   `json:"readOnly,omitempty"`
 	Proxy     bool   `json:"proxy,omitempty"`
+	Profile   string `json:"profile,omitempty"`
 }
 
 // Current returns the session's connection, or nil when it has none.
@@ -79,7 +89,7 @@ func (s *State) Current() *Connection {
 	if !s.Connected() {
 		return nil
 	}
-	return &Connection{ClusterID: s.ClusterID, Namespace: s.Namespace, ReadOnly: s.ReadOnly, Proxy: s.ProxyURL != ""}
+	return &Connection{ClusterID: s.ClusterID, Namespace: s.Namespace, ReadOnly: s.ReadOnly, Proxy: s.ProxyURL != "", Profile: s.Profile}
 }
 
 // Connected reports whether the session points at a cluster.
@@ -92,14 +102,33 @@ func (s *State) Writable(now time.Time) bool {
 
 // Manager creates and finds sessions under one runtime directory.
 type Manager struct {
-	runtime string
-	root    string
-	now     func() time.Time
+	runtime    string
+	root       string
+	now        func() time.Time
+	production func(labels map[string]string) bool
+}
+
+// Option changes a Manager.
+type Option func(*Manager)
+
+// WithProduction sets how Connect tells a production cluster from its
+// labels. By default a cluster labelled env=prod is production.
+func WithProduction(f func(labels map[string]string) bool) Option {
+	return func(m *Manager) { m.production = f }
 }
 
 // NewManager returns a Manager for runtimeDir.
-func NewManager(runtimeDir string) *Manager {
-	return &Manager{runtime: runtimeDir, root: filepath.Join(runtimeDir, "sessions"), now: time.Now}
+func NewManager(runtimeDir string, opts ...Option) *Manager {
+	m := &Manager{
+		runtime:    runtimeDir,
+		root:       filepath.Join(runtimeDir, "sessions"),
+		now:        time.Now,
+		production: func(labels map[string]string) bool { return labels["env"] == "prod" },
+	}
+	for _, o := range opts {
+		o(m)
+	}
+	return m
 }
 
 // checkPrivate refuses a runtime directory that other users can change (see
@@ -172,6 +201,9 @@ func (s *Session) copyConnection(parent *Session) error {
 	s.State.ClusterName = parent.State.ClusterName
 	s.State.Namespace = parent.State.Namespace
 	s.State.ReadOnly = parent.State.ReadOnly
+	s.State.Env = parent.State.Env
+	s.State.Production = parent.State.Production
+	s.State.Profile = parent.State.Profile
 	s.State.ProxyURL = parent.State.ProxyURL
 	if s.State.ProxyURL != "" {
 		cfg, err := clientcmd.LoadFromFile(parent.KubeconfigPath())
@@ -249,19 +281,20 @@ func (m *Manager) Remove(id string) error {
 }
 
 // Sweep removes sessions whose shell has exited, and any session not updated
-// within maxAge. It returns how many it removed.
-func (m *Manager) Sweep(maxAge time.Duration) (int, error) {
+// within maxAge. It returns the state of each session it removed; one whose
+// state could not be read has only its ID.
+func (m *Manager) Sweep(maxAge time.Duration) ([]State, error) {
 	if err := m.checkPrivate(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	entries, err := os.ReadDir(m.root)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return nil, nil
 	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	removed := 0
+	var removed []State
 	for _, e := range entries {
 		if !e.IsDir() || !validID.MatchString(e.Name()) {
 			continue
@@ -276,7 +309,11 @@ func (m *Manager) Sweep(maxAge time.Duration) (int, error) {
 		orphan := err != nil && m.now().Sub(info.ModTime()) > time.Hour
 		if old || dead || orphan {
 			if os.RemoveAll(filepath.Join(m.root, e.Name())) == nil {
-				removed++
+				st := State{ID: e.Name()}
+				if err == nil {
+					st = s.State
+				}
+				removed = append(removed, st)
 			}
 		}
 	}

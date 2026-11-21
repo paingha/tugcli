@@ -1,0 +1,33 @@
+# tug profile {{.Name}}. `tug profile use {{.Name}}` connects a terminal as it
+# says; `tug profile up {{.Name}}` also starts its port-forwards through tugd,
+# and `tug profile down {{.Name}}` stops them.
+
+# A cluster name, prefix or fuzzy match, as tug connect takes it.
+cluster: {{.Cluster}}
+# labels: {region: eu-west-1}   # optional: narrow the clusters first
+namespace: {{.Namespace}}
+
+# auto lets the cluster's labels decide, as tug connect does: env=prod opens
+# read-only. read-only makes any cluster read-only. A profile can never make
+# a cluster read-write; use `tug unlock` for that.
+safety: auto
+
+# Send every client (kubectl, helm, k9s) through tugd, so the guard applies
+# to all of them and not only to tug's own commands.
+proxy: false
+
+# Short names for tug commands: `tug profile run <alias> [args...]`.
+# aliases:
+#   api-logs: logs api -f
+#   psql: sh sts/postgres -- psql -U app
+
+# Named port-forwards, kept open by tugd across pod restarts. Ports are as
+# tug pf takes them; quote ones that start with a colon.
+# forwards:
+#   - name: db
+#     target: sts/postgres
+#     ports: [5432]
+#   - name: api
+#     target: api
+#     namespace: web          # default: the profile's namespace
+#     ports: ["8080:http"]

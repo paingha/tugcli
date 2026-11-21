@@ -71,9 +71,30 @@ func (a *app) runDoctor(ctx context.Context, args []string, o doctorOptions) err
 	if format == render.FormatName {
 		return errors.New("doctor supports -o table, json or yaml")
 	}
-	cat, err := a.loadCatalog()
+	cfg, err := a.doctorConfig(args, o.egressIP)
 	if err != nil {
 		return err
+	}
+	report := doctor.Run(ctx, cfg)
+	if format == render.FormatJSON || format == render.FormatYAML {
+		if err := render.Structured(a.stdout, format, report); err != nil {
+			return err
+		}
+	} else if err := a.printDoctor(report); err != nil {
+		return err
+	}
+	if report.Failed() {
+		return &exitError{code: 1}
+	}
+	return nil
+}
+
+// doctorConfig gathers what doctor checks: tug's setup and the cluster
+// named in args or, without one, this terminal's.
+func (a *app) doctorConfig(args []string, egressIP string) (doctor.Config, error) {
+	cat, err := a.loadCatalog()
+	if err != nil {
+		return doctor.Config{}, err
 	}
 	cfg := doctor.Config{Now: a.now, Catalog: cat, Kuberc: a.kubercInfo()}
 
@@ -111,11 +132,11 @@ func (a *app) runDoctor(ctx context.Context, args []string, o doctorOptions) err
 	switch {
 	case len(args) == 1:
 		if cl, err = a.chooseCluster(cat, args); err != nil {
-			return err
+			return doctor.Config{}, err
 		}
 	case sessErr == nil && s.State.Connected():
 		if cl, err = cat.Get(s.State.ClusterID); err != nil {
-			return fmt.Errorf("this terminal's cluster: %w; run `tug connect` again", err)
+			return doctor.Config{}, fmt.Errorf("this terminal's cluster: %w; run `tug connect` again", err)
 		}
 	}
 	if cl != nil {
@@ -123,21 +144,9 @@ func (a *app) runDoctor(ctx context.Context, args []string, o doctorOptions) err
 		if sessErr == nil && s.State.ClusterID == cl.ID {
 			ns = s.State.Namespace
 		}
-		a.doctorCluster(&cfg, cat, cl, ns, o.egressIP, storeErr)
+		a.doctorCluster(&cfg, cat, cl, ns, egressIP, storeErr)
 	}
-
-	report := doctor.Run(ctx, cfg)
-	if format == render.FormatJSON || format == render.FormatYAML {
-		if err := render.Structured(a.stdout, format, report); err != nil {
-			return err
-		}
-	} else if err := a.printDoctor(report); err != nil {
-		return err
-	}
-	if report.Failed() {
-		return &exitError{code: 1}
-	}
-	return nil
+	return cfg, nil
 }
 
 // doctorCluster fills in the cluster part of the doctor's config.

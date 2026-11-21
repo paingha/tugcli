@@ -32,6 +32,9 @@ tug connect prod --read-write      # no guard at all (think twice)
 
 To change which labels mean "read-only", set
 [`guard.readOnlyLabels`](/docs/reference/configuration#guard) in `config.yaml`.
+A [team catalog](/docs/guides/teams#safety-policies) you follow can add
+policies of its own, such as production-read-only. Where both apply, the
+stricter wins: a cluster opens read-only when either says so.
 
 ## What "read-only" covers
 
@@ -99,12 +102,19 @@ Unlocked: writes allowed on prod-eu until 3:45PM
 ```
 
 - The default is 15 minutes. Use any duration such as `5m`, `1h` or `90s`.
-- Your prompt turns **yellow** and says `(unlocked)`.
+- A team policy can limit how long an unlock lasts. tug then refuses a
+  longer one, unlocks for the limit when you give no duration and it is
+  shorter than 15 minutes, and refuses `--read-write`, which would be an
+  unlock without an end.
+- Your prompt turns **yellow** and says how long is left: `(unlocked 15m)`.
 - The unlock belongs to **this terminal only**. Other terminals connected to
   the same cluster stay read-only.
 - When the time runs out, the session is read-only again. The guard checks
-  the time on every request; the prompt catches up the next time you run a
-  tug command.
+  the time on every request, and the prompt turns red again by itself at the
+  next prompt, using the shell's own clock. A shell you opened with `exec`
+  while unlocked keeps running until you leave it; new ones are refused.
+- `tug audit` shows when each unlock started, and when it was locked again or
+  ran out.
 
 Finished early? Lock it again straight away:
 
@@ -116,6 +126,13 @@ tug lock
 
 The guard is a seatbelt for honest mistakes, not access control. Anyone can
 run `tug unlock` or `--read-write`, and on a normal session a direct `kubectl`
-isn't covered at all. What you're truly *allowed* to do is decided by the
+isn't covered at all. Team policies tighten the seatbelt, but they are not
+access control either, and publishing a team catalog grants no Kubernetes
+permission to anyone. What you're truly *allowed* to do is decided by the
 cluster's own RBAC. `tug doctor` shows what your identity may do in a
 namespace.
+
+[What tugd protects, and what it doesn't](/docs/concepts/proxy-limits) lists
+exactly which clients and credentials the guard can see, even with `--proxy`,
+and what does the enforcing instead: RBAC, cloud IAM, admission control and
+the API server's audit log.
