@@ -137,7 +137,7 @@ tug tunnel ls | rm <cluster>
 | --- | --- |
 | `ssh://[user@]host[:port]` | an SSH jump host; keys from ssh-agent, `~/.ssh` or `?identity=`, and the host key must already be in `known_hosts` |
 | `socks5://`, `http://`, `https://` | a proxy that needs no password, since tug keeps no secrets in its catalog |
-| `ssm://<instance>[?region=&profile=]` | an AWS Systems Manager session through a managed instance that can reach the private endpoint; tug speaks Session Manager itself, so it needs only AWS credentials, not the session-manager-plugin |
+| `ssm://<instance>[?region=&profile=&mux=true]` | an AWS Systems Manager session through a managed instance that can reach the private endpoint; tug speaks Session Manager itself, so it needs only AWS credentials, not the session-manager-plugin. KMS-encrypted sessions work, a dropped session resumes, and `mux=true` shares one session among connections on newer agents (by default each connection has its own, so one slow stream cannot stall the rest) |
 | `iap://<instance>?project=&zone=` | Google Cloud IAP TCP forwarding to a VM; needs only Application Default Credentials, not gcloud |
 | `iap://?project=&region=&network=&group=` | IAP to a host in a destination group, such as a private GKE endpoint; add `cert=` and `key=` (PEM files) for certificate-based access through the mTLS relay, and `universe=` for another Google Cloud universe |
 | `tsh://<proxy>/<Teleport cluster>/<Kubernetes cluster>` | Teleport's `tsh proxy kube`, for a Teleport cluster that kubectl cannot reach directly: behind a load balancer that needs connection upgrades, or with a hardware key. tsh keeps the Teleport certificate; tug runs it, and uses the CA and client certificate of its local proxy, which change each time it starts |
