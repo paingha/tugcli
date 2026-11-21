@@ -17,6 +17,9 @@ type Plugin struct {
 	// Dev is true for linked and $TUG_PLUGIN_PATH plugins, which are not
 	// checksummed.
 	Dev bool
+	// WASM is true when Bin is the plugin's WebAssembly build, which tug
+	// runs itself rather than as a process.
+	WASM bool
 }
 
 // Name is the provider name.

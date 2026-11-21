@@ -1,15 +1,39 @@
 package plugin
 
 import (
+	"bytes"
 	"debug/elf"
 	"debug/macho"
 	"debug/pe"
+	"io"
+	"os"
 )
+
+// wasmHeader starts every core WebAssembly module: the magic number and
+// version 1.
+var wasmHeader = []byte("\x00asm\x01\x00\x00\x00")
+
+// isWASMFile reports whether path is a WebAssembly module.
+func isWASMFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, len(wasmHeader))
+	if _, err := io.ReadFull(f, head); err != nil {
+		return false
+	}
+	return bytes.Equal(head, wasmHeader)
+}
 
 // binaryPlatform reports the OS and architecture an executable was built for.
 // It returns empty strings for scripts and formats it does not recognise,
 // which are treated as platform-neutral.
 func binaryPlatform(path string) (goos, goarch string) {
+	if isWASMFile(path) {
+		return WASMOS, WASMArch
+	}
 	if f, err := elf.Open(path); err == nil {
 		defer f.Close()
 		switch f.Machine {

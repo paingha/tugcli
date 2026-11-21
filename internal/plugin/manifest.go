@@ -1,5 +1,6 @@
 // Package plugin is the plugin host: it finds provider plugins, checks their
-// manifests and checksums, and runs them as processes speaking JSON on stdio.
+// manifests and checksums, and runs them speaking JSON on stdio, either as
+// processes or, for WebAssembly builds, as modules inside tug's sandbox.
 package plugin
 
 import (
@@ -78,6 +79,16 @@ type Platform struct {
 	Bin    string `json:"bin"`
 	SHA256 string `json:"sha256,omitempty"`
 }
+
+// The platform of a WebAssembly build, as GOOS and GOARCH name it. tug runs
+// such a build itself, on every OS and architecture.
+const (
+	WASMOS   = "wasip1"
+	WASMArch = "wasm"
+)
+
+// IsWASM reports whether p is a WebAssembly build.
+func (p Platform) IsWASM() bool { return p.OS == WASMOS && p.Arch == WASMArch }
 
 var (
 	validName    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
@@ -183,12 +194,29 @@ func (m *Manifest) Validate() error {
 	if len(m.Spec.Platforms) == 0 {
 		errs = append(errs, errors.New("spec.platforms is empty"))
 	}
+	wasm := 0
 	for i, p := range m.Spec.Platforms {
 		if p.OS == "" || p.Arch == "" || p.Bin == "" {
 			errs = append(errs, fmt.Errorf("spec.platforms[%d] needs os, arch and bin", i))
 		}
 		if filepath.IsAbs(p.Bin) || strings.HasPrefix(filepath.Clean(p.Bin), "..") {
 			errs = append(errs, fmt.Errorf("spec.platforms[%d].bin must be a path inside the plugin directory", i))
+		}
+		if (p.OS == WASMOS) != (p.Arch == WASMArch) {
+			errs = append(errs, fmt.Errorf("spec.platforms[%d]: a WebAssembly build is {os: %s, arch: %s}", i, WASMOS, WASMArch))
+		}
+		if p.IsWASM() {
+			wasm++
+		}
+	}
+	if wasm > 1 {
+		errs = append(errs, errors.New("spec.platforms lists more than one WebAssembly build"))
+	}
+	if wasm > 0 {
+		// The WebAssembly build is held to spec.network, so every entry
+		// must be a host rather than a description.
+		if _, err := newAllowList(m.Spec.Network); err != nil {
+			errs = append(errs, fmt.Errorf("%w; the WebAssembly build may reach only the hosts in spec.network, written as api.example.com, *.example.com or api.example.com:8443", err))
 		}
 	}
 	for _, s := range m.Spec.Secrets {
@@ -270,14 +298,37 @@ func (m *Manifest) UnknownSettings(config map[string]any) []string {
 	return out
 }
 
-// Platform returns the entry for this OS and architecture.
+// Platform returns the build to run here: the entry for this OS and
+// architecture, or else the WebAssembly build, which runs everywhere.
 func (m *Manifest) Platform() (Platform, error) {
+	builds := m.Runnable(false)
+	if len(builds) == 0 {
+		return Platform{}, m.noBuild()
+	}
+	return builds[0], nil
+}
+
+// Runnable returns the builds that can run here, best first: the entry for
+// this OS and architecture, then the WebAssembly build. With preferWASM the
+// WebAssembly build comes first.
+func (m *Manifest) Runnable(preferWASM bool) []Platform {
+	var native, wasm []Platform
 	for _, p := range m.Spec.Platforms {
-		if p.OS == runtime.GOOS && p.Arch == runtime.GOARCH {
-			return p, nil
+		switch {
+		case p.IsWASM():
+			wasm = append(wasm, p)
+		case p.OS == runtime.GOOS && p.Arch == runtime.GOARCH:
+			native = append(native, p)
 		}
 	}
-	return Platform{}, fmt.Errorf("plugin %s has no build for %s/%s", m.Metadata.Name, runtime.GOOS, runtime.GOARCH)
+	if preferWASM {
+		return append(wasm, native...)
+	}
+	return append(native, wasm...)
+}
+
+func (m *Manifest) noBuild() error {
+	return fmt.Errorf("plugin %s has no build for %s/%s and no WebAssembly build", m.Metadata.Name, runtime.GOOS, runtime.GOARCH)
 }
 
 // VerifyChecksum compares the binary at path with the manifest's sha256.
