@@ -378,9 +378,11 @@ def delegate(
 class Cluster:
     """One Kubernetes cluster a provider can reach. id is stable for the
     life of the cluster within its account. ca_data is the cluster CA in
-    PEM. credential may be set when the provider already holds the
-    credential at list time; tug moves it to the keychain and never writes
-    it to the catalog."""
+    PEM. tunnel, written as for tug tunnel set, is how tug reaches an API
+    server that kubectl cannot reach directly; a tunnel the user sets wins
+    over it, and it must not carry a password. credential may be set when
+    the provider already holds the credential at list time; tug moves it to
+    the keychain and never writes it to the catalog."""
 
     id: str
     name: str
@@ -392,6 +394,7 @@ class Cluster:
     insecure_skip_tls_verify: bool = False
     proxy_url: str = ""
     default_namespace: str = ""
+    tunnel: str = ""
     labels: dict[str, str] = field(default_factory=dict)
     credential: Optional[Credential] = None
 
@@ -413,6 +416,8 @@ class Cluster:
             d["proxyURL"] = self.proxy_url
         if self.default_namespace:
             d["defaultNamespace"] = self.default_namespace
+        if self.tunnel:
+            d["tunnel"] = self.tunnel
         if self.labels:
             d["labels"] = sorted_map(self.labels)
         if self.credential is not None:
@@ -435,6 +440,7 @@ class Cluster:
             insecure_skip_tls_verify=f.boolean("insecureSkipTLSVerify"),
             proxy_url=f.string("proxyURL"),
             default_namespace=f.string("defaultNamespace"),
+            tunnel=f.string("tunnel"),
             labels=f.string_map("labels"),
             credential=None if cred is None else Credential.from_dict(cred, f.path("credential")),
         )

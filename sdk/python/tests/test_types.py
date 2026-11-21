@@ -53,6 +53,7 @@ class WireFormatTest(unittest.TestCase):
                     insecure_skip_tls_verify=True,
                     proxy_url="socks5://127.0.0.1:1080",
                     default_namespace="payments",
+                    tunnel="ssh://admin@bastion.example.com",
                     labels={"team": "platform", "env": "prod", "note": "a<b>&c "},
                     credential=token("inline", EXPIRY),
                 ),
@@ -60,6 +61,7 @@ class WireFormatTest(unittest.TestCase):
                 '"endpoints":{"public":"https://a.example:443","private":"https://10.0.0.1:6443"},'
                 '"caData":"LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCg==","tlsServerName":"kubernetes",'
                 '"insecureSkipTLSVerify":true,"proxyURL":"socks5://127.0.0.1:1080","defaultNamespace":"payments",'
+                '"tunnel":"ssh://admin@bastion.example.com",'
                 '"labels":{"env":"prod","note":"a\\u003cb\\u003e\\u0026c\\u2028","team":"platform"},'
                 '"credential":{"type":"token","token":"inline","expiresAt":"2030-01-02T03:04:05.123456Z"}}',
             ),

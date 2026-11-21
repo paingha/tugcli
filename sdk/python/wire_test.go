@@ -43,6 +43,7 @@ func fullCluster() provider.Cluster {
 		InsecureSkipTLSVerify: true,
 		ProxyURL:              "socks5://127.0.0.1:1080",
 		DefaultNamespace:      "payments",
+		Tunnel:                "ssh://admin@bastion.example.com",
 		Labels:                map[string]string{"team": "platform", "env": "prod", "gpu": "true"},
 		Credential:            &inline,
 	}
