@@ -45,6 +45,10 @@ tug logs api -f                 # deploy/api-server: every pod, coloured prefixe
 tug sh api                      # shell into a pod (bash, else sh; a debug container for distroless images)
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
+tug pick                        # fuzzy-pick an object, then why, tree, logs, describe or pf on it
+tug bookmark add api deploy/api-server -n shop   # later, from any terminal: tug bookmark open api [logs|tree|pf]
+tug open deploy/api             # the file in this repository that defines it, in $EDITOR (and as path:line)
+tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's commands, or a write
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
@@ -194,6 +198,23 @@ in tugd, and `r` and `S` restart and scale, through the session's guard.
 `n` switches namespace, `c` goes back to clusters and `?` lists every key.
 `tug ui --k9s` launches k9s on the session instead.
 
+## Shortcuts
+
+`tug pick [kind]` is a full-screen fuzzy picker over the namespace's
+objects, with each one's status, age and owner; choose one and run `why`,
+`tree`, `logs`, `describe` or `pf` on it. `tug bookmark add <name> [target]`
+saves an object, resolved exactly, or a cluster and namespace, and `tug
+bookmark open <name> [action]` runs the action on it from any terminal,
+through a temporary read-only session when it is on another cluster. `tug
+open <target>` finds the file that defines an object, from kustomize's
+origin annotation, the path of the Flux Kustomization or Argo CD Application
+that applied it, its Helm chart or a search of the repository, and opens it
+in `$VISUAL` or `$EDITOR`; without one, it opens the live YAML read-only.
+`tug alias set <name> <expansion>` adds your own commands: an alias can't
+hide one of tug's, and one that may write says what it runs and goes through
+the guard. Bookmarks and aliases live in `bookmarks.yaml` and `aliases.yaml`
+in tug's config directory.
+
 ## Across clusters
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
@@ -288,6 +309,8 @@ cluster whose labels make it read-only, writes still ask first or need
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
 | Working-environment profiles | [internal/profile](internal/profile) |
+| Bookmarks and command aliases | [internal/bookmark](internal/bookmark), [internal/alias](internal/alias) |
+| Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
