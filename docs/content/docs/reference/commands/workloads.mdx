@@ -131,7 +131,13 @@ tug top [target]
 Explain why a deployment, statefulset, daemonset, job or pod isn't ready, and
 what to do next: crashes (with the last exit code), image pulls, out-of-memory
 kills, missing ConfigMaps or Secrets, failing probes, scheduling, volume claims
-and recent warning events. It only reads. See
+and recent warning events.
+
+Any other kind works too, named as kubectl names it: a custom resource, a
+cronjob, a node. tug reads its status conditions, checks that its controller
+has caught up with its latest change, and looks at everything it owns, with the
+diagnosis above for each workload it owns. It only reads, and never reads a
+Secret's data. See
 [Why isn't it working?](/docs/guides/workloads#why-isnt-it-working).
 
 ```bash
@@ -142,15 +148,23 @@ tug why <target> [-o table|json|yaml]
 tug why api
 tug why sts/db -n data
 tug why job/migrate -o json
+tug why certificate/web-tls
+tug why kustomization.kustomize.toolkit.fluxcd.io/apps -n flux-system
 ```
 
 ## tug tree
 
 Show a workload's ownership tree with the health of each part: ReplicaSets or
 revisions, pods and containers, the Services that select the pods, and the
-ConfigMaps, Secrets and volume claims they use. It only reads, and shows only
-the key names of Secrets.
+ConfigMaps, Secrets and volume claims they use. For any other kind, show
+everything it owns through ownerReferences, with each workload it owns shown
+the same way. It only reads, and shows only the key names of Secrets.
 
 ```bash
 tug tree <target> [-o table|json|yaml]
+```
+
+```bash
+tug tree checkout
+tug tree cronjob/nightly-backup
 ```

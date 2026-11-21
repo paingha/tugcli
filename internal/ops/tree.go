@@ -26,8 +26,12 @@ type Health string
 const (
 	HealthReady    Health = "ready"
 	HealthNotReady Health = "not-ready"
-	// HealthUnknown is for objects tug may not read.
+	// HealthUnknown is for objects tug may not read, and objects whose
+	// controller has not yet caught up with them.
 	HealthUnknown Health = "unknown"
+	// HealthNone is for objects that report no health of their own, such
+	// as a ConfigMap or a custom resource without status conditions.
+	HealthNone Health = "none"
 )
 
 func healthOf(ok bool) Health {

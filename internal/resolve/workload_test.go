@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,18 +149,28 @@ func TestPodsReadyFirstThenNewest(t *testing.T) {
 }
 
 func TestParseQuery(t *testing.T) {
-	for _, bad := range []string{"", "svc/api", "deploy/"} {
+	for _, bad := range []string{"", "deploy/", "/api"} {
 		if _, err := ParseQuery(bad); err == nil {
 			t.Errorf("ParseQuery(%q) succeeded", bad)
 		}
 	}
-	q, err := ParseQuery("statefulsets/db")
+	q, err := ParseQuery("svc/api")
+	if err != nil || q.Kind != "" || q.Resource != "svc" || q.Name != "api" {
+		t.Fatalf("ParseQuery(svc/api) = %+v, %v, want resource svc", q, err)
+	}
+	if err := q.RequireWorkload(); err == nil || !strings.Contains(err.Error(), "unsupported kind") {
+		t.Errorf("RequireWorkload() for svc/api = %v, want unsupported kind", err)
+	}
+	q, err = ParseQuery("statefulsets/db")
 	if err != nil || q.Kind != KindStatefulSet || q.Name != "db" {
 		t.Fatalf("got %+v %v", q, err)
 	}
 	q, err = ParseQuery("jobs/migrate")
 	if err != nil || q.Kind != KindJob || q.Name != "migrate" {
 		t.Fatalf("ParseQuery(jobs/migrate) = %+v, %v, want job migrate", q, err)
+	}
+	if err := q.RequireWorkload(); err != nil {
+		t.Errorf("RequireWorkload() for jobs/migrate = %v", err)
 	}
 }
 

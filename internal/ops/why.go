@@ -82,12 +82,19 @@ type PodState struct {
 	Conditions []Condition `json:"conditions,omitempty"`
 }
 
-// Condition is a pod condition that is not true.
+// Condition is a status condition: one of a pod's that is not true, or any
+// of another object's.
 type Condition struct {
 	Type    string `json:"type"`
 	Status  string `json:"status"`
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
+	// LastTransition is when the status last changed, when the object
+	// says.
+	LastTransition time.Time `json:"lastTransition,omitzero"`
+	// ObservedGeneration is the generation of the object the condition was
+	// set for, when the object says.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
 // Diagnosis is what Why found out about a workload or pod.
@@ -98,8 +105,13 @@ type Diagnosis struct {
 	// (or, for a job, it has not failed) and nothing is wrong.
 	Healthy bool   `json:"healthy"`
 	Summary string `json:"summary"`
-	// Rollout is nil for a bare pod.
-	Rollout  *Rollout   `json:"rollout,omitempty"`
+	// Rollout is nil for a bare pod and for objects other than workloads.
+	Rollout *Rollout `json:"rollout,omitempty"`
+	// Conditions are the status conditions of an object other than a
+	// workload or pod.
+	Conditions []Condition `json:"conditions,omitempty"`
+	// Pods are the workload's pods or, for another object, the pods of the
+	// workloads it owns.
 	Pods     []PodState `json:"pods"`
 	Findings []Finding  `json:"findings"`
 	// Events are the most recent Warning events, newest first.
@@ -856,22 +868,7 @@ func (d *diagnoser) finish() {
 			Message: "has no pods yet", Next: "see the controller's events: " + d.tug("describe", d.w.target.String())})
 	}
 
-	var grouped []Finding
-	index := map[string]int{}
-	for _, f := range out.Findings {
-		key := strings.Join([]string{string(f.Severity), f.Reason, f.Container, f.Message}, "\x00")
-		if i, ok := index[key]; ok {
-			for _, o := range f.Objects {
-				if !slices.Contains(grouped[i].Objects, o) {
-					grouped[i].Objects = append(grouped[i].Objects, o)
-				}
-			}
-			continue
-		}
-		index[key] = len(grouped)
-		grouped = append(grouped, f)
-	}
-	slices.SortStableFunc(grouped, func(a, b Finding) int { return a.Severity.rank() - b.Severity.rank() })
+	grouped := groupFindings(out.Findings)
 	out.Findings = grouped
 
 	problems := slices.ContainsFunc(grouped, func(f Finding) bool { return f.Severity != SeverityInfo })
@@ -891,6 +888,28 @@ func (d *diagnoser) finish() {
 				Next: "watch it: " + d.tug("rollout", "status", d.w.target.String())})
 		}
 	}
+}
+
+// groupFindings merges findings that differ only in their objects, as pods
+// with the same problem do, and orders them worst first.
+func groupFindings(findings []Finding) []Finding {
+	var grouped []Finding
+	index := map[string]int{}
+	for _, f := range findings {
+		key := strings.Join([]string{string(f.Severity), f.Reason, f.Container, f.Message}, "\x00")
+		if i, ok := index[key]; ok {
+			for _, o := range f.Objects {
+				if !slices.Contains(grouped[i].Objects, o) {
+					grouped[i].Objects = append(grouped[i].Objects, o)
+				}
+			}
+			continue
+		}
+		index[key] = len(grouped)
+		grouped = append(grouped, f)
+	}
+	slices.SortStableFunc(grouped, func(a, b Finding) int { return a.Severity.rank() - b.Severity.rank() })
+	return grouped
 }
 
 func plural(n int32, word string) string {

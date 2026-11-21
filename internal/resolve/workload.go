@@ -75,19 +75,23 @@ func (t Target) IsWorkload() bool { return t.Kind != KindPod }
 
 // Query is a parsed target argument: "api", or "deploy/api" with a kind.
 type Query struct {
-	Kind Kind // "" when not given
-	Name string
+	Kind Kind // "" when not given, or when the kind is not a workload's
+	// Resource is the kind as typed when it is not a workload's, such as
+	// "certificate" or "kustomizations.kustomize.toolkit.fluxcd.io". Only
+	// the commands that work on any object accept one.
+	Resource string
+	Name     string
 }
 
 // ParseQuery splits an optional kind prefix from a target argument.
 func ParseQuery(s string) (Query, error) {
 	if kind, name, ok := strings.Cut(s, "/"); ok {
+		if kind == "" || name == "" {
+			return Query{}, fmt.Errorf("target %q needs a kind and a name, such as deploy/api", s)
+		}
 		k, err := ParseKind(kind)
 		if err != nil {
-			return Query{}, err
-		}
-		if name == "" {
-			return Query{}, fmt.Errorf("target %q has no name", s)
+			return Query{Resource: kind, Name: name}, nil
 		}
 		return Query{Kind: k, Name: name}, nil
 	}
@@ -95,6 +99,16 @@ func ParseQuery(s string) (Query, error) {
 		return Query{}, fmt.Errorf("empty target")
 	}
 	return Query{Name: s}, nil
+}
+
+// RequireWorkload returns an error when the query names a kind that is not a
+// workload's, for the commands that need pods.
+func (q Query) RequireWorkload() error {
+	if q.Resource == "" {
+		return nil
+	}
+	_, err := ParseKind(q.Resource)
+	return err
 }
 
 // Workloads lists the targets in a namespace. When kind is "", it returns

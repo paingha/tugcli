@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -18,15 +20,24 @@ func newTreeCmd(a *app) *cobra.Command {
 	var o treeOptions
 	cmd := &cobra.Command{
 		Use:   "tree <target>",
-		Short: "Show a workload's ownership tree with the health of each part",
+		Short: "Show what a workload or any other object owns, with the health of each part",
 		Long: `Show what a workload is made of, as k9s's xray does: its ReplicaSets (for a
 deployment) or ControllerRevisions (for a statefulset or daemonset), their
 pods and containers, the Services that select the pods, and the ConfigMaps,
-Secrets and PersistentVolumeClaims the pods use. Each object is marked ready
-(✓), not ready (✗) or unknown (?) with a short status. tree only reads, and
-shows only the key names of Secrets.`,
+Secrets and PersistentVolumeClaims the pods use.
+
+Any other kind works too, named as kubectl names it, such as certificate/web-tls
+or cronjob/nightly-backup: tree shows everything it owns through
+ownerReferences, in its namespace or, for a cluster-scoped object, the whole
+cluster, with each workload it owns shown as above. Other objects' health comes
+from their status conditions.
+
+Each object is marked ready (✓), not ready (✗), unknown (?) or, when it reports
+no health of its own, as a ConfigMap does, with a dot (·), and has a short
+status. tree only reads, and shows only the key names of Secrets.`,
 		Example: `  tug tree api
-  tug tree sts/db -o yaml`,
+  tug tree sts/db -o yaml
+  tug tree kustomization.kustomize.toolkit.fluxcd.io/apps`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := render.ParseFormat(o.output)
@@ -41,13 +52,21 @@ shows only the key names of Secrets.`,
 			if err != nil {
 				return err
 			}
-			t, err := a.resolveTarget(ctx, env, args[0])
+			clients, mapper, err := a.objectClients(env)
 			if err != nil {
 				return err
 			}
-			root, err := ops.Tree(ctx, env.cs, t)
+			o, err := a.resolveObject(ctx, env, clients, mapper, args[0])
 			if err != nil {
 				return err
+			}
+			root, unlisted, err := ops.ObjectTree(ctx, clients, o)
+			if err != nil {
+				return err
+			}
+			if len(unlisted) > 0 {
+				fmt.Fprintf(a.stderr, "%s could not list %s, so anything of those kinds it owns is missing\n",
+					a.colors().Yellow("warning:"), strings.Join(unlisted, ", "))
 			}
 			if format != render.FormatTable {
 				return render.Structured(a.stdout, format, root)
@@ -89,7 +108,11 @@ func (a *app) treeLines(n ops.TreeNode) render.TreeNode {
 	case ops.KindEphemeralContainer:
 		label = "ephemeral container " + n.Name
 	default:
-		label = treeKinds[n.Kind] + "/" + n.Name
+		kind, ok := treeKinds[n.Kind]
+		if !ok {
+			kind = strings.ToLower(n.Kind)
+		}
+		label = kind + "/" + n.Name
 	}
 	marker := c.Yellow("?")
 	switch n.Health {
@@ -97,6 +120,8 @@ func (a *app) treeLines(n ops.TreeNode) render.TreeNode {
 		marker = c.Green("✓")
 	case ops.HealthNotReady:
 		marker = c.Red("✗")
+	case ops.HealthNone:
+		marker = c.Dim("·")
 	}
 	out := render.TreeNode{Label: label, Detail: marker + " " + n.Status}
 	for _, child := range n.Children {

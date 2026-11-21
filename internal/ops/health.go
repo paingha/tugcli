@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/paingha/tugcli/internal/resolve"
@@ -64,7 +65,36 @@ func fetchWorkload(ctx context.Context, cs kubernetes.Interface, t resolve.Targe
 	if err != nil {
 		return nil, fmt.Errorf("getting %s: %w", t, err)
 	}
+	if w.target.Selector == nil && w.pod == nil {
+		// A target reached through an owner rather than resolved by name
+		// has no selector yet; the workload's own picks its pods.
+		w.target.Selector = labels.Nothing()
+		if sel := w.selector(); sel != nil {
+			s, err := metav1.LabelSelectorAsSelector(sel)
+			if err != nil {
+				return nil, fmt.Errorf("reading the selector of %s: %w", t, err)
+			}
+			w.target.Selector = s
+		}
+	}
 	return w, nil
+}
+
+// selector returns the workload's label selector; nil for a bare pod or a
+// job without one.
+func (w *workload) selector() *metav1.LabelSelector {
+	switch {
+	case w.deploy != nil:
+		return w.deploy.Spec.Selector
+	case w.sts != nil:
+		return w.sts.Spec.Selector
+	case w.ds != nil:
+		return w.ds.Spec.Selector
+	case w.job != nil:
+		return w.job.Spec.Selector
+	default:
+		return nil
+	}
 }
 
 // object returns the workload's metadata.

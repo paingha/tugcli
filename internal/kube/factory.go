@@ -111,6 +111,13 @@ func (f *Factory) Discovery(ctx context.Context) (discovery.CachedDiscoveryInter
 	if err != nil {
 		return nil, err
 	}
+	return f.DiscoveryFor(cfg)
+}
+
+// DiscoveryFor returns a discovery client cached on disk per cluster that
+// uses a config RESTConfig already returned, so that the credential is not
+// resolved a second time.
+func (f *Factory) DiscoveryFor(cfg *rest.Config) (discovery.CachedDiscoveryInterface, error) {
 	dir := filepath.Join(f.CacheDir, "discovery", safeName(f.Cluster.ID))
 	return disk.NewCachedDiscoveryClientForConfig(cfg, dir, filepath.Join(f.CacheDir, "http"), discoveryTTL)
 }

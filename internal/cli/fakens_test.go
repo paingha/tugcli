@@ -18,6 +18,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,11 +40,15 @@ var fakeResources = map[string]fakeResource{
 	"daemonsets":             {"apps/v1", "DaemonSetList"},
 	"controllerrevisions":    {"apps/v1", "ControllerRevisionList"},
 	"jobs":                   {"batch/v1", "JobList"},
+	"databases":              {"db.example.com/v1", "DatabaseList"},
+	"backups":                {"db.example.com/v1", "BackupList"},
 }
 
-// resourceOf returns the resource a typed object is served as.
+// resourceOf returns the resource an object is served as.
 func resourceOf(o runtime.Object) string {
-	switch o.(type) {
+	switch o := o.(type) {
+	case *unstructured.Unstructured:
+		return strings.ToLower(o.GetKind()) + "s"
 	case *corev1.Pod:
 		return "pods"
 	case *corev1.Event:
@@ -129,6 +134,20 @@ func (f *fakeNamespace) serve(w http.ResponseWriter, r *http.Request, parts []st
 			if m, err := meta.Accessor(o); err == nil && sel.Matches(labels.Set(m.GetLabels())) {
 				items = append(items, o)
 			}
+		}
+		// The metadata client asks for metadata only, as tree and why do
+		// to find what an object owns.
+		if strings.Contains(r.Header.Get("Accept"), "as=PartialObjectMetadataList") {
+			partial := []metav1.PartialObjectMetadata{}
+			for _, o := range items {
+				m, _ := meta.Accessor(o)
+				p := metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "meta.k8s.io/v1", Kind: "PartialObjectMetadata"}}
+				p.Name, p.Namespace, p.UID, p.Labels = m.GetName(), m.GetNamespace(), m.GetUID(), m.GetLabels()
+				p.OwnerReferences, p.CreationTimestamp = m.GetOwnerReferences(), m.GetCreationTimestamp()
+				partial = append(partial, p)
+			}
+			writeJSON(f.t, w, map[string]any{"kind": "PartialObjectMetadataList", "apiVersion": "meta.k8s.io/v1", "metadata": map[string]any{}, "items": partial})
+			return
 		}
 		writeJSON(f.t, w, map[string]any{"kind": res.listKind, "apiVersion": res.groupVersion, "metadata": map[string]any{}, "items": items})
 	case len(parts) == 2 && r.Method == http.MethodGet:

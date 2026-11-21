@@ -29,7 +29,7 @@ const apiServerDeployment = `{"kind":"Deployment","apiVersion":"apps/v1",
 func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var writes atomic.Int32
-	shop := newFakeNamespace(t, shopObjects()...)
+	shop := newFakeNamespace(t, append(shopObjects(), shopCustomObjects()...)...)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+secretToken {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -43,6 +43,10 @@ func fakeAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 		p := r.URL.Path
 		if ns, parts, ok := namespacedParts(p); ok && ns == "shop" {
 			shop.serve(w, r, parts)
+			return
+		}
+		if body, ok := fakeDiscovery[p]; ok {
+			fmt.Fprint(w, body)
 			return
 		}
 		switch {
