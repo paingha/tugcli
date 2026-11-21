@@ -29,6 +29,7 @@ prefixed with its cluster:
 			if cmd.Flags().Changed("parallel") {
 				return fmt.Errorf("%s works only with %s", flagParallel, flagClusterSelector)
 			}
+			a.command = cmd.CommandPath() // the intent in audit entries
 			return a.setup(debug)
 		},
 	}
@@ -59,12 +60,12 @@ prefixed with its cluster:
 	)
 	add("interact",
 		newLogsCmd(a), newShCmd(a), newPfCmd(a), newRestartCmd(a), newScaleCmd(a), newRollbackCmd(a), newTopCmd(a),
-		newWhyCmd(a), newTreeCmd(a), newSupportCmd(a),
+		newWhyCmd(a), newTreeCmd(a), newSupportCmd(a), newPickCmd(a), newBookmarkCmd(a), newOpenCmd(a),
 		newGitOpsCmd(a),
 	)
 	add("discover", newImportCmd(a), newSyncCmd(a), newLsCmd(a), newLabelCmd(a), newForgetCmd(a), newPluginCmd(a))
 	add("safety", newUnlockCmd(a), newLockCmd(a), newAuditCmd(a))
-	add("other", newAuthCmd(a), newDaemonCmd(a), newVersionCmd(a))
+	add("other", newAuthCmd(a), newDaemonCmd(a), newVersionCmd(a), newAliasCmd(a))
 	root.AddCommand(newSessionCmd(a), newProviderExecCmd(a), newPluginSandboxExecCmd(a))
 	root.SetHelpCommandGroupID("other")
 	root.SetCompletionCommandGroupID("other")

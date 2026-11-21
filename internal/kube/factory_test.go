@@ -163,6 +163,29 @@ func TestTokenReachesServer(t *testing.T) {
 	}
 }
 
+// With Refresh, the provider is asked for a new credential even though the
+// stored one has not expired, as tugd does once the cluster refused it.
+func TestRESTConfigRefresh(t *testing.T) {
+	cl := clusterFor(newFakeAPI(t).Server, "fake/work/c-1")
+	f := newFactory(t, cl, provider.Token("revoked", time.Now().Add(time.Hour)))
+	fetches := 0
+	f.Broker.Fetch = func(context.Context, string) (provider.Credential, error) {
+		fetches++
+		return provider.Token(testToken, time.Now().Add(time.Hour)), nil
+	}
+	if _, err := f.RESTConfig(context.Background()); err != nil || fetches != 0 {
+		t.Fatalf("RESTConfig = %v after %d fetches, want the stored credential", err, fetches)
+	}
+	f.Refresh = true
+	if _, err := f.RESTConfig(context.Background()); err != nil || fetches != 1 {
+		t.Fatalf("RESTConfig with Refresh = %v after %d fetches, want one", err, fetches)
+	}
+	r, err := f.Broker.Resolve(context.Background(), cl.ID, false)
+	if err != nil || r.Token != testToken {
+		t.Fatalf("stored credential after a refresh = %+v, %v; want the new one", r, err)
+	}
+}
+
 // TestConcurrentRequestsShareTheToken makes requests at once, as discovery
 // and tree do; under -race it fails if the token source is not safe for
 // that.

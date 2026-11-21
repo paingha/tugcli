@@ -1,0 +1,140 @@
+---
+title: What tugd protects, and what it doesn't
+description: The read-only guard and tugd are a safety rail against honest mistakes, not a security boundary. Here is exactly where the rail ends.
+icon: ShieldAlert
+---
+
+The [read-only guard](/docs/concepts/read-only) and [tugd](/docs/guides/proxy)
+exist to stop **honest mistakes**: the `kubectl delete` typed into the wrong
+terminal, the `helm upgrade` run against production instead of staging. They
+are good at that. They are **not a security boundary**, and they do not decide
+what you are allowed to do. This page says exactly where the rail ends, so you
+can rely on it for what it does and not for what it doesn't.
+
+## What tugd covers
+
+When a terminal is connected with `tug connect --proxy`, its kubeconfig points
+at tugd instead of the cluster. tugd holds the cluster's credential, and every
+request from a client that uses that kubeconfig passes through it.
+
+| | |
+| --- | --- |
+| **Which clients** | Anything that uses the session's kubeconfig through `KUBECONFIG`: `kubectl`, `helm`, `k9s`, client-go programs, and tug itself. |
+| **What counts as a change** | Any request other than `GET`, `HEAD` and `OPTIONS`, plus `exec` and `attach` on a pod (also when sent as a WebSocket `GET`), the kubelet's `exec`, `run`, `attach` and `checkpoint` through `nodes/<name>/proxy`, and any path with empty, `.` or `..` parts. |
+| **What counts as a read** | `get`, `list` and `watch`, `logs` and `logs -f`, `port-forward`, `auth can-i` and the other self-reviews, and server-side dry runs (`--dry-run=server`). |
+| **When it decides** | On every request, when the request arrives. `tug unlock` and `tug lock` take effect on the next request, for every client at once. |
+| **What it records** | Every change it forwards, and how the cluster answered; every change it refuses; and unlocks that run out. See [the audit log](#the-audit-log). |
+
+## What tugd does not cover
+
+<Callout type="warn" title="Anything that does not use the session's kubeconfig goes straight to the cluster">
+  tugd sees a request only if the client was pointed at tugd. It has no way to
+  see or stop anything else.
+</Callout>
+
+**Clients that bypass `KUBECONFIG`.** A command given `--kubeconfig` or
+`--context` for another file, a shell or script with a different `KUBECONFIG`,
+a tool that reads `~/.kube/config` on its own, an IDE plugin, a CI job, or a
+program running inside the cluster with its service account: none of these
+reach tugd.
+
+**Separate credentials.** tugd guards the credential tug keeps for a cluster.
+The same identity used another way is not guarded: the kubeconfig you
+originally imported, a cloud CLI that mints its own token
+(`aws eks get-token`, `gcloud`, `az`), a static service account token, a
+credential on another machine. If you can reach a cluster without tug, so can
+your mistakes.
+
+**Sessions without `--proxy`.** On a normal session, the guard covers tug's
+own commands and kubectl run *through* tug (`tug delete pod x`), but not plain
+`kubectl`, `helm` or `k9s`. See
+[What "read-only" covers](/docs/concepts/read-only#what-read-only-covers).
+
+**Streams that are already open.** The guard decides when a request starts.
+An `exec` shell, `attach` or `port-forward` opened while a session was
+unlocked keeps running after the unlock ends, until it closes. New ones are
+refused.
+
+**Whatever runs as you.** Anyone at your keyboard, and any process running as
+your user, can run `tug unlock`, connect with `--read-write`, stop tugd, ask
+for the session's token with `tug auth proxy-token`, or edit the audit log.
+tugd keeps other *users* on the machine out (its socket and runtime folder
+are private to you, and it listens only on a loopback address), but it cannot
+protect you from yourself on purpose.
+
+**What a change does on the server.** tugd looks at a request's method and
+path, not at what the change means. Once a change is allowed, only the
+cluster limits what it can do.
+
+## When tugd isn't there
+
+A proxied session **fails closed**. Its kubeconfig names only tugd's address,
+never the cluster's, so there is nothing to fall back to:
+
+- **tugd stopped.** Clients get "connection refused". The next `kubectl` in
+  the session starts tugd again on the same address, through
+  `tug auth proxy-token`; `tug daemon start` does too.
+- **tugd restarted.** Session tokens live only in tugd's memory, so a client
+  that was running when tugd restarted, such as `k9s`, is refused with a
+  message saying so, and nothing is forwarded. kubectl and other clients that
+  use the kubeconfig's credential plugin then fetch a new token on their own.
+- **tugd moved to another port.** The session's kubeconfig is repointed, and
+  the command that noticed asks you to run it again.
+
+## Credentials through tugd
+
+tugd asks tug's credential store for the cluster's credential and keeps it in
+memory, never on disk. Tokens that expire are replaced as they do, during a
+session, without the client noticing. If the cluster **refuses** the
+credential (it was revoked, or rotated somewhere else), tugd answers that one
+request with an error that says so, and fetches a new credential from the
+cluster's provider for the next. When the provider can't give one, its error
+and hint reach the client, for example:
+
+```console
+$ kubectl get pods
+error: You must be logged in to the server (tug proxy: cannot forward to prod-eu: getting credentials for prod-eu: unauthenticated: not signed in to https://login.example.com; run `tug auth login prod-eu` to sign in)
+```
+
+`tug doctor` checks a cluster's credential and says what is wrong with it.
+
+## Sleep and changing networks
+
+After your laptop sleeps, or moves to another network, connections to the
+cluster can look open and never answer. tugd closes its idle connections to
+clusters when it notices the machine woke, and probes connections often
+enough that one whose network has gone fails within about half a minute. A
+watch or `logs -f` on such a connection ends, and the client starts it again,
+as `kubectl` and `k9s` do. Both are best effort: an open `exec` shell across a
+network change usually needs starting again.
+
+## The audit log
+
+tug keeps a local log of what it let through and refused (see
+[`tug audit`](/docs/reference/commands/safety#tug-audit)). It is a **record
+for you**, not evidence:
+
+- It lives on your machine, in a file your user owns, so you or anything
+  running as you can change or delete it. tug does not try to stop that, and
+  makes no claim that the log has not been changed.
+- It records writes and refusals, not reads, and only those tug or tugd saw.
+  Everything in [What tugd does not cover](#what-tugd-does-not-cover) is
+  missing from it.
+- It is rotated as it grows (8 MiB, keeping 3 older files), so old entries go.
+- It never holds request bodies, query strings, tokens, or command-line
+  values that could be secrets.
+
+## What actually enforces
+
+Use the guard as a seatbelt, and put the real controls where they belong, in
+the cluster and your cloud account:
+
+| Control | What it decides |
+| --- | --- |
+| **Kubernetes RBAC** | What an identity may do, per resource and namespace. Give the identity you use every day read-only access to production. `tug doctor` and `kubectl auth can-i --list` show what yours may do. |
+| **Cloud IAM** | Who may get a credential for a cluster at all: EKS access entries, GKE IAM, AKS with Entra ID, and their equivalents. Keep production changes behind a separate role you take on when you need it. |
+| **Admission control** | What changes the API server accepts from anyone, for example refusing `exec` into production pods: ValidatingAdmissionPolicy, Kyverno or OPA Gatekeeper. |
+| **API server audit logging** | The authoritative record of every request the cluster received, from every client, kept where users of the cluster cannot change it. |
+
+tug's guard sits in front of all of these and catches mistakes before they
+reach them. It doesn't replace any of them.

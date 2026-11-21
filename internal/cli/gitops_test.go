@@ -18,9 +18,9 @@ import (
 	"github.com/paingha/tugcli/internal/gitops"
 )
 
-// gitopsResources are the Flux and Argo CD resources the fake API server
+// fakeGitOpsResources are the Flux and Argo CD resources the fake API server
 // serves, by group and version.
-var gitopsResources = map[string][]metav1.APIResource{
+var fakeGitOpsResources = map[string][]metav1.APIResource{
 	"source.toolkit.fluxcd.io/v1": {
 		{Name: "gitrepositories", Kind: "GitRepository", ShortNames: []string{"gitrepo"}},
 		{Name: "ocirepositories", Kind: "OCIRepository", ShortNames: []string{"ocirepo"}},
@@ -177,7 +177,7 @@ func serveGitOps(t *testing.T, w http.ResponseWriter, r *http.Request, objects m
 		if err := json.Unmarshal([]byte(fakeDiscovery["/apis"]), &groups); err != nil {
 			t.Fatal(err)
 		}
-		for gv := range gitopsResources {
+		for gv := range fakeGitOpsResources {
 			group, version, _ := strings.Cut(gv, "/")
 			v := metav1.GroupVersionForDiscovery{GroupVersion: gv, Version: version}
 			groups.Groups = append(groups.Groups, metav1.APIGroup{Name: group, Versions: []metav1.GroupVersionForDiscovery{v}, PreferredVersion: v})
@@ -189,7 +189,7 @@ func serveGitOps(t *testing.T, w http.ResponseWriter, r *http.Request, objects m
 		return false
 	}
 	gv := parts[1] + "/" + parts[2]
-	resources, ok := gitopsResources[gv]
+	resources, ok := fakeGitOpsResources[gv]
 	if !ok {
 		return false
 	}
