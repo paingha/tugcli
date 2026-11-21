@@ -137,7 +137,7 @@ tug tunnel ls | rm <cluster>
 | `socks5://`, `http://`, `https://` | a proxy that needs no password, since tug keeps no secrets in its catalog |
 | `ssm://<instance>[?region=&profile=]` | an AWS Systems Manager session through a managed instance that can reach the private endpoint; tug speaks Session Manager itself, so it needs only AWS credentials, not the session-manager-plugin |
 | `iap://<instance>?project=&zone=` | Google Cloud IAP TCP forwarding to a VM; needs only Application Default Credentials, not gcloud |
-| `iap://?project=&region=&network=&group=` | IAP to a host in a destination group, such as a private GKE endpoint |
+| `iap://?project=&region=&network=&group=` | IAP to a host in a destination group, such as a private GKE endpoint; add `cert=` and `key=` (PEM files) for certificate-based access through the mTLS relay, and `universe=` for another Google Cloud universe |
 
 Kubernetes clients honour a proxy for exec, attach and port-forward but not
 a custom dialer, so tug serves SSH, SSM and IAP tunnels as a SOCKS5 proxy on a
