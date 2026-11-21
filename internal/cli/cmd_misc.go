@@ -86,11 +86,12 @@ func shortCommit(c string) string {
 	return c
 }
 
-// passthrough runs kubectl with this terminal's session. On a read-only
-// session, commands that may write are refused unless the user confirms.
+// passthrough runs kubectl with the session commands run in (see
+// app.session). On a read-only session, commands that may write are
+// refused unless the user confirms.
 func (a *app) passthrough(_ context.Context, args []string) (int, error) {
 	kubeconfigPath := ""
-	s, err := a.sessions().Current()
+	s, err := a.session()
 	switch {
 	case err == nil && s.State.Connected():
 		kubeconfigPath = s.KubeconfigPath()

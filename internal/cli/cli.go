@@ -65,26 +65,42 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	defer a.closeTunnels()
 	defer a.closePlugins()
-	root := newRootCmd(a)
-	root.SetArgs(args)
-	root.SetIn(stdin)
-	root.SetOut(stdout)
-	root.SetErr(stderr)
-
-	if isPassthrough(root, args) {
-		if err := a.setup(false); err != nil {
-			return a.fail(err)
-		}
-		code, err := a.passthrough(ctx, args)
-		if err != nil {
-			return a.fail(err)
-		}
-		return code
-	}
-	if err := root.ExecuteContext(ctx); err != nil {
+	if err := a.execute(ctx, args); err != nil {
 		return a.fail(err)
 	}
 	return 0
+}
+
+// execute runs one command line: on every cluster that --cluster-selector
+// picks, as kubectl when tug has no such command, or as one of tug's own.
+func (a *app) execute(ctx context.Context, args []string) error {
+	fan, args, err := splitFanoutFlags(args)
+	if err != nil {
+		return err
+	}
+	root := newRootCmd(a)
+	root.SetArgs(args)
+	root.SetIn(a.stdin)
+	root.SetOut(a.stdout)
+	root.SetErr(a.stderr)
+
+	if fan != nil {
+		return a.fanout(ctx, root, args, fan)
+	}
+	if isPassthrough(root, args) {
+		if err := a.setup(false); err != nil {
+			return err
+		}
+		code, err := a.passthrough(ctx, args)
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return &exitError{code: code}
+		}
+		return nil
+	}
+	return root.ExecuteContext(ctx)
 }
 
 // app holds what commands share. Expensive pieces load on first use.
@@ -99,6 +115,10 @@ type app struct {
 	paths config.Paths
 	cfg   *config.Config
 	log   *slog.Logger
+
+	// fixed, when set, is the session commands run in instead of this
+	// terminal's: the temporary one a run across clusters made.
+	fixed *session.Session
 
 	// mu guards the pieces below, which load on first use. tugd asks for
 	// them from concurrent proxy requests.
@@ -358,9 +378,18 @@ func (a *app) loadCatalog() (*catalog.Catalog, error) { return catalog.Load(a.ca
 
 func (a *app) sessions() *session.Manager { return session.NewManager(a.paths.Runtime) }
 
+// session returns the session commands run in: this terminal's, or the
+// temporary one a run across clusters made for this app.
+func (a *app) session() (*session.Session, error) {
+	if a.fixed != nil {
+		return a.fixed, nil
+	}
+	return a.sessions().Current()
+}
+
 // currentSession returns this terminal's session with a helpful error.
 func (a *app) currentSession() (*session.Session, error) {
-	s, err := a.sessions().Current()
+	s, err := a.session()
 	if errors.Is(err, session.ErrNoSession) {
 		return nil, fmt.Errorf("%w; add `eval \"$(tug init zsh)\"` (or bash, fish, powershell) to your shell's rc file, or run `tug shell`", err)
 	}

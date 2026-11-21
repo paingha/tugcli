@@ -17,8 +17,9 @@ type treeOptions struct {
 func newTreeCmd(a *app) *cobra.Command {
 	var o treeOptions
 	cmd := &cobra.Command{
-		Use:   "tree <target>",
-		Short: "Show a workload's ownership tree with the health of each part",
+		Use:         "tree <target>",
+		Annotations: acrossClusters(acrossInProcess),
+		Short:       "Show a workload's ownership tree with the health of each part",
 		Long: `Show what a workload is made of, as k9s's xray does: its ReplicaSets (for a
 deployment) or ControllerRevisions (for a statefulset or daemonset), their
 pods and containers, the Services that select the pods, and the ConfigMaps,

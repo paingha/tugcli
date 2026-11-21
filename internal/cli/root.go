@@ -1,7 +1,11 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
+
+	"github.com/paingha/tugcli/internal/fanout"
 )
 
 func newRootCmd(a *app) *cobra.Command {
@@ -13,14 +17,28 @@ func newRootCmd(a *app) *cobra.Command {
 and points each terminal at one cluster without touching ~/.kube/config.
 
 Commands tug does not have run as kubectl with this terminal's session:
-  tug get pods -A`,
+  tug get pods -A
+
+Commands that read run on every cluster with some labels, each line
+prefixed with its cluster:
+  tug get pods --cluster-selector env=staging
+  tug why api --cluster-selector env=staging --cluster-selector region=eu`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Flags().Changed("parallel") {
+				return fmt.Errorf("%s works only with %s", flagParallel, flagClusterSelector)
+			}
 			return a.setup(debug)
 		},
 	}
 	root.PersistentFlags().BoolVar(&debug, "debug", false, "log debugging detail to stderr")
+	// execute takes these two out of the command line before cobra sees
+	// it, since kubectl commands never reach cobra; they are declared here
+	// for help and completion.
+	root.PersistentFlags().StringArray("cluster-selector", nil,
+		"run a command that reads on every catalog cluster with this label=value, each in its default namespace (repeatable; a cluster must match them all)")
+	root.PersistentFlags().Int("parallel", fanout.DefaultParallel, "with --cluster-selector, how many clusters to run on at once")
 
 	root.AddGroup(
 		&cobra.Group{ID: "connect", Title: "Connect:"},

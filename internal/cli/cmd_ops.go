@@ -134,8 +134,9 @@ type logsOptions struct {
 func newLogsCmd(a *app) *cobra.Command {
 	var o logsOptions
 	cmd := &cobra.Command{
-		Use:   "logs <target>",
-		Short: "Tail logs from every pod of a workload, with coloured prefixes",
+		Use:         "logs <target>",
+		Annotations: acrossClusters(acrossInProcess),
+		Short:       "Tail logs from every pod of a workload, with coloured prefixes",
 		Example: `  tug logs api -f            # deploy/api-server, every pod, new pods as they start
   tug logs sts/db -c postgres --since 10m
   tug logs api --json        # pretty-print JSON lines`,
@@ -545,9 +546,10 @@ func newRollbackCmd(a *app) *cobra.Command {
 func newTopCmd(a *app) *cobra.Command {
 	var namespace string
 	cmd := &cobra.Command{
-		Use:   "top [target]",
-		Short: "Show CPU and memory of a workload's pods (needs metrics-server)",
-		Args:  cobra.MaximumNArgs(1),
+		Use:         "top [target]",
+		Annotations: acrossClusters(acrossKubectl),
+		Short:       "Show CPU and memory of a workload's pods (needs metrics-server)",
+		Args:        cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			env, err := a.opsEnv(ctx, namespace)
