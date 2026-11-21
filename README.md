@@ -41,6 +41,7 @@ tug sh api                      # shell into a pod (bash, else sh; a debug conta
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -177,7 +178,7 @@ in tugd, and `r` and `S` restart and scale, through the session's guard.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `logs` and `top`. Each line is prefixed with
+reads, and `tug why`, `tree`, `watch`, `logs` and `top`. Each line is prefixed with
 the cluster's name, failures are listed at the end, and tug exits 1 if any
 cluster failed. `--parallel` (default 8) caps how many run together. Writes,
 and commands that bind a local port or the terminal, are refused before
