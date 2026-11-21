@@ -91,6 +91,8 @@ func gitopsObjects() map[string][]*unstructured.Unstructured {
 				"lastAppliedRevision": oldRevision, "lastAttemptedRevision": oldRevision,
 				"conditions": fluxReady("False", "DependencyNotReady", "dependency 'flux-system/infra' is not ready"),
 			}),
+			ks("tenants", map[string]any{"dependsOn": []any{map[string]any{"name": "apps"}, map[string]any{"name": "crds", "namespace": "platform"}}},
+				map[string]any{"conditions": fluxReady("False", "DependencyNotReady", "dependency 'flux-system/apps' is not ready")}),
 			ks("storefront", map[string]any{}, map[string]any{
 				"lastAppliedRevision": fleetRevision, "lastAttemptedRevision": fleetRevision,
 				"conditions": fluxReady("True", "ReconciliationSucceeded", "Applied revision: "+fleetRevision),
@@ -295,8 +297,8 @@ func TestGitOps(t *testing.T) {
 		if err := json.Unmarshal([]byte(mustTug(t, "gitops", "status", "-A", "-o", "json")), &r); err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(r.Tools, []gitops.Tool{gitops.Flux, gitops.ArgoCD}) || len(r.Objects) != 5 || r.Namespace != "" {
-			t.Errorf("tug gitops status -A -o json = tools %v, %d objects, namespace %q; want flux and argocd, 5, every namespace", r.Tools, len(r.Objects), r.Namespace)
+		if !slices.Equal(r.Tools, []gitops.Tool{gitops.Flux, gitops.ArgoCD}) || len(r.Objects) != 6 || r.Namespace != "" {
+			t.Errorf("tug gitops status -A -o json = tools %v, %d objects, namespace %q; want flux and argocd, 6, every namespace", r.Tools, len(r.Objects), r.Namespace)
 		}
 		names := mustTug(t, "gitops", "status", "-A", "-o", "name")
 		contains(t, "tug gitops status -o name", names, "kustomizations.kustomize.toolkit.fluxcd.io/infra\n", "applications.argoproj.io/guestbook\n")
@@ -354,9 +356,12 @@ func TestGitOps(t *testing.T) {
 		out := mustTug(t, "gitops", "dependencies", "apps")
 		contains(t, "tug gitops dependencies apps", out,
 			"Depends on:\nkustomization/apps       ✗ DependencyNotReady: dependency 'flux-system/infra' is not ready\n└── kustomization/infra  ✗ ReconciliationFailed:",
-			"Required by:\nnothing\n")
+			"Required by:\nkustomization/apps         ✗ DependencyNotReady: dependency 'flux-system/infra' is not ready\n└── kustomization/tenants  ✗ DependencyNotReady")
 		out = mustTug(t, "gitops", "deps", "infra")
-		contains(t, "tug gitops deps infra", out, "Depends on:\nnothing\n", "Required by:\nkustomization/infra     ✗", "└── kustomization/apps  ✗ DependencyNotReady")
+		contains(t, "tug gitops deps infra", out, "Depends on:\nnothing\n", "Required by:\nkustomization/infra            ✗",
+			"└── kustomization/apps         ✗ DependencyNotReady", "    └── kustomization/tenants  ✗ DependencyNotReady")
+		out = mustTug(t, "gitops", "deps", "tenants")
+		contains(t, "tug gitops deps tenants", out, "└── kustomization/crds in platform  ✗ not in the cluster\n")
 	})
 
 	for _, tt := range []struct{ args, want string }{

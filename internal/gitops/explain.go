@@ -185,12 +185,12 @@ func (e *explainer) dependencies() {
 		if dep.Ready == ops.HealthUnknown {
 			sev = ops.SeverityWarning
 		}
-		msg := fmt.Sprintf("depends on %s, which is not ready: %s", e.name(dep.Ref()), statusText(dep))
+		msg := fmt.Sprintf("depends on %s, which is not ready: %s", e.name(dep.Ref()), fullStatus(dep))
 		next := tugCommand(dep.Namespace, "gitops", "explain", dep.String())
 		roots := e.s.rootCauses(dep)
 		if len(roots) > 0 && !slices.Contains(roots, dep) {
 			r := roots[0]
-			msg += fmt.Sprintf("; the chain stops at %s: %s", e.name(r.Ref()), statusText(r))
+			msg += fmt.Sprintf("; the chain stops at %s: %s", e.name(r.Ref()), fullStatus(r))
 			next = tugCommand(r.Namespace, "gitops", "explain", r.String())
 		}
 		e.add(StageDependency, sev, "DependencyNotReady", msg, "see why: "+next, o.String(), dep.String())
@@ -882,6 +882,15 @@ func compact(s string) string {
 		s = s[:maxMessage] + "…"
 	}
 	return s
+}
+
+// fullStatus says what an object reports about its state, as statusText
+// does but with the whole of a Flux object's message, for a finding.
+func fullStatus(o *Object) string {
+	if c := o.condition("Ready"); o.Tool == Flux && c != nil && c.Message != "" {
+		return strings.Join(nonEmpty(c.Reason, compact(c.Message)), ": ")
+	}
+	return statusText(o)
 }
 
 // readyMessage returns the whole message of a Flux object's Ready
