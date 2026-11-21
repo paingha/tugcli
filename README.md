@@ -46,6 +46,7 @@ tug auth login cks-train        # sign in to the cluster's OIDC issuer in the br
 tug tunnel set eks-private ssm://i-0123456789abcdef0   # reach a private cluster; see Tunnels
 tug pin set payments-staging -n payments  # this directory pins the terminal to a cluster
 tug plugin install digitalocean # from a signed plugin index
+tug ui                          # full-screen: clusters, workloads, logs, why, tree, shells, forwards
 tug get pods --cluster-selector env=staging   # any read, on every matching cluster at once
 tug audit --since 24h           # the writes tug let through, per cluster
 ```
@@ -148,6 +149,19 @@ Kubernetes clients honour a proxy for exec, attach and port-forward but not
 a custom dialer, so tug serves SSH, SSM, IAP and tsh tunnels as a SOCKS5 proxy
 on a loopback port, guarded by a random username and password that only tug
 knows. `tug doctor` checks a tunnelled cluster through its tunnel.
+
+## The TUI
+
+`tug ui` is a full-screen view on the same core as the commands. The
+clusters view filters as you type (by name, label value or `label=value`)
+and `enter` connects this terminal, as `tug connect` does. The workloads
+view lists the namespace's deployments, statefulsets, daemonsets, jobs and
+pods with their health, refreshing every few seconds. On a workload, `l`
+streams logs, `w` explains it, `t` shows its tree, `s` opens a shell (with a
+debug container for images without one), `p` starts a named port-forward
+in tugd, and `r` and `S` restart and scale, through the session's guard.
+`n` switches namespace, `c` goes back to clusters and `?` lists every key.
+`tug ui --k9s` launches k9s on the session instead.
 
 ## Across clusters
 
