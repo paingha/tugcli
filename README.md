@@ -49,6 +49,7 @@ tug why certificate/web-tls     # any kind: its conditions, whether its controll
 tug diff -f k8s/                # what an apply would change, by server-side dry run, with each field's owner
 tug diff api --against staging  # the same object on another cluster, minus what each cluster sets itself
 tug drift --against staging     # the objects, CRDs and API versions that differ between two clusters
+tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -289,6 +290,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Working-environment profiles | [internal/profile](internal/profile) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Diffs, server-side dry runs, field ownership and drift across clusters | [internal/diff](internal/diff) |
+| Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |
