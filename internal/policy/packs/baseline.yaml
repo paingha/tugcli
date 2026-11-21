@@ -1,0 +1,79 @@
+# The pack built into tug. Every check is advisory, so it never fails
+# tug check; copy a check into a pack of your own to make it blocking.
+apiVersion: tug.policy/v1alpha1
+kind: PolicyPack
+name: baseline
+version: 1.0.0
+description: Settings most workloads should have, for reliability and security.
+checks:
+  - id: resources
+    severity: warning
+    description: Every container asks for CPU and memory, and has a memory limit.
+    remediation: >-
+      set resources.requests.cpu, resources.requests.memory and
+      resources.limits.memory on each container, sized from what `tug top`
+      shows it uses
+    resources:
+      requests: [cpu, memory]
+      limits: [memory]
+
+  - id: readiness-probe
+    severity: warning
+    description: Every container of a long-running workload has a readiness probe.
+    remediation: >-
+      add a readinessProbe, so that the container gets traffic only once it
+      can serve it
+    probes: [readiness]
+
+  - id: liveness-probe
+    severity: info
+    description: Every container of a long-running workload has a liveness probe.
+    remediation: >-
+      add a livenessProbe that fails only when the container is stuck and a
+      restart would help
+    probes: [liveness]
+
+  - id: run-as-non-root
+    severity: warning
+    description: Containers do not run as root.
+    remediation: >-
+      set securityContext.runAsNonRoot to true on the pod or the container,
+      with an image whose user is not root
+    securityContext:
+      runAsNonRoot: true
+
+  - id: no-privileged
+    severity: error
+    description: No container runs privileged.
+    remediation: >-
+      remove securityContext.privileged, and add only the capabilities the
+      container needs
+    securityContext:
+      privileged: false
+
+  - id: read-only-root-filesystem
+    severity: info
+    description: Containers cannot write to their root filesystem.
+    remediation: >-
+      set securityContext.readOnlyRootFilesystem to true, with an emptyDir
+      volume for any directory the container writes to
+    securityContext:
+      readOnlyRootFilesystem: true
+
+  - id: disruption-budget
+    severity: warning
+    description: A PodDisruptionBudget covers every workload with two or more replicas.
+    remediation: >-
+      add a PodDisruptionBudget whose selector matches the workload's pods,
+      with maxUnavailable: 1
+    podDisruptionBudget:
+      minReplicas: 2
+
+  - id: topology-spread
+    severity: info
+    description: Workloads with two or more replicas spread their pods across nodes or zones.
+    remediation: >-
+      add a topologySpreadConstraint on topology.kubernetes.io/zone or
+      kubernetes.io/hostname
+    topologySpread:
+      minReplicas: 2
