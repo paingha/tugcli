@@ -264,7 +264,7 @@ func (e *wasmExitError) Error() string { return fmt.Sprintf("exit status %d", e.
 type memoryLimitError struct{ limit uint64 }
 
 // memoryHint is the hint for a memoryLimitError.
-const memoryHint = "if the plugin needs more, raise plugins.wasm.memoryLimitMiB in tug's config.yaml"
+const memoryHint = "if the plugin needs more, raise spec.limits.memoryMiB in its plugin.yaml, within plugins.wasm.memoryLimitMiB and plugins.limits.memoryMiB in tug's config.yaml"
 
 func (e *memoryLimitError) Error() string {
 	return fmt.Sprintf("ran out of memory: WebAssembly plugins may use %d MiB", e.limit>>20)

@@ -57,6 +57,12 @@ type Runner struct {
 	// Sandbox, when set, confines every plugin process the runner starts. A
 	// WebAssembly plugin has no process; its runtime confines it instead.
 	Sandbox *sandbox.Sandbox
+	// Limits caps the processor time and memory of every plugin process
+	// the runner starts, where the system can, through tug's own
+	// executable, Self. A WebAssembly plugin's memory is capped by
+	// WASM.MemoryLimit instead.
+	Limits sandbox.Limits
+	Self   string
 
 	srvMu sync.Mutex
 	srv   *server
@@ -69,16 +75,7 @@ func (r *Runner) timeout(op string) time.Duration {
 	if d, ok := r.Timeouts[op]; ok && d > 0 {
 		return d
 	}
-	switch op {
-	case provider.OpList:
-		return DefaultListTimeout
-	case provider.OpCredential:
-		return DefaultCredentialTimeout
-	case provider.OpRotate:
-		return DefaultRotateTimeout
-	default:
-		return DefaultTimeout
-	}
+	return defaultTimeout(op)
 }
 
 // Call runs the plugin for op with the request bytes and returns the
@@ -157,7 +154,7 @@ func (r *Runner) response(ctx context.Context, op string, stdout *limitedBuffer,
 		if errors.As(err, &mle) {
 			return nil, provider.Errorf(provider.Internal, "plugin %s %s %v", r.Name, op, err).WithHint(memoryHint)
 		}
-		return nil, r.withSandboxHint(provider.Errorf(provider.Internal, "plugin %s %s: %v", r.Name, op, err))
+		return nil, r.withLimitHint(r.withSandboxHint(provider.Errorf(provider.Internal, "plugin %s %s: %v", r.Name, op, err)))
 	}
 	return stdout.Bytes(), nil
 }

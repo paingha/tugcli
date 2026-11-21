@@ -54,6 +54,9 @@ func TestMain(m *testing.M) {
 	if dir := os.Getenv(wasmHostEnv); dir != "" {
 		os.Exit(wasmHostMain(dir))
 	}
+	if os.Getenv(memoryHogEnv) != "" {
+		os.Exit(memoryHog())
+	}
 	dir, err := os.MkdirTemp("", "tug-wasm-test-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

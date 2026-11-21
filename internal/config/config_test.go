@@ -224,6 +224,8 @@ plugins:
   wasm:
     prefer: true
     memoryLimitMiB: 512
+  limits: {cpuSeconds: 60, memoryMiB: 1024, timeout: 10m}
+  pins: {acme: "0.3.1"}
 sessions:
   maxAge: 24h
 oidc:
@@ -250,6 +252,12 @@ oidc:
 	}
 	if !c.Plugins.WASM.Prefer || c.Plugins.WASM.MemoryLimit() != 512<<20 {
 		t.Errorf("Plugins.WASM = %+v (limit %d), want prefer and 512 MiB", c.Plugins.WASM, c.Plugins.WASM.MemoryLimit())
+	}
+	if l := c.Plugins.Limits; l.CPUSeconds != 60 || l.MemoryMiB != 1024 || l.Timeout.Duration != 10*time.Minute {
+		t.Errorf("Plugins.Limits = %+v, want 60s of CPU, 1024 MiB and 10m", l)
+	}
+	if pin, ok := c.Plugins.PluginPin("acme"); !ok || pin != "0.3.1" {
+		t.Errorf("PluginPin(acme) = %q, %v, want 0.3.1", pin, ok)
 	}
 	if got := (WASMConfig{}).MemoryLimit(); got != 0 {
 		t.Errorf("MemoryLimit() unset = %d, want 0 for the default", got)

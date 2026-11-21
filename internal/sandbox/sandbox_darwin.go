@@ -4,11 +4,13 @@ package sandbox
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // sandboxExec runs a program under a sandbox profile. Apple has marked it
@@ -127,7 +129,23 @@ func (s *Sandbox) wrap(c *Command, bin string, args []string, r rules) error {
 	return nil
 }
 
-// Exec is only used on Linux; on macOS, sandbox-exec starts plugins.
-func Exec([]string) error {
-	return errors.New(ExecCommand + " is only used on Linux; on macOS, tug starts plugins with sandbox-exec")
+// Exec applies the limits tug passed in the environment to this process
+// and then executes the program named by args[0] with args, which inherits
+// them: on macOS that is sandbox-exec, or the plugin itself when it runs
+// without the sandbox. It returns only when it fails.
+func Exec(args []string) error {
+	if len(args) == 0 {
+		return errors.New("no plugin to run; tug runs this command itself when it starts a plugin")
+	}
+	limits, limited, err := takeLimits()
+	if err != nil {
+		return err
+	}
+	if !limited {
+		return errors.New("on macOS, tug runs " + ExecCommand + " only to limit a plugin, and starts it with sandbox-exec")
+	}
+	if err := applyLimits(limits); err != nil {
+		return err
+	}
+	return fmt.Errorf("running %s: %w", args[0], syscall.Exec(args[0], args, withoutEnv(os.Environ(), limitsEnv)))
 }

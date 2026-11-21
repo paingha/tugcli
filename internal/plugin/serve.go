@@ -92,7 +92,7 @@ func (r *Runner) callServe(ctx context.Context, op string, request []byte) ([]by
 		if errors.As(err, &mle) {
 			return nil, e.WithHint(memoryHint)
 		}
-		return nil, r.withSandboxHint(e)
+		return nil, r.withLimitHint(r.withSandboxHint(e))
 	case <-ctx.Done():
 		_ = s.send(provider.ServeRequest{ID: id, Cancel: true}) // best effort
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {

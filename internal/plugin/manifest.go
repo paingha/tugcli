@@ -75,6 +75,9 @@ type Spec struct {
 	// Sandbox says what the plugin needs beyond its own directory when tug
 	// runs it in the operating system's sandbox.
 	Sandbox Sandbox `json:"sandbox,omitzero"`
+	// Limits says how much processor time, memory and time the plugin
+	// needs, within what config.yaml allows.
+	Limits Limits `json:"limits,omitzero"`
 	// AccountConfig is a JSON Schema for per-account settings.
 	AccountConfig map[string]any `json:"accountConfig,omitempty"`
 }
@@ -261,6 +264,7 @@ func (m *Manifest) Validate() error {
 		}
 	}
 	errs = append(errs, m.Spec.Sandbox.validate()...)
+	errs = append(errs, m.Spec.Limits.validate()...)
 	return errors.Join(errs...)
 }
 

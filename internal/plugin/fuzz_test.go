@@ -126,6 +126,7 @@ spec:
   env: [ACME_PROFILE]
   network: [api.acme.example, "*.acme.example:8443"]
   sandbox: {tools: [acme], read: ["~/.acme"], ports: [8443]}
+  limits: {cpuSeconds: 20, memoryMiB: 128, timeouts: {list: 2m}}
   accountConfig: {properties: {region: {type: string, enum: [eu, us]}}}
 `
 

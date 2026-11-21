@@ -236,29 +236,31 @@ func (a *app) registry() *registry.Registry {
 // WebAssembly build, whose compiled modules are cached so that only the
 // first run of each pays for compiling it.
 func (a *app) pluginRunner(p *plugin.Plugin) *plugin.Runner {
+	b := p.Manifest.Budget(a.pluginCaps())
 	r := &plugin.Runner{
 		Bin:      p.Bin,
 		Name:     p.Name(),
 		Env:      p.Manifest.Spec.Env,
-		Timeouts: a.cfg.PluginTimeouts(),
+		Timeouts: b.Timeouts,
 		Serve:    p.Manifest.Spec.Capabilities.Has(provider.CapServe),
 		Log:      a.log,
 	}
 	if p.WASM {
 		r.WASM = &plugin.WASMOptions{
 			Network:     p.Manifest.Spec.Network,
-			MemoryLimit: a.cfg.Plugins.WASM.MemoryLimit(),
+			MemoryLimit: b.WASMMemory,
 			CacheDir:    filepath.Join(a.paths.Cache, "wasm"),
 		}
 		return r
 	}
+	self, err := os.Executable()
+	if err != nil {
+		a.log.Debug("finding tug's executable for the sandbox and limits", "err", err)
+	}
+	r.Limits, r.Self = b.Process, self
 	if !a.cfg.Plugins.Sandbox.Confines(p.Name()) {
 		a.log.Debug("plugin runs without the sandbox, as plugins.sandbox in config.yaml says", "plugin", p.Name())
 		return r
-	}
-	self, err := os.Executable()
-	if err != nil {
-		a.log.Debug("finding tug's executable for the sandbox", "err", err)
 	}
 	r.Sandbox = &sandbox.Sandbox{
 		Policy:   p.SandboxPolicy(),
@@ -267,6 +269,18 @@ func (a *app) pluginRunner(p *plugin.Plugin) *plugin.Runner {
 		Log:      a.log,
 	}
 	return r
+}
+
+// pluginCaps are the limits config.yaml puts on what plugins may ask for.
+func (a *app) pluginCaps() plugin.Caps {
+	l := a.cfg.Plugins.Limits
+	return plugin.Caps{
+		CPU:        time.Duration(l.CPUSeconds) * time.Second,
+		Memory:     uint64(max(l.MemoryMiB, 0)) << 20,
+		Timeout:    l.Timeout.Duration,
+		Timeouts:   a.cfg.PluginTimeouts(),
+		WASMMemory: a.cfg.Plugins.WASM.MemoryLimit(),
+	}
 }
 
 // managementConfig returns a client config for a catalog cluster that a
