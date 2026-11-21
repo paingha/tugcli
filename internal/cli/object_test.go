@@ -10,7 +10,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/paingha/tugcli/internal/ops"
 )
@@ -93,7 +92,7 @@ func shopCustomObjects() []runtime.Object {
 		Data:       map[string][]byte{"password": []byte("hunter2")},
 	}
 	event := shopEvent("Database", "orders", "BackupFailed", "backup orders-nightly failed", 3)
-	event.InvolvedObject.UID = types.UID(orders.GetUID())
+	event.InvolvedObject.UID = orders.GetUID()
 	inventory := shopDatabase("Database", "inventory", "True", "Serving", "accepting connections")
 	return []runtime.Object{orders, backup, creds, event, inventory}
 }

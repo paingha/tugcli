@@ -364,7 +364,7 @@ func (d *objectDiagnoser) events(ctx context.Context) error {
 			})
 		}
 	}
-	d.out.Events = append(found, d.childEvents...)
+	d.out.Events = slices.Concat(found, d.childEvents)
 	return nil
 }
 
