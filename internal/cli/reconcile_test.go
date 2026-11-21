@@ -28,7 +28,7 @@ import (
 func reconcileShopObjects() []runtime.Object {
 	objs := shopCustomObjects()
 	now := time.Now()
-	fields := func(f string) *metav1.FieldsV1 { return &metav1.FieldsV1{Raw: []byte(`{"f:` + f + `":{}}`)} }
+	fields := func(f string) *metav1.FieldsV1 { return metav1.NewFieldsV1(`{"f:` + f + `":{}}`) }
 	for _, o := range objs {
 		if u, ok := o.(*unstructured.Unstructured); ok && u.GetName() == "orders" {
 			u.SetGeneration(2)

@@ -299,7 +299,7 @@ func managed(manager, subresource string, ago time.Duration, fields ...string) m
 	return metav1.ManagedFieldsEntry{
 		Manager: manager, Operation: metav1.ManagedFieldsOperationUpdate, APIVersion: "db.example.com/v1",
 		Time: &metav1.Time{Time: whyNow.Add(-ago)}, Subresource: subresource, FieldsType: "FieldsV1",
-		FieldsV1: &metav1.FieldsV1{Raw: []byte("{" + strings.Join(raw, ",") + "}")},
+		FieldsV1: metav1.NewFieldsV1("{" + strings.Join(raw, ",") + "}"),
 	}
 }
 

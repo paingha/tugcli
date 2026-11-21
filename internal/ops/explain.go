@@ -226,9 +226,9 @@ func fieldManagers(u *unstructured.Unstructured) []FieldManager {
 		if e.Time != nil {
 			m.Time = e.Time.Time
 		}
-		if e.FieldsV1 != nil {
+		if raw := e.FieldsV1.GetRawBytes(); len(raw) > 0 {
 			var top map[string]json.RawMessage
-			if json.Unmarshal(e.FieldsV1.Raw, &top) == nil {
+			if json.Unmarshal(raw, &top) == nil {
 				for k := range top {
 					if f, ok := strings.CutPrefix(k, "f:"); ok {
 						m.Fields = append(m.Fields, f)
