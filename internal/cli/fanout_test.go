@@ -198,19 +198,19 @@ func TestWhyAcrossClusters(t *testing.T) {
 	assertNoSessions(t, home)
 }
 
-// lockedBuffer is a bytes.Buffer that a test can read while tug writes.
-type lockedBuffer struct {
+// syncWriter is a bytes.Buffer that a test can read while tug writes.
+type syncWriter struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
 }
 
-func (b *lockedBuffer) Write(p []byte) (int, error) {
+func (b *syncWriter) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
 }
 
-func (b *lockedBuffer) String() string {
+func (b *syncWriter) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
@@ -227,7 +227,7 @@ func TestAcrossClustersStopsOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var stdout, stderr lockedBuffer
+	var stdout, stderr syncWriter
 	done := make(chan int, 1)
 	go func() {
 		done <- Run(ctx, []string{"get", "pods", "-w", "--cluster-selector", "env=staging"}, strings.NewReader(""), &stdout, &stderr)
