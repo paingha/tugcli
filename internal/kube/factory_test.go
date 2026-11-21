@@ -159,6 +159,38 @@ func TestTokenReachesServer(t *testing.T) {
 	}
 }
 
+// TestConcurrentRequestsShareTheToken makes requests at once, as discovery
+// and tree do; under -race it fails if the token source is not safe for
+// that.
+func TestConcurrentRequestsShareTheToken(t *testing.T) {
+	srv := newFakeAPI(t)
+	f := newFactory(t, clusterFor(srv.Server, "fake/work/c-1"), provider.Token(testToken, time.Now().Add(time.Hour)))
+	cs, err := f.Clientset(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			_, err := cs.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent List() = %v", err)
+		}
+	}
+	for _, h := range srv.authHeaders() {
+		if h != "Bearer "+testToken {
+			t.Errorf("Authorization header = %q, want %q", h, "Bearer "+testToken)
+		}
+	}
+}
+
 func TestClientCertCredential(t *testing.T) {
 	cl := &catalog.Cluster{ID: "fake/work/c-1", Name: "c-1", Server: "https://k8s.example"}
 	f := newFactory(t, cl, provider.ClientCert([]byte("CERT PEM"), []byte("KEY PEM"), provider.NoExpiry))
@@ -403,7 +435,7 @@ func TestBrokerTokenSource(t *testing.T) {
 	exp := time.Date(2026, 11, 20, 13, 0, 0, 0, time.UTC)
 	store := credentials.NewMemoryStore()
 	broker := &credentials.Broker{Store: store, Now: func() time.Time { return exp.Add(-time.Hour) }}
-	ts := &brokerTokenSource{broker: broker, clusterID: "c", first: &credentials.Resolved{Token: "first"}}
+	ts := newBrokerTokenSource(broker, "c", &credentials.Resolved{Token: "first"})
 
 	// The first token is the one RESTConfig already resolved; the empty store
 	// proves the broker is not asked again.
