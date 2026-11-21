@@ -266,7 +266,13 @@ func (a *app) services(cat *catalog.Catalog) (*importer.Service, *credentials.Br
 		return nil, nil, err
 	}
 	svc := &importer.Service{Registry: a.registry(), Store: store, Now: a.now}
-	broker := &credentials.Broker{Store: store, Now: a.now, Fetch: svc.Fetcher(cat), OIDC: a.oidcClient(store, a.implicitSignIn())}
+	broker := &credentials.Broker{
+		Store:    store,
+		Now:      a.now,
+		Fetch:    svc.Fetcher(cat),
+		Clusters: importer.ClusterLookup(cat),
+		OIDC:     a.oidcClient(store, a.implicitSignIn()),
+	}
 	svc.Broker = broker
 	return svc, broker, nil
 }

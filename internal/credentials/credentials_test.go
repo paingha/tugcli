@@ -5,12 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zalando/go-keyring"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
+	authexec "k8s.io/client-go/tools/auth/exec"
 
 	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/pkg/provider"
@@ -179,8 +185,11 @@ func TestBrokerDelegate(t *testing.T) {
 	b := &Broker{
 		Store: NewMemoryStore(),
 		Now:   func() time.Time { return now },
-		RunExec: func(_ context.Context, cfg provider.ExecConfig) ([]byte, error) {
+		RunExec: func(_ context.Context, cfg provider.ExecConfig, cluster *ExecCluster) ([]byte, error) {
 			runs++
+			if cluster != nil {
+				t.Errorf("cluster = %+v for a plugin that does not ask for it", cluster)
+			}
 			if cfg.Command != "aws" {
 				t.Errorf("command = %q", cfg.Command)
 			}
@@ -205,6 +214,198 @@ func TestBrokerDelegate(t *testing.T) {
 	}
 	if runs != 1 {
 		t.Fatalf("delegate ran %d times, want 1 (cached by expiry)", runs)
+	}
+}
+
+// member is the cluster that the cluster info tests authenticate to.
+var member = ExecCluster{
+	Server:                "https://member-1.example.com:6443",
+	CAData:                []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"),
+	TLSServerName:         "member-1.internal",
+	InsecureSkipTLSVerify: true,
+	ProxyURL:              "http://proxy.example:3128",
+}
+
+// secretReader is a delegate credential that, like the cluster inventory's
+// secretreader plugin, reads which cluster it is for from its cluster
+// config.
+func secretReader() provider.Credential {
+	c := provider.Delegate("secretreader-plugin")
+	c.Exec.ProvideClusterInfo = true
+	c.Exec.ClusterConfig = json.RawMessage(`{"clusterName":"member-1"}`)
+	return c
+}
+
+func TestBrokerDelegateClusterInfo(t *testing.T) {
+	const id = "clusterprofile/inv/fleet/member-1"
+	errGone := errors.New("cluster not found")
+	tests := []struct {
+		name     string
+		clusters ClusterLookup
+		wantErr  error  // matched with errors.Is
+		wantMsg  string // "" means success
+	}{
+		{name: "looked up", clusters: func(clusterID string) (ExecCluster, error) {
+			if clusterID != id {
+				return ExecCluster{}, fmt.Errorf("lookup of %q, want %q", clusterID, id)
+			}
+			return member, nil
+		}},
+		{name: "not in the catalog", clusters: func(string) (ExecCluster, error) { return ExecCluster{}, errGone },
+			wantErr: errGone, wantMsg: "looking up the cluster for secretreader-plugin"},
+		{name: "no lookup", wantMsg: "asks for cluster information"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got *ExecCluster
+			runs := 0
+			b := &Broker{
+				Store:    NewMemoryStore(),
+				Clusters: tt.clusters,
+				RunExec: func(_ context.Context, cfg provider.ExecConfig, cluster *ExecCluster) ([]byte, error) {
+					runs++
+					got = cluster
+					if string(cfg.ClusterConfig) != `{"clusterName":"member-1"}` {
+						t.Errorf("cluster config = %s", cfg.ClusterConfig)
+					}
+					return []byte(`{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","status":{"token":"from-a-secret"}}`), nil
+				},
+			}
+			if err := b.Put(id, secretReader()); err != nil {
+				t.Fatal(err)
+			}
+			ec, err := b.ExecCredential(context.Background(), id, false)
+			if tt.wantMsg != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantMsg) || (tt.wantErr != nil && !errors.Is(err, tt.wantErr)) {
+					t.Fatalf("ExecCredential() = %v, want an error containing %q", err, tt.wantMsg)
+				}
+				if runs != 0 {
+					t.Fatalf("the plugin ran %d times without its cluster", runs)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ec.Status.Token != "from-a-secret" {
+				t.Fatalf("token = %q, want from-a-secret", ec.Status.Token)
+			}
+			if got == nil || !reflect.DeepEqual(*got, member) {
+				t.Fatalf("RunExec cluster = %+v, want %+v", got, member)
+			}
+		})
+	}
+}
+
+func TestExecInfo(t *testing.T) {
+	v1Cluster := clientauthv1.Cluster{
+		Server:                   member.Server,
+		TLSServerName:            member.TLSServerName,
+		InsecureSkipTLSVerify:    true,
+		CertificateAuthorityData: member.CAData,
+		ProxyURL:                 member.ProxyURL,
+	}
+	withConfig := v1Cluster
+	withConfig.Config = k8sruntime.RawExtension{Raw: []byte(`{"clusterName":"member-1"}`)}
+	tests := []struct {
+		name        string
+		cfg         provider.ExecConfig
+		interactive bool
+		wantVersion string
+		// wantType is the type client-go decodes it to, as a plugin built
+		// with client-go would.
+		wantType    string
+		wantCluster *clientauthv1.Cluster
+	}{
+		{
+			name:        "without cluster info",
+			cfg:         provider.ExecConfig{Command: "aws"},
+			interactive: true,
+			wantVersion: "client.authentication.k8s.io/v1",
+		},
+		{
+			name:        "v1 with cluster info",
+			cfg:         *secretReader().Exec,
+			wantVersion: "client.authentication.k8s.io/v1",
+			wantType:    "*v1.ExecCredential",
+			wantCluster: &withConfig,
+		},
+		{
+			name:        "v1beta1 with cluster info and no config",
+			cfg:         provider.ExecConfig{Command: "aws", APIVersion: "client.authentication.k8s.io/v1beta1", ProvideClusterInfo: true},
+			interactive: true,
+			wantVersion: "client.authentication.k8s.io/v1beta1",
+			wantType:    "*v1beta1.ExecCredential",
+			wantCluster: &v1Cluster,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, err := execInfo(tt.cfg, &member, tt.interactive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got clientauthv1.ExecCredential
+			if err := json.Unmarshal(b, &got); err != nil {
+				t.Fatalf("execInfo() = %s, not an ExecCredential: %v", b, err)
+			}
+			if got.APIVersion != tt.wantVersion || got.Kind != "ExecCredential" || got.Spec.Interactive != tt.interactive {
+				t.Fatalf("execInfo() = %s, want %s with interactive %t", b, tt.wantVersion, tt.interactive)
+			}
+			if !reflect.DeepEqual(got.Spec.Cluster, tt.wantCluster) {
+				t.Fatalf("execInfo() spec.cluster = %+v, want %+v", got.Spec.Cluster, tt.wantCluster)
+			}
+			if tt.wantCluster == nil {
+				return
+			}
+			obj, cfg, err := authexec.LoadExecCredential(b)
+			if err != nil || fmt.Sprintf("%T", obj) != tt.wantType {
+				t.Fatalf("LoadExecCredential(%s) = %T, %v; want %s", b, obj, err, tt.wantType)
+			}
+			if cfg.Host != member.Server || cfg.ServerName != member.TLSServerName || !cfg.Insecure || string(cfg.CAData) != string(member.CAData) {
+				t.Fatalf("LoadExecCredential(%s) config = %+v, want the member cluster", b, cfg)
+			}
+		})
+	}
+
+	if _, err := execInfo(*secretReader().Exec, nil, false); err == nil || !strings.Contains(err.Error(), "none was given") {
+		t.Fatalf("execInfo() without a cluster = %v, want an error", err)
+	}
+}
+
+func TestRunExecReplacesKubectlExecInfo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script plugin")
+	}
+	dir := t.TempDir()
+	plugin := filepath.Join(dir, "secretreader-plugin")
+	script := "#!/bin/sh\nprintf '%s' \"$KUBERNETES_EXEC_INFO\" > \"$1\"\n" +
+		`echo '{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","status":{"token":"from-a-secret"}}'` + "\n"
+	if err := os.WriteFile(plugin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// What kubectl tells tug when it runs `tug auth token`: interactive,
+	// and about tug's own kubeconfig cluster.
+	t.Setenv("KUBERNETES_EXEC_INFO", `{"apiVersion":"client.authentication.k8s.io/v1","kind":"ExecCredential","spec":{"interactive":true,"cluster":{"server":"https://kubectl.example"}}}`)
+
+	info := filepath.Join(dir, "exec-info.json")
+	cfg := *secretReader().Exec
+	cfg.Command, cfg.Args, cfg.InteractiveMode = plugin, []string{info}, "Never"
+	out, err := RunExec(context.Background(), cfg, &member)
+	if err != nil || !strings.Contains(string(out), "from-a-secret") {
+		t.Fatalf("RunExec() = %s, %v", out, err)
+	}
+	b, err := os.ReadFile(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got clientauthv1.ExecCredential
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("KUBERNETES_EXEC_INFO = %s: %v", b, err)
+	}
+	if got.Spec.Interactive || got.Spec.Cluster == nil || got.Spec.Cluster.Server != member.Server ||
+		string(got.Spec.Cluster.Config.Raw) != `{"clusterName":"member-1"}` {
+		t.Fatalf("KUBERNETES_EXEC_INFO = %s, want the member cluster, not interactive", b)
 	}
 }
 

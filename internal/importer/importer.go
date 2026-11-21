@@ -182,6 +182,25 @@ func (s *Service) Fetcher(cat *catalog.Catalog) credentials.Fetcher {
 	}
 }
 
+// ClusterLookup returns a credentials.ClusterLookup that tells delegated
+// exec plugins about a catalog cluster: what a session kubeconfig would
+// tell kubectl about it.
+func ClusterLookup(cat *catalog.Catalog) credentials.ClusterLookup {
+	return func(clusterID string) (credentials.ExecCluster, error) {
+		cl, err := cat.Get(clusterID)
+		if err != nil {
+			return credentials.ExecCluster{}, err
+		}
+		return credentials.ExecCluster{
+			Server:                cl.Server,
+			CAData:                cl.CAData,
+			TLSServerName:         cl.TLSServerName,
+			InsecureSkipTLSVerify: cl.InsecureSkipTLSVerify,
+			ProxyURL:              cl.ProxyURL,
+		}, nil
+	}
+}
+
 // Rotator is a provider that can replace a cluster's credential, revoking
 // the old one.
 type Rotator interface {

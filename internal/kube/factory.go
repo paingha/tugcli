@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/disk"
 	"k8s.io/client-go/kubernetes"
@@ -135,6 +136,17 @@ func execProvider(r *credentials.Resolved) *clientcmdapi.ExecConfig {
 		APIVersion:      apiVersion,
 		InteractiveMode: mode,
 		InstallHint:     d.InstallHint,
+		// client-go then builds spec.cluster from the rest.Config, which
+		// RESTConfig fills from the catalog cluster, as kubectl builds it
+		// from a kubeconfig cluster. Its proxy URL is the tunnel's local
+		// proxy when the cluster has one, since that is how it is reached.
+		ProvideClusterInfo: d.ProvideClusterInfo,
+	}
+	if d.ProvideClusterInfo && len(d.ClusterConfig) > 0 {
+		// client-go passes this on as spec.cluster.config. clientcmd holds
+		// a kubeconfig cluster's client.authentication.k8s.io/exec
+		// extension the same way.
+		ec.Config = &runtime.Unknown{Raw: d.ClusterConfig, ContentType: runtime.ContentTypeJSON}
 	}
 	for k, v := range d.Env {
 		ec.Env = append(ec.Env, clientcmdapi.ExecEnvVar{Name: k, Value: v})

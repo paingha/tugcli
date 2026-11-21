@@ -23,3 +23,4 @@ spec:
     type: object
     properties:
       clusters: {type: string, description: "name=url pairs, comma separated"}
+      authCommand: {type: string, description: "kubectl exec plugin that tug runs for credentials, told which cluster they are for"}

@@ -396,7 +396,7 @@ Return one of four shapes. The SDK has a constructor for each:
 | --- | --- | --- |
 | `token` | `provider.Token(token, expiresAt)` | The API server accepts a bearer token: an API token, a short-lived token you mint, a service account token. |
 | `clientCert` | `provider.ClientCert(certPEM, keyPEM, expiresAt)` | The cluster uses client certificates. |
-| `delegate` | `provider.Delegate(command, args...)` | The vendor already ships a kubectl exec credential plugin. tug runs it unchanged and, when its output has an expiry, caches it until then. |
+| `delegate` | `provider.Delegate(command, args...)` | The vendor already ships a kubectl exec credential plugin. tug runs it unchanged and, when its output has an expiry, caches it until then. Set `Exec.ProvideClusterInfo` when the plugin reads its cluster from `KUBERNETES_EXEC_INFO`, as kubeconfig's `provideClusterInfo: true` arranges, and `Exec.ClusterConfig` for what a kubeconfig would keep in the cluster's `client.authentication.k8s.io/exec` extension. |
 | `oidc` | `provider.OIDC(issuer, clientID, scopes...)` | The cluster trusts an OpenID Connect issuer. tug signs the user in (`tug auth login`, or on its own when kubectl needs a token and stderr is a terminal), keeps the refresh token, and hands kubectl the ID token. `openid` is always requested; add `offline_access` if your issuer issues refresh tokens only with it. Set `ClientSecret` only for issuers that require one for public clients, as Google does. The issuer must accept `http://localhost:8000` and `http://localhost:18000` as redirect URIs, as for kubelogin. |
 
 Set the expiry for anything short-lived. tug reuses a cached credential until
@@ -410,6 +410,27 @@ A delegated command runs with the user's full environment (not the scrubbed
 one plugins get), and with the terminal when kubectl says the session is
 interactive, so it can prompt. Set `Exec.InstallHint` to tell users how to
 install it when it is missing.
+
+tug gives a delegated command the `KUBERNETES_EXEC_INFO` that kubectl would:
+an `ExecCredential` in the command's `Exec.APIVersion`
+(`client.authentication.k8s.io/v1` unless you say `v1beta1`), whose
+`spec.interactive` says whether it has the terminal. With
+`Exec.ProvideClusterInfo` it also has `spec.cluster`: the server, CA data,
+TLS server name, insecure flag and proxy URL of the cluster in tug's catalog,
+and `Exec.ClusterConfig` as `spec.cluster.config`. That is how a plugin built
+for kubeconfigs that set `provideClusterInfo: true` learns which cluster it is
+for, such as an audience or a cluster name:
+
+```go
+c := provider.Delegate("acme-auth", "token")
+c.Exec.ProvideClusterInfo = true
+c.Exec.ClusterConfig = json.RawMessage(`{"audience":"06e3fbd18de8"}`)
+```
+
+`ClusterConfig` needs `ProvideClusterInfo`, and like the kubeconfig extension
+it is not meant for secrets. When the credential is for tug's own client
+rather than kubectl's, as in `tug logs` or tugd, a cluster reached through a
+tunnel has the tunnel's local proxy as its proxy URL.
 
 **Inline credentials.** If your API returns the credential with the cluster,
 as LKE does with a kubeconfig, set `Cluster.Credential` in `List`. tug moves
@@ -674,10 +695,18 @@ The four credential shapes, with the fields each one requires in bold:
 | `token` | **`token`**, `expiresAt` |
 | `clientCert` | **`certData`**, **`keyData`** (PEM, base64), `expiresAt` |
 | `oidc` | **`issuer`**, **`clientID`**, `clientSecret`, `scopes` |
-| `delegate` | **`exec.command`**, `exec.args`, `exec.env`, `exec.apiVersion`, `exec.interactiveMode`, `exec.installHint` |
+| `delegate` | **`exec.command`**, `exec.args`, `exec.env`, `exec.apiVersion`, `exec.interactiveMode`, `exec.installHint`, `exec.provideClusterInfo`, `exec.clusterConfig` |
 
 tug rejects a credential without the fields its type requires as `Internal`.
-Without `expiresAt`, the credential does not expire.
+Without `expiresAt`, the credential does not expire. `exec.provideClusterInfo`
+is a boolean, and `exec.clusterConfig` is any JSON value that tug passes to
+the command as `spec.cluster.config`; tug rejects a `clusterConfig` other than
+`null` without `"provideClusterInfo":true`. Hosts older than these fields
+ignore them and run the command without cluster information:
+
+```json
+{"apiVersion":"provider/v1alpha1","kind":"CredentialResponse","credential":{"type":"delegate","exec":{"command":"secretreader-plugin","apiVersion":"client.authentication.k8s.io/v1","provideClusterInfo":true,"clusterConfig":{"clusterName":"member-1"}}}}
+```
 
 **checkAccess**
 

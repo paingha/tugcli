@@ -99,6 +99,21 @@ func TestCredential(t *testing.T) {
 	}
 }
 
+func TestCredentialFromAuthCommand(t *testing.T) {
+	acct := provider.Account{ID: "demo", Config: map[string]any{"clusters": demo.Config["clusters"], "authCommand": "example-auth"}}
+	out, code := call(t, provider.OpCredential, provider.CredentialRequest{Account: acct, ClusterID: "prod", Secrets: goodToken})
+	c, err := provider.DecodeCredential(out)
+	if err != nil || code != provider.ExitOK {
+		t.Fatalf("credential = %+v, exit %d, %v", c, code, err)
+	}
+	if c.Type != provider.CredentialDelegate || c.Exec.Command != "example-auth" || !reflect.DeepEqual(c.Exec.Args, []string{"token"}) {
+		t.Fatalf("credential = %+v, want a delegate to example-auth token", c)
+	}
+	if !c.Exec.ProvideClusterInfo || string(c.Exec.ClusterConfig) != `{"cluster":"prod"}` {
+		t.Fatalf("credential exec = %+v, want cluster information with the cluster config {\"cluster\":\"prod\"}", c.Exec)
+	}
+}
+
 func TestBadTokenIsUnauthenticated(t *testing.T) {
 	tests := []struct {
 		name    string

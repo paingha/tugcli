@@ -677,6 +677,26 @@ func TestFetcherErrors(t *testing.T) {
 	}
 }
 
+func TestClusterLookup(t *testing.T) {
+	cat := &catalog.Catalog{Clusters: []catalog.Cluster{{
+		ID: "fake/work/c-1", Name: "a", Server: "https://a.example:6443", PrivateServer: "https://10.0.0.1:6443",
+		CAData: []byte("CA"), TLSServerName: "a.internal", InsecureSkipTLSVerify: true, ProxyURL: "socks5://127.0.0.1:1080",
+		Tunnel: "ssh://bastion",
+	}}}
+	lookup := ClusterLookup(cat)
+	got, err := lookup("fake/work/c-1")
+	want := credentials.ExecCluster{
+		Server: "https://a.example:6443", CAData: []byte("CA"), TLSServerName: "a.internal",
+		InsecureSkipTLSVerify: true, ProxyURL: "socks5://127.0.0.1:1080",
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("ClusterLookup(cat)(fake/work/c-1) = %+v, %v; want %+v", got, err, want)
+	}
+	if _, err := lookup("fake/work/gone"); !errors.Is(err, catalog.ErrNotFound) {
+		t.Fatalf("ClusterLookup(cat)(fake/work/gone) error = %v, want catalog.ErrNotFound", err)
+	}
+}
+
 // rotatingProvider is a fakeProvider that can rotate credentials.
 type rotatingProvider struct {
 	*fakeProvider

@@ -187,6 +187,19 @@ type ExecConfig struct {
 	APIVersion      string            `json:"apiVersion,omitempty"`
 	InteractiveMode string            `json:"interactiveMode,omitempty"`
 	InstallHint     string            `json:"installHint,omitempty"`
+
+	// ProvideClusterInfo asks tug to tell the command which cluster it
+	// authenticates to, as kubectl does for a kubeconfig exec plugin that
+	// sets provideClusterInfo: the ExecCredential in KUBERNETES_EXEC_INFO
+	// then has a spec.cluster with the cluster's server, CA data, TLS
+	// server name, insecure flag and proxy URL from tug's catalog.
+	ProvideClusterInfo bool `json:"provideClusterInfo,omitempty"`
+	// ClusterConfig is passed to the command as spec.cluster.config, which
+	// kubectl fills from the cluster's client.authentication.k8s.io/exec
+	// kubeconfig extension: settings for this cluster only, such as the
+	// audience to ask for. It is any JSON value, needs ProvideClusterInfo,
+	// and like that extension is not meant for secrets.
+	ClusterConfig json.RawMessage `json:"clusterConfig,omitempty"`
 }
 
 // Credential is what a provider returns for one cluster. Exactly one shape is
@@ -264,6 +277,16 @@ func (c Credential) Validate() error {
 	case CredentialDelegate:
 		if c.Exec == nil || c.Exec.Command == "" {
 			return fmt.Errorf("delegate credential needs exec.command")
+		}
+		if cc := c.Exec.ClusterConfig; len(cc) > 0 {
+			switch {
+			case !json.Valid(cc):
+				return fmt.Errorf("delegate credential's exec.clusterConfig is not JSON")
+			case !c.Exec.ProvideClusterInfo && string(cc) != "null":
+				// kubectl passes the extension only with provideClusterInfo,
+				// so the command would never see it.
+				return fmt.Errorf("delegate credential sets exec.clusterConfig without exec.provideClusterInfo")
+			}
 		}
 	default:
 		return fmt.Errorf("unknown credential type %q", c.Type)
