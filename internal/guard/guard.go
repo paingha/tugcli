@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -103,6 +105,11 @@ func (g *roundTripper) allowedByConfirm(action string) bool {
 // when requested with GET, as WebSocket upgrades are.
 var writeSubresources = []string{"exec", "attach"}
 
+// Kubelet endpoints, reached through the API server's nodes/<name>/proxy,
+// that run code in or attach to a container. The kubelet accepts exec and
+// attach as WebSocket GETs, so the method alone does not tell.
+var kubeletWriteEndpoints = []string{"exec", "run", "attach", "checkpoint"}
+
 // Review APIs that only answer questions about the caller.
 var readOnlyPosts = []string{
 	"/apis/authorization.k8s.io/v1/selfsubjectaccessreviews",
@@ -113,29 +120,46 @@ var readOnlyPosts = []string{
 
 // IsRead reports whether a request only reads. Port-forwards count as reads:
 // they are how people debug read-only clusters. Server-side dry runs count as
-// reads because nothing is persisted.
+// reads because nothing is persisted. A path with empty, "." or ".." segments
+// is never a read: Kubernetes clients do not send one, and the guard should
+// not have to guess how the API server or a kubelet would resolve it.
 func IsRead(method string, u *url.URL) bool {
-	path := strings.TrimSuffix(u.Path, "/")
-	last := path[strings.LastIndex(path, "/")+1:]
-	for _, s := range writeSubresources {
-		if last == s {
-			return false
-		}
+	p := strings.TrimSuffix(u.Path, "/")
+	if p != "" && path.Clean(p) != p {
+		return false
+	}
+	last := p[strings.LastIndex(p, "/")+1:]
+	if slices.Contains(writeSubresources, last) || runsOnKubelet(p) {
+		return false
 	}
 	switch method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return true
 	case http.MethodPost:
-		if last == "portforward" {
+		if last == "portforward" || slices.Contains(readOnlyPosts, p) {
 			return true
 		}
-		for _, p := range readOnlyPosts {
-			if path == p {
+	}
+	return u.Query().Get("dryRun") == "All"
+}
+
+// runsOnKubelet reports whether path goes through nodes/<name>/proxy to a
+// kubelet endpoint that runs code or attaches to a container, such as
+// /api/v1/nodes/n1/proxy/exec/<ns>/<pod>/<container>. Any segment after
+// proxy counts, in any case, so that an unusual path errs towards a write.
+func runsOnKubelet(p string) bool {
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] != "nodes" || parts[i+2] != "proxy" {
+			continue
+		}
+		for _, seg := range parts[i+3:] {
+			if slices.Contains(kubeletWriteEndpoints, strings.ToLower(seg)) {
 				return true
 			}
 		}
 	}
-	return u.Query().Get("dryRun") == "All"
+	return false
 }
 
 // Describe names a request for messages, for example "DELETE pods/api-0".
