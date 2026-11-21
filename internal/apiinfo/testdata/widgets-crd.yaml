@@ -1,0 +1,126 @@
+# A custom resource definition with two served versions, the older one
+# deprecated and still holding objects, converted by a webhook.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.example.com
+spec:
+  group: example.com
+  scope: Namespaced
+  names:
+    kind: Widget
+    listKind: WidgetList
+    plural: widgets
+    singular: widget
+    shortNames: [wd]
+    categories: [all, toys]
+  conversion:
+    strategy: Webhook
+    webhook:
+      conversionReviewVersions: [v1]
+      clientConfig:
+        service:
+          namespace: widgets
+          name: widget-webhook
+          port: 9443
+          path: /convert
+  versions:
+    - name: v1beta1
+      served: true
+      storage: false
+      deprecated: true
+      deprecationWarning: example.com/v1beta1 Widget is deprecated; use example.com/v1
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+        scale:
+          specReplicasPath: .spec.replicas
+          statusReplicasPath: .status.replicas
+      additionalPrinterColumns:
+        - name: Size
+          type: string
+          jsonPath: .spec.size
+        - name: Ready
+          type: string
+          description: Whether the widget is ready
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+          priority: 1
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Widget is a thing that does something.
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: Spec is what the widget should be. It is set by its owner.
+              required: [size]
+              properties:
+                size:
+                  type: string
+                  description: Size of the widget.
+                  enum: [small, large]
+                  default: small
+                replicas:
+                  type: integer
+                  format: int32
+                port:
+                  x-kubernetes-int-or-string: true
+                labels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                parts:
+                  type: array
+                  description: Parts the widget is made of.
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: Name of the part.
+                      count:
+                        type: integer
+                template:
+                  type: object
+                  x-kubernetes-embedded-resource: true
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+status:
+  storedVersions: [v1beta1, v1]
+  acceptedNames:
+    kind: Widget
+    plural: widgets
+  conditions:
+    - type: NamesAccepted
+      status: "True"
+      reason: NoConflicts
+    - type: Established
+      status: "True"
+      reason: InitialNamesAccepted
