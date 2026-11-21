@@ -2,5 +2,5 @@
   "title": "Commands",
   "icon": "SquareTerminal",
   "defaultOpen": true,
-  "pages": ["index", "connect", "workloads", "catalog", "safety", "plugin", "other"]
+  "pages": ["index", "connect", "workloads", "reconcile", "catalog", "safety", "plugin", "other"]
 }

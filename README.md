@@ -41,6 +41,9 @@ tug sh api                      # shell into a pod (bash, else sh; a debug conta
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug reconcile explain db/orders # which controller reconciles it, on what evidence, and whether it runs
+tug reconcile status cert-manager  # a controller's health, leader Lease, restarts and the kinds it reconciles
+tug reconcile trace db/orders --logs  # a timeline: generations, conditions, events, owned objects, its controller's logs
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -177,7 +180,7 @@ in tugd, and `r` and `S` restart and scale, through the session's guard.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `logs` and `top`. Each line is prefixed with
+reads, and `tug why`, `tree`, `reconcile`, `logs` and `top`. Each line is prefixed with
 the cluster's name, failures are listed at the end, and tug exits 1 if any
 cluster failed. `--parallel` (default 8) caps how many run together. Writes,
 and commands that bind a local port or the terminal, are refused before
@@ -235,7 +238,7 @@ pins off.
 | Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
-| Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Logs, exec, debug containers, port-forward, rollouts, why, tree and reconcile (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |
