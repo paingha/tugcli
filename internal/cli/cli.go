@@ -136,6 +136,16 @@ type exitError struct{ code int }
 
 func (e *exitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
 
+// codedError is printed as any error is, but exits with code instead of 1,
+// for commands such as tug diff whose exit 1 means something else.
+type codedError struct {
+	code int
+	err  error
+}
+
+func (e *codedError) Error() string { return e.err.Error() }
+func (e *codedError) Unwrap() error { return e.err }
+
 func (a *app) fail(err error) int {
 	var ee *exitError
 	if errors.As(err, &ee) {
@@ -145,6 +155,10 @@ func (a *app) fail(err error) int {
 	var pe *provider.Error
 	if errors.As(err, &pe) && pe.Hint != "" {
 		fmt.Fprintf(a.stderr, "hint: %s\n", pe.Hint)
+	}
+	var ce *codedError
+	if errors.As(err, &ce) {
+		return ce.code
 	}
 	return 1
 }
