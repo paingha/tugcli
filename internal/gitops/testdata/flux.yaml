@@ -447,3 +447,29 @@ status:
     reason: ArtifactFailed
     status: "False"
     type: Ready
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: flux-system, namespace: flux-system, uid: ks-flux-system, generation: 1}
+spec:
+  interval: 10m0s
+  path: ./clusters/production
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  lastAttemptedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:58:20Z"
+    message: "Applied revision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+    observedGeneration: 1
+    reason: ReconciliationSucceeded
+    status: "True"
+    type: Ready
+  inventory:
+    entries:
+    - {id: flux-system_team_source.toolkit.fluxcd.io_GitRepository, v: v1}
+    - {id: flux-system_infra-controllers_kustomize.toolkit.fluxcd.io_Kustomization, v: v1}
+    - {id: flux-system_apps_kustomize.toolkit.fluxcd.io_Kustomization, v: v1}
+    - {id: flux-system_edge-gateway_gateway.example.com_Gateway, v: v1}

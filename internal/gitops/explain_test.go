@@ -77,6 +77,11 @@ func TestExplainSaysWhereTheFailureSits(t *testing.T) {
 		{KindKustomization, "flux-system", "edge", StageNone, true, "ReconciliationSucceeded: Applied revision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", []string{
 			"health info kustomization/edge: Remote",
 		}},
+		{KindKustomization, "flux-system", "flux-system", StageHealth, false, "what it manages is not healthy", []string{
+			"health error gitrepository/team: GitOperationFailed",
+			"health error kustomization/apps: DependencyNotReady",
+			"health warning gateway/edge-gateway: UnknownKind",
+		}},
 		{KindKustomization, "flux-system", "infra-controllers", StageNone, true, "ReconciliationSucceeded: Applied revision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", []string{}},
 		{KindHelmRelease, "shop", "podinfo", StageApply, false, "its Helm chart fails to install or upgrade", []string{
 			"reconcile info helmrelease/podinfo: Stalled",
@@ -161,6 +166,13 @@ func TestExplainEvidenceAndNextSteps(t *testing.T) {
 			"see the source's conditions and events: `tug why gitrepositories.source.toolkit.fluxcd.io/team -n flux-system`"},
 		{KindKustomization, "flux-system", "storefront", "configmap/gone", "Missing",
 			"is not in the cluster, though kustomization/storefront manages it; Flux creates it again at its next reconcile, every 10m0s", ""},
+		{KindKustomization, "flux-system", "flux-system", "gitrepository/team", "GitOperationFailed",
+			"is not ready: building artifact: failed to checkout and determine revision",
+			"see its conditions and events: `tug why gitrepositories.source.toolkit.fluxcd.io/team -n flux-system`"},
+		{KindKustomization, "flux-system", "flux-system", "kustomization/apps", "DependencyNotReady",
+			"is not ready: dependency 'flux-system/infra-configs' is not ready", "see why: `tug gitops explain kustomization/apps -n flux-system`"},
+		{KindKustomization, "flux-system", "flux-system", "gateway/edge-gateway", "UnknownKind",
+			"the cluster serves no Gateway in gateway.example.com/v1, so it cannot be there", "`tug get crds`"},
 		{KindKustomization, "flux-system", "monitoring", "kustomization/monitoring", "NotReconciled",
 			"it is at generation 3, but was last reconciled at 2", "`tug why deploy/kustomize-controller -n flux-system`"},
 		{KindKustomization, "flux-system", "monitoring", "kustomization/monitoring", "RevisionNotApplied",

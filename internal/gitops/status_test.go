@@ -207,7 +207,7 @@ func TestStatusScope(t *testing.T) {
 		}
 	}
 	all := s.Status("")
-	if len(all.Objects) != 5+9+2+5 {
+	if len(all.Objects) != 5+10+2+5 {
 		t.Errorf(`Status("") lists %d objects, want every source but HelmCharts, Kustomization, HelmRelease and Application: %v`, len(all.Objects), names(all.Objects))
 	}
 	if slices.ContainsFunc(all.Objects, func(o *Object) bool { return o.Kind == KindHelmChart }) {

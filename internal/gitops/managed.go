@@ -129,13 +129,17 @@ func (k *checker) check(ctx context.Context, r objectRef) checked {
 		return k.nested(m, o)
 	}
 	obj, err := k.object(r)
-	if err != nil {
+	if meta.IsNoMatchError(err) {
 		m.Health, m.Status = ops.HealthUnknown, "the cluster does not serve this kind"
 		return checked{managed: m, findings: []ops.Finding{{
 			Severity: ops.SeverityWarning, Objects: []string{r.String()}, Reason: "UnknownKind",
 			Message: fmt.Sprintf("the cluster serves no %s in %s, so it cannot be there", r.Kind, groupVersion(r)),
 			Next:    "check that the CRD it needs is installed: `tug get crds`",
 		}}}
+	}
+	if err != nil {
+		m.Health, m.Status = ops.HealthUnknown, "its kind could not be looked up: "+firstLine(err.Error())
+		return checked{managed: m}
 	}
 	if _, ok := obj.Workload(); ok {
 		return k.diagnose(ctx, m, obj, ops.HealthNotReady)
@@ -231,10 +235,13 @@ func (k *checker) nested(m Managed, o *Object) checked {
 	if o.Ready != ops.HealthNotReady {
 		return checked{managed: m}
 	}
+	next := "see why: " + tugCommand(o.Namespace, "gitops", "explain", o.String())
+	if !delivers(o.Kind) {
+		next = "see its conditions and events: " + why(o) // explain takes no source
+	}
 	return checked{managed: m, findings: []ops.Finding{{
 		Severity: ops.SeverityError, Objects: []string{o.String()}, Reason: cmp.Or(o.Reason, "NotReady"),
-		Message: "is not ready: " + cmp.Or(o.Message, statusText(o)),
-		Next:    "see why: " + tugCommand(o.Namespace, "gitops", "explain", o.String()),
+		Message: "is not ready: " + cmp.Or(o.Message, statusText(o)), Next: next,
 	}}}
 }
 

@@ -218,6 +218,8 @@ type Snapshot struct {
 
 	objects []*Object
 	byKey   map[key]*Object
+	// kinds are the kinds the cluster serves.
+	kinds map[string]bool
 }
 
 // ErrNotInstalled is returned when the cluster serves neither Flux nor Argo
@@ -233,12 +235,13 @@ func Load(ctx context.Context, c Clients, namespace string) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Snapshot{Unlisted: unlisted, byKey: map[key]*Object{}}
+	s := &Snapshot{Unlisted: unlisted, byKey: map[key]*Object{}, kinds: map[string]bool{}}
 	for _, k := range kinds {
 		r, ok := served[k.name]
 		if !ok {
 			continue
 		}
+		s.kinds[k.name] = true
 		if !slices.Contains(s.Tools, k.tool) {
 			s.Tools = append(s.Tools, k.tool)
 		}
@@ -276,10 +279,7 @@ func (s *Snapshot) get(r Ref) *Object { return s.byKey[keyOf(r)] }
 
 // served reports whether the cluster serves a kind: one it does not serve
 // has no objects to find.
-func (s *Snapshot) served(kindName string) bool {
-	k, ok := kindNamed(kindName)
-	return ok && slices.Contains(s.Tools, k.tool)
-}
+func (s *Snapshot) served(kindName string) bool { return s.kinds[kindName] }
 
 // resolveRevisions sets what the source of each Kustomization and
 // HelmRelease offers now.
