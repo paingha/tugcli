@@ -16,6 +16,12 @@ spec:
   - {os: windows, arch: amd64, bin: bin/windows_amd64/tug-provider-tailscale.exe}
   env: []
   network: []
+  # The plugin runs `tailscale status`, which asks tailscaled through its
+  # socket: /var/run/tailscale/tailscaled.sock on Linux, and
+  # /var/run/tailscaled.socket for the open-source daemon on macOS.
+  sandbox:
+    tools: [tailscale]
+    sockets: [/var/run/tailscale/tailscaled.sock, /var/run/tailscaled.socket]
   accountConfig:
     type: object
     properties:
