@@ -4,6 +4,10 @@ A CLI that makes Kubernetes clusters easy to reach and work with. tug finds
 clusters across providers, keeps their credentials in the OS keychain, and
 points each terminal at one cluster without touching `~/.kube/config`.
 
+**Documentation:** [paingha.github.io/tugcli](https://paingha.github.io/tugcli/)
+has the full user guide: installing, every provider and command, and writing
+plugins.
+
 > Status: early development, for individual developers. Phases 0 and 1 are in
 > place, and most of v1: tugd (the local API proxy, tunnels to private
 > clusters, named port-forwards), OIDC sign-in, credential rotation,
@@ -201,9 +205,9 @@ pins off.
 A plugin is an executable named `tug-provider-<name>` that reads one JSON
 request on stdin and writes one JSON response on stdout, in any language.
 [docs/plugins.md](docs/plugins.md) is the guide to writing, testing,
-packaging and installing one, with the protocol and manifest reference. While
-this repository is private, a Go plugin gets the SDK from a local checkout:
-`tug plugin new acme --sdk-replace <path to tugcli>`.
+packaging and installing one, with the protocol and manifest reference. To
+build a Go plugin against SDK changes that aren't on `main` yet, scaffold it
+from a local checkout: `tug plugin new acme --sdk-replace <path to tugcli>`.
 
 ```bash
 tug plugin new acme                    # Go, with the SDK, tests and a release workflow
