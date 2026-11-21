@@ -47,6 +47,9 @@ Colour is turned off automatically when output isn't a terminal, when
   and often a `hint:` line saying what to do.
 - When tug runs another program (kubectl through passthrough, or a command in
   a pod with `tug sh api -- …`), it exits with **that program's** code.
+- `tug diff` and `tug drift` exit as `kubectl diff` does: `0` when nothing
+  differs, `1` when something does, and `2` on an error. See
+  [Diffs and drift](/docs/guides/diff).
 
 ## Secrets from the environment
 

@@ -41,6 +41,9 @@ tug sh api                      # shell into a pod (bash, else sh; a debug conta
 tug why api                     # why it is not ready: crashes, image pulls, probes, scheduling, volumes
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug diff -f k8s/                # what an apply would change, by server-side dry run, with each field's owner
+tug diff api --against staging  # the same object on another cluster, minus what each cluster sets itself
+tug drift --against staging     # the objects, CRDs and API versions that differ between two clusters
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -183,6 +186,20 @@ cluster failed. `--parallel` (default 8) caps how many run together. Writes,
 and commands that bind a local port or the terminal, are refused before
 anything runs. Tunnelled clusters go through their tunnels.
 
+## Diffs and drift
+
+`tug diff -f <file>` shows what an apply would change: it asks the API server
+for a server-side dry run, so admission and defaulting show, and lists each
+differing field with the field managers that own it, from managedFields,
+marking the fields an apply would take from another manager. `tug diff
+<target> --against <cluster>` compares an object with the same one on another
+catalog cluster, leaving out what each cluster sets itself (allocated IPs,
+autoscaled replicas, defaults), and `--managed-fields` lists who owns what.
+`tug drift --against <cluster> [resource...]` compares a namespace's objects,
+the CRDs and the API versions of two clusters. Both exit as `kubectl diff`
+does, which `tug diff` takes the place of: 0 same, 1 different, 2 on an
+error. Neither reads a Secret's data.
+
 ## Audit log
 
 tug records every write it lets through, in `<data>/audit/audit.jsonl`:
@@ -236,6 +253,7 @@ pins off.
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Diffs, server-side dry runs, field ownership and drift across clusters | [internal/diff](internal/diff) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |

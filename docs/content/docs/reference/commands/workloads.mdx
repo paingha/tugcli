@@ -168,3 +168,71 @@ tug tree <target> [-o table|json|yaml]
 tug tree checkout
 tug tree cronjob/nightly-backup
 ```
+
+## tug diff
+
+Compare a live object with manifests, with the same object on another catalog
+cluster, or list its field managers. See
+[Diffs and drift](/docs/guides/diff).
+
+```bash
+tug diff [target] -f <file|dir|-> [flags]
+tug diff <target> --against <cluster> [flags]
+tug diff <target> --managed-fields [-o json|yaml]
+```
+
+With `-f`, each object is compared with what a server-side dry run of the
+apply (`dryRun=All`) returns, so admission and defaulting show. Without a
+target every object in the files is compared, as `kubectl diff` does; with
+one, only that object. With `--against`, fields that only the clusters set
+themselves are left out. Each differing field is listed with its owners from
+`managedFields`, and fields an apply would take from another manager are
+marked as conflicts. A Secret's data is never read: `-f` skips Secrets, and
+`--against` and `--managed-fields` use their metadata only.
+
+tug diff takes the place of `kubectl diff` and exits as it does: 0 when
+nothing differs, 1 when something does, 2 on an error.
+
+| Flag | Meaning |
+| --- | --- |
+| `-f`, `--filename <path>` | Manifest file, directory of manifests, or `-` for stdin. Repeatable. |
+| `--against <cluster>` | Compare with the same object on this catalog cluster. |
+| `--managed-fields` | List the field managers and the fields each owns. |
+| `--field-manager <name>` | The manager the dry run applies as, and conflicts are judged for. Default: `tug`. |
+| `--all-fields` | With `--against`, keep the fields only the clusters set themselves. |
+| `--status` | Compare status too. |
+| `-o`, `--output json\|yaml` | The comparison as JSON or YAML instead of a diff. |
+
+```bash
+tug diff -f k8s/
+tug diff api -f k8s/ --field-manager kubectl
+kustomize build overlays/prod | tug diff -f -
+tug diff deploy/api --against payments-staging
+tug diff deploy/api --managed-fields
+```
+
+## tug drift
+
+Compare the session's cluster with another catalog cluster: the API versions
+each serves, the CustomResourceDefinitions on each and their versions, and the
+objects of the resources named, in the namespace. Without names it compares
+deployments, statefulsets, daemonsets, cronjobs, services, configmaps and
+ingresses. Secrets are compared only when named, and only by their metadata.
+It exits 0 when the clusters match, 1 when they differ and 2 on an error.
+
+```bash
+tug drift --against <cluster> [resource...] [flags]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--against <cluster>` | The catalog cluster to compare with. Required. |
+| `-A`, `--all-namespaces` | Compare every namespace. |
+| `--all-fields` | Keep the fields only the clusters set themselves. |
+| `-o`, `--output table\|json\|yaml` | Output format. |
+
+```bash
+tug drift --against payments-staging
+tug drift --against payments-staging deploy cm secrets -n checkout
+tug drift --against eu-prod -o json
+```
