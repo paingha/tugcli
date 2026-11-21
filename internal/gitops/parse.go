@@ -34,7 +34,7 @@ func parseFlux(o *Object) {
 	o.Interval = text(u.Object, "spec", "interval")
 	o.Ready = fluxReadiness(o)
 	if c := o.condition("Ready"); c != nil {
-		o.Reason, o.Message = c.Reason, firstLine(c.Message)
+		o.Reason, o.Message = c.Reason, compact(c.Message)
 	}
 	for _, c := range o.Conditions {
 		if c.LastTransition.After(o.LastReconcile) {
@@ -151,13 +151,13 @@ func parseApplication(o *Object) {
 func applicationState(o *Object) (ops.Health, string, string) {
 	for _, c := range o.Conditions {
 		if strings.HasSuffix(c.Type, "Error") {
-			return ops.HealthNotReady, c.Type, firstLine(c.Message)
+			return ops.HealthNotReady, c.Type, compact(c.Message)
 		}
 	}
 	u := o.u.Object
 	phase := text(u, "status", "operationState", "phase")
 	if (phase == "Failed" || phase == "Error") && o.Sync != "Synced" {
-		return ops.HealthNotReady, "Sync" + phase, firstLine(text(u, "status", "operationState", "message"))
+		return ops.HealthNotReady, "Sync" + phase, compact(text(u, "status", "operationState", "message"))
 	}
 	msg := firstLine(text(u, "status", "health", "message"))
 	switch {

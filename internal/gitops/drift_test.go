@@ -23,8 +23,8 @@ func TestDrift(t *testing.T) {
 		}},
 		{KindApplication, "argocd", "platform", DetectionArgoCD, "", nil},
 		{KindApplication, "argocd", "payments", DetectionArgoCD, "Argo CD has not compared it with its source", nil},
-		{KindApplication, "argocd", "edge-shop", DetectionArgoCD, "as Argo CD found it in edge-eu", nil},
-		{KindHelmRelease, "shop", "podinfo", DetectionHelm, "as helm-controller last reported it", []string{
+		{KindApplication, "argocd", "edge-shop", DetectionArgoCD, "Argo CD compares it in edge-eu, the cluster it deploys to.", nil},
+		{KindHelmRelease, "shop", "podinfo", DetectionHelm, "helm-controller checks it for drift each time it reconciles, every 10m0s; this is what it last reported.", []string{
 			"shop deployment/podinfo changed (0 additions, 1 changes, 0 removals) health= prune=false",
 			"shop service/podinfo removed health= prune=false",
 		}},

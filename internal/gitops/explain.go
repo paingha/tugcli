@@ -843,7 +843,7 @@ func nonEmpty(ss ...string) []string {
 // conditionText says what a condition says in a few words: "BuildFailed:
 // kustomize build failed".
 func conditionText(c ops.Condition) string {
-	msg := firstLine(c.Message)
+	msg := compact(c.Message)
 	var s string
 	switch {
 	case c.Reason != "" && msg != "":

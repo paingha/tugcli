@@ -36,7 +36,8 @@ type DriftReport struct {
 	// Detection says how the tool reports drift for the object: argocd,
 	// helm, off or corrected.
 	Detection string `json:"detection"`
-	// Note says what the report covers, and what it cannot.
+	// Note says, in a sentence or two, what the report covers and what
+	// it cannot.
 	Note    string    `json:"note,omitempty"`
 	Drifted []Drifted `json:"drifted"`
 }
@@ -84,22 +85,23 @@ func Drift(ctx context.Context, c Clients, s *Snapshot, o *Object) (*DriftReport
 		}
 		switch {
 		case o.Sync == "Unknown" || o.Sync == "":
-			r.Note = "Argo CD has not compared it with its source, so it reports no drift" + prefixed(": ", o.Message)
+			r.Note = "Argo CD has not compared it with its source, so it reports no drift" + prefixed(": ", o.Message) + "."
 		case !o.inCluster():
-			r.Note = fmt.Sprintf("as Argo CD found it in %s", cmp.Or(o.Destination.Name, o.Destination.Server))
+			r.Note = fmt.Sprintf("Argo CD compares it in %s, the cluster it deploys to.", cmp.Or(o.Destination.Name, o.Destination.Server))
 		}
 	case KindHelmRelease:
 		mode := text(o.u.Object, "spec", "driftDetection", "mode")
 		if mode != "warn" && mode != "enabled" {
 			r.Detection = DetectionOff
-			r.Note = "helm-controller does not check it for drift; set spec.driftDetection.mode to warn, or to enabled to also correct it"
+			r.Note = "helm-controller does not check it for drift; set spec.driftDetection.mode to warn, or to enabled to also correct it."
 			return r, nil
 		}
 		r.Detection = DetectionHelm
-		r.Note = "as helm-controller last reported it; it reports drift each time it reconciles, every " + cmp.Or(o.Interval, "interval")
+		r.Note = "helm-controller checks it for drift each time it reconciles, every " + cmp.Or(o.Interval, "interval")
 		if mode == "enabled" {
-			r.Note += ", and corrects it"
+			r.Note += ", and corrects what it finds"
 		}
+		r.Note += "; this is what it last reported."
 		drifted, err := helmDrift(ctx, c, o)
 		if err != nil {
 			return nil, err
@@ -108,7 +110,7 @@ func Drift(ctx context.Context, c Clients, s *Snapshot, o *Object) (*DriftReport
 	default:
 		r.Detection = DetectionCorrected
 		r.Note = fmt.Sprintf("kustomize-controller applies its source each time it reconciles, every %s, undoing changes made in the cluster, and reports no drift between; "+
-			"to compare the cluster with a checkout of its source, run `flux diff kustomization %s -n %s --path %s`",
+			"to compare the cluster with a checkout of its source, run `flux diff kustomization %s -n %s --path %s`.",
 			cmp.Or(o.Interval, "interval"), o.Name, o.Namespace, cmp.Or(text(o.u.Object, "spec", "path"), "."))
 	}
 	return r, nil

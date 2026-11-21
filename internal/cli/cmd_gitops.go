@@ -492,7 +492,7 @@ func (a *app) printGitOpsDrift(r *gitops.DriftReport) error {
 		fmt.Fprintf(w, "Argo CD last compared it with its source %s ago.\n", a.gitopsAge(o.LastReconcile))
 	}
 	if r.Note != "" {
-		writeIndented(w, "", "", strings.ToUpper(r.Note[:1])+r.Note[1:]+".", render.Width(w))
+		writeIndented(w, "", "", r.Note, render.Width(w))
 	}
 	if len(r.Drifted) == 0 {
 		return nil
@@ -577,7 +577,7 @@ func (a *app) printGitOpsDependencies(o *gitops.Object, d *gitops.Dependencies) 
 	}
 	if d.Note != "" {
 		fmt.Fprintln(w)
-		writeIndented(w, "", "", d.Note+".", render.Width(w))
+		writeIndented(w, "", "", d.Note, render.Width(w))
 	}
 	return nil
 }

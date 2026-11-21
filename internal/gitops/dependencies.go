@@ -58,7 +58,7 @@ func (s *Snapshot) Dependencies(o *Object) *Dependencies {
 		}),
 	}
 	if o.Tool == ArgoCD {
-		d.Note = "Argo CD Applications have no dependsOn: shown are the Applications it manages, and those that manage it, as an app of apps does; sync waves order objects within one Application"
+		d.Note = "Argo CD Applications have no dependsOn: shown are the Applications it manages, and those that manage it, as an app of apps does; sync waves order objects within one Application."
 	}
 	return d
 }
