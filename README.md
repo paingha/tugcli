@@ -4,6 +4,10 @@ A CLI that makes Kubernetes clusters easy to reach and work with. tug finds
 clusters across providers, keeps their credentials in the OS keychain, and
 points each terminal at one cluster without touching `~/.kube/config`.
 
+**Documentation:** [paingha.github.io/tugcli](https://paingha.github.io/tugcli/)
+has the full user guide: installing, every provider and command, and writing
+plugins.
+
 > Status: early development, for individual developers. Phases 0 and 1 are in
 > place, and most of v1: tugd (the local API proxy, tunnels to private
 > clusters, named port-forwards), OIDC sign-in, credential rotation,
