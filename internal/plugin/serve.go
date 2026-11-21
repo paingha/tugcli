@@ -198,7 +198,14 @@ func (s *server) read(inst instance, stdout io.ReadCloser, stderr *lineLogger, d
 		ch, ok := s.pending[resp.ID]
 		s.mu.Unlock()
 		if ok {
-			ch <- resp.Response // buffered; each ID gets one answer
+			// Each call takes one answer. A plugin that answers a call
+			// twice must not stop the reader: a call that has given up,
+			// as one that timed out has, never takes a second.
+			select {
+			case ch <- resp.Response:
+			default:
+				s.r.logger().Warn("plugin answered a serve request more than once", "plugin", s.r.Name, "id", resp.ID)
+			}
 		} else if resp.ID == "" {
 			s.r.logger().Warn("plugin refused a serve request", "plugin", s.r.Name, "response", string(resp.Response))
 		}
