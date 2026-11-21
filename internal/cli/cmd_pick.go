@@ -24,15 +24,21 @@ var objectActionKeys = map[string]string{"why": "w", "tree": "t", "logs": "l", "
 // objectAction returns the command line that runs an action on an object,
 // in the object's namespace, with extra words after it: tug why, tree,
 // logs or pf, or kubectl describe. The object is named so that it resolves
-// to itself and nothing else.
+// to itself and nothing else: a workload or pod as tug prints it,
+// "sts/ledger", whose exact name wins over any other match, and anything
+// else by its resource and group, "certificates.cert-manager.io/web-tls".
 func objectAction(action string, o resolve.Object, extra []string) ([]string, error) {
+	t, workload := o.Workload()
 	var line []string
 	switch action {
 	case "why", "tree", "describe":
-		line = []string{action, o.Ref()}
+		ref := o.Ref()
+		if workload {
+			ref = t.String()
+		}
+		line = []string{action, ref}
 	case "logs", "pf":
-		t, ok := o.Workload()
-		if !ok {
+		if !workload {
 			return nil, fmt.Errorf("%s works on deployments, statefulsets, daemonsets, jobs and pods, not on %s", action, o)
 		}
 		line = []string{action, t.String()}

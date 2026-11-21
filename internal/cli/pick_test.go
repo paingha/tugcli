@@ -24,14 +24,17 @@ func TestPickWithoutATerminal(t *testing.T) {
 	// One match runs why on it, and says what it ran.
 	r = tug(t, "pick", "-n", "shop", "--query", "billing crash")
 	if r.code != 1 || !strings.Contains(r.stdout, "pod/billing-5d4f-x2x4z in shop is not ready") ||
-		!strings.Contains(r.stderr, "tug why pods/billing-5d4f-x2x4z -n shop") {
+		!strings.Contains(r.stderr, "tug why pod/billing-5d4f-x2x4z -n shop") {
 		t.Errorf("pick --query 'billing crash': %+v", r)
 	}
 	if out := mustTug(t, "pick", "deploy", "-n", "shop", "--query", "checkout", "--action", "logs"); !strings.Contains(out, "log of checkout-") {
 		t.Errorf("pick deploy --action logs:\n%s", out)
 	}
-	if out := mustTug(t, "pick", "db", "-n", "shop", "--query", "orders", "--action", "tree"); !strings.Contains(out, "backup/orders-nightly") {
-		t.Errorf("pick db --action tree:\n%s", out)
+	// Other kinds are named by resource and group, so that nothing else
+	// the cluster serves can match.
+	r = tug(t, "pick", "db", "-n", "shop", "--query", "orders", "--action", "tree")
+	if r.code != 0 || !strings.Contains(r.stdout, "backup/orders-nightly") || !strings.Contains(r.stderr, "tug tree databases.db.example.com/orders -n shop") {
+		t.Errorf("pick db --action tree: %+v", r)
 	}
 
 	for _, tt := range []struct {
