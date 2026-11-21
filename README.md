@@ -229,7 +229,11 @@ operation, for example `{list: 60s, rotate: 2m}`.
 
 A plugin index lists reviewed plugins with each archive's URL and sha256 and
 is signed with ed25519, so installing by name checks the index's signature,
-the archive's sha256 and every binary's sha256. Add an index to
+the archive's sha256 and every binary's sha256. An entry can also name a
+Sigstore bundle and the identity that must have signed the archive, such as
+the publisher's release workflow; tug then checks the signature against the
+public Sigstore logs before installing, and `plugins.requireSignatures: true`
+refuses entries without one. Add an index to
 `plugins.indexes` in `config.yaml` with its `name`, `url` and `publicKey`;
 there is no default until one is published. Publishers use
 `tug plugin index keygen | add | sign | verify`.
