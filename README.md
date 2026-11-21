@@ -47,6 +47,7 @@ tug why api                     # why it is not ready: crashes, image pulls, pro
 tug tree api                    # the workload, its ReplicaSets, pods, Services, config and volumes, with health
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
+tug why api --deep              # opt-in: a model you choose explains the evidence, after showing it and the cost
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
 tug restart api | tug scale api 3 | tug rollback api
@@ -273,6 +274,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Working-environment profiles | [internal/profile](internal/profile) |
 | Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
+| Model providers behind `tug why --deep`: evidence, redaction, prompts, prices, usage | [internal/intelligence](internal/intelligence) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
 | Python SDK for plugins | [sdk/python](sdk/python) |

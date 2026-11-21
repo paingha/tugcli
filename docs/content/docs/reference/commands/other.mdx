@@ -1,6 +1,6 @@
 ---
 title: Other commands
-description: auth, daemon, version and completion.
+description: auth, daemon, intelligence, version and completion.
 ---
 
 ## tug auth
@@ -77,6 +77,19 @@ live session or a named port-forward.
 | `tug daemon start` | Start tugd in the background if it isn't running. |
 | `tug daemon status [-o table\|json\|yaml]` | Show whether it's running and what it serves. |
 | `tug daemon stop` | Stop tugd. |
+
+## tug intelligence
+
+Set up the model providers behind [`tug why --deep`](/docs/guides/ai-explanations),
+and see what they cost.
+
+| Command | Meaning |
+| --- | --- |
+| `tug intelligence status [-o table\|json\|yaml]` | The provider, model and address `--deep` uses, where its key comes from (never the key), the price that applies, and this month's spend. |
+| `tug intelligence usage [--limit <n>] [-o table\|json\|yaml]` | The latest calls, and their tokens and cost by day and month (UTC). |
+| `tug intelligence key set <provider>` | Ask for a provider's API key on the terminal and keep it in the keychain. |
+| `tug intelligence key rm <provider>` | Remove a provider's stored key. |
+| `tug intelligence models [-o table\|json\|yaml\|name]` | Each provider's default model, and the prices tug assumes, with their sources. |
 
 ## tug version
 

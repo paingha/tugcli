@@ -12,6 +12,7 @@ icon: Variable
 | `TUG_KEYRING_BACKEND` | `auto`, `keychain` or `file`. Overrides `keyring.backend` in config. |
 | `TUG_KEYRING_PASSPHRASE` | The passphrase for the encrypted file store. Needed by the `file` backend, and lets `auto` fall back to it. |
 | `TUG_SECRET_<NAME>` | A provider secret, used when there's no terminal to ask in. `<NAME>` is the secret's name in capitals: `TUG_SECRET_API_TOKEN`. |
+| `TUG_SECRET_<PROVIDER>_API_KEY` | A model provider's API key for [`tug why --deep`](/docs/guides/ai-explanations), used instead of the one in the keychain: `TUG_SECRET_ANTHROPIC_API_KEY`, `TUG_SECRET_OPENAI_API_KEY`, `TUG_SECRET_MISTRAL_API_KEY`, `TUG_SECRET_CUSTOM_API_KEY`. |
 | `TUG_KUBECTL` | The kubectl to run. Overrides `kubectl` in config. |
 | `TUG_PLUGIN_PATH` | Plugin folders under development, searched first. Separated like `PATH`. |
 | `TUG_PROMPT_DISABLE` | Set to `1` before the hook line to leave your prompt unchanged. |

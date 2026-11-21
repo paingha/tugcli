@@ -145,8 +145,14 @@ diagnosis above for each workload it owns. It only reads, and never reads a
 Secret's data. See
 [Why isn't it working?](/docs/guides/workloads#why-isnt-it-working).
 
+`--deep` also asks a model to explain the evidence, once `intelligence.enabled`
+is set in config.yaml: Claude, OpenAI, Mistral or any OpenAI-compatible
+endpoint. tug shows exactly what it will send, with the estimated cost, and
+asks first; `-y/--yes` sends without asking, and without a terminal it refuses
+unless `--yes` is given. See [AI explanations](/docs/guides/ai-explanations).
+
 ```bash
-tug why <target> [-o table|json|yaml]
+tug why <target> [-o table|json|yaml] [--deep [-y] [--provider <name>] [--model <id>]]
 ```
 
 ```bash
@@ -155,6 +161,8 @@ tug why sts/db -n data
 tug why job/migrate -o json
 tug why certificate/web-tls
 tug why kustomization.kustomize.toolkit.fluxcd.io/apps -n flux-system
+tug why billing --deep
+tug why billing --deep --provider openai --model gpt-6.2-sol
 ```
 
 ## tug tree
