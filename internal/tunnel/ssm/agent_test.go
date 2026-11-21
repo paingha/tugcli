@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/gorilla/websocket"
+	"github.com/xtaci/smux"
 )
 
 const (
@@ -101,6 +103,12 @@ type agentSession struct {
 	agentSeal, clientOpen cipher.AEAD
 	challenge             []byte
 	sealedInput           [][]byte // data payloads as they arrived
+
+	// With multiplexing: stream data goes into muxIn, the far end of a pipe
+	// whose near end is an smux server, as in the agent.
+	muxIn   net.Conn
+	muxSess *smux.Session
+	streams int
 }
 
 func (a *fakeAgent) problem(format string, args ...any) {
@@ -244,6 +252,10 @@ func (s *agentSession) run(ws *websocket.Conn, first bool) {
 	for {
 		_, data, err := ws.ReadMessage()
 		if err != nil {
+			if s.muxSess != nil {
+				_ = s.muxSess.Close()
+				_ = s.muxIn.Close()
+			}
 			close(s.done)
 			return
 		}
@@ -364,6 +376,13 @@ func (s *agentSession) process(m message) {
 			if action.ActionStatus != actionSuccess {
 				return // the agent cancels the session
 			}
+		}
+		// The agent multiplexes LocalPortForwarding sessions for clients
+		// from 1.1.70, if it is new enough to have multiplexing at all.
+		if versionAfter(s.a.agentVersion, muxAgentVersion) && !versionAfter("1.1.70", resp.ClientVersion) {
+			s.startMux(resp.ClientVersion)
+		}
+		for _, action := range resp.ProcessedClientActions {
 			if action.ActionType == actionKMSEncryption {
 				s.startEncryption(action)
 				return // the handshake completes once the challenge is answered
@@ -391,6 +410,12 @@ func (s *agentSession) process(m message) {
 				return
 			}
 		}
+		if s.muxIn != nil {
+			if _, err := s.muxIn.Write(payload); err != nil {
+				s.a.problem("feeding smux: %v", err)
+			}
+			return
+		}
 		s.send(payloadOutput, payload)
 	case payloadFlag:
 		s.mu.Lock()
@@ -399,6 +424,69 @@ func (s *agentSession) process(m message) {
 	default:
 		s.a.problem("unexpected input payload type %d", m.PayloadType)
 	}
+}
+
+// startMux serves the session's stream data with an smux server, as the
+// agent's multiplexed port session does, keeping smux keepalives on unless
+// the client is later than 1.2.331.0. Each stream echoes, and closes when
+// it reads "bye", as a destination that hangs up would.
+func (s *agentSession) startMux(clientVersion string) {
+	agentEnd, smuxEnd := net.Pipe()
+	config := smux.DefaultConfig()
+	config.KeepAliveDisabled = versionAfter(s.a.agentVersion, keepAliveAgentVersion) && versionAfter(clientVersion, "1.2.331.0")
+	sess, err := smux.Server(smuxEnd, config)
+	if err != nil {
+		s.a.problem("starting smux: %v", err)
+		return
+	}
+	s.muxIn, s.muxSess = agentEnd, sess
+	go func() {
+		buf := make([]byte, chunkSize)
+		for {
+			n, err := agentEnd.Read(buf)
+			if err != nil {
+				return
+			}
+			s.send(payloadOutput, bytes.Clone(buf[:n]))
+		}
+	}()
+	go func() {
+		for {
+			stream, err := sess.AcceptStream()
+			if err != nil {
+				return
+			}
+			s.mu.Lock()
+			s.streams++
+			s.mu.Unlock()
+			go func() {
+				defer stream.Close()
+				buf := make([]byte, 4096)
+				for {
+					n, err := stream.Read(buf)
+					if err != nil || string(buf[:n]) == "bye" {
+						return
+					}
+					if _, err := stream.Write(buf[:n]); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+}
+
+func (s *agentSession) streamCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.streams
+}
+
+// closeChannel ends the session from Session Manager's side.
+func (s *agentSession) closeChannel() {
+	s.write(newMessage(typeChannelClosed, 0, flagsAck, 0, mustJSON(channelClosed{
+		MessageType: typeChannelClosed, SessionID: s.id, SchemaVersion: 1,
+	}), time.Now()))
 }
 
 // complete ends the handshake and sends what the test asked for after it.
@@ -426,7 +514,9 @@ func (s *agentSession) startEncryption(action processedAction) {
 		s.a.problem("decrypting the data key: %v", err)
 		return
 	}
+	s.mu.Lock()
 	s.agentSeal, s.clientOpen = agentGCM(key[:32]), agentGCM(key[32:])
+	s.mu.Unlock()
 	s.challenge = make([]byte, 64)
 	_, _ = rand.Read(s.challenge)
 	s.sendJSON(payloadEncChallengeRequest, encryptionChallenge{Challenge: agentSeal(s.agentSeal, s.challenge)})
@@ -484,11 +574,11 @@ func (s *agentSession) ack(m message) {
 // next numbers an output message, encrypting stream data once the session
 // is encrypted.
 func (s *agentSession) next(pt payloadType, payload []byte) message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if pt == payloadOutput && s.agentSeal != nil {
 		payload = agentSeal(s.agentSeal, payload)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var f uint64
 	if s.nextSeq == 0 {
 		f = 1 // SYN, as the agent sets on its first message
@@ -655,6 +745,12 @@ func (f *fakeAPI) TerminateSession(_ context.Context, in *ssm.TerminateSessionIn
 	defer f.mu.Unlock()
 	f.terminated = append(f.terminated, awsv2.ToString(in.SessionId))
 	return &ssm.TerminateSessionOutput{SessionId: in.SessionId}, nil
+}
+
+func (f *fakeAPI) startCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.starts)
 }
 
 func (f *fakeAPI) terminations() []string {

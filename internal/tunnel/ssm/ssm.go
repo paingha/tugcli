@@ -13,13 +13,26 @@
 // the Session Manager preferences name a KMS key, the session's data is
 // encrypted with a KMS data key as the plugin does it (see crypto.go).
 //
-// tug asks the agent for basic port forwarding rather than the multiplexed
-// mode the current plugin uses (see clientVersion). In that mode the agent
-// does not report the far end closing its TCP connection: it dials again
-// when more data arrives. In-band ends such as a TLS close_notify or an
-// HTTP/2 GOAWAY still reach the reader, and the session ends when the
-// connection is closed here, when Session Manager closes the channel, or
-// when the agent cannot connect.
+// By default tug asks the agent for basic port forwarding, one session per
+// connection, rather than the multiplexed mode the current plugin uses. In
+// basic mode the agent does not report the far end closing its TCP
+// connection: it dials again when more data arrives. In-band ends such as a
+// TLS close_notify or an HTTP/2 GOAWAY still reach the reader, and the
+// session ends when the connection is closed here, when Session Manager
+// closes the channel, or when the agent cannot connect.
+//
+// With Config.Mux (ssm://...?mux=true), a Dialer shares one session per
+// address among its connections, multiplexed with smux as the plugin does,
+// wherever the agent can (see mux.go). New connections then skip
+// StartSession and the handshake, and the agent reports the far end
+// closing. The cost is that the connections share one fate and one
+// ordered channel: smux protocol version 1, which the agent speaks, has no
+// per-stream flow control, so a connection whose reader stops reading
+// stalls the others once 4 MiB is buffered; a retransmission delays them
+// all; the agent dials each new connection's destination in turn; and when
+// the session ends, every connection over it ends too. A session per
+// connection keeps a stalled or failed connection to itself, so it stays
+// the default.
 package ssm
 
 import (
@@ -51,6 +64,10 @@ type Config struct {
 	Target  string // instance ID, e.g. i-0123456789abcdef0
 	Region  string // optional; else from the profile
 	Profile string // optional AWS profile
+	// Mux shares one multiplexed session per address among a Dialer's
+	// connections, where the agent supports it; see the package
+	// documentation for the trade-off.
+	Mux bool
 }
 
 // ErrKMSEncryption is returned by Dial, wrapped with the cause, when the
@@ -70,7 +87,7 @@ var (
 	regionPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)+$`)
 )
 
-// ParseURL reads ssm://<target>?region=..&profile=..
+// ParseURL reads ssm://<target>?region=..&profile=..&mux=..
 func ParseURL(u *url.URL) (Config, error) {
 	if u == nil {
 		return Config{}, errors.New("no SSM tunnel URL")
@@ -98,8 +115,12 @@ func ParseURL(u *url.URL) (Config, error) {
 			cfg.Region = values[0]
 		case "profile":
 			cfg.Profile = values[0]
+		case "mux":
+			if cfg.Mux, err = strconv.ParseBool(values[0]); err != nil {
+				return Config{}, fmt.Errorf("tunnel URL %q sets mux to %q; use true or false", u.Redacted(), values[0])
+			}
 		default:
-			return Config{}, fmt.Errorf("tunnel URL %q has unknown parameter %q; the parameters are region and profile", u.Redacted(), key)
+			return Config{}, fmt.Errorf("tunnel URL %q has unknown parameter %q; the parameters are region, profile and mux", u.Redacted(), key)
 		}
 	}
 	if err := cfg.validate(); err != nil {
@@ -176,7 +197,26 @@ func Dial(ctx context.Context, cfg Config, address string, opts ...Option) (net.
 	if err != nil {
 		return nil, err
 	}
-	return d.Dial(ctx, address)
+	c, err := d.Dial(ctx, address)
+	if err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	if !cfg.Mux {
+		return c, nil
+	}
+	// The connection is the only one on its session; closing it ends both.
+	return &ownedConn{Conn: c, d: d}, nil
+}
+
+// ownedConn is a connection that closes the Dialer it came from.
+type ownedConn struct {
+	net.Conn
+	d *Dialer
+}
+
+func (c *ownedConn) Close() error {
+	return errors.Join(c.Conn.Close(), c.d.Close())
 }
 
 // splitAddress checks that address is host:port and returns its parts.

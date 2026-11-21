@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
+	"slices"
 	"sync"
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
@@ -21,12 +23,22 @@ import (
 // credential cache among every later one, so a tunnel pool does not read
 // the profile for each connection. A failed load is not kept: the next Dial
 // tries again, which picks up a renewed sign-in.
+//
+// With Config.Mux, connections to one address share a multiplexed session
+// where the agent supports it.
 type Dialer struct {
 	cfg Config
 	o   options
 
 	mu      sync.Mutex
 	clients *clients
+	muxes   map[string]*muxSession // shared sessions by address
+	noMux   map[string]bool        // addresses whose agent cannot multiplex
+	closed  bool
+
+	done     chan struct{}  // closed by Close
+	starts   sync.WaitGroup // shared sessions being started
+	watchers sync.WaitGroup // goroutines that end shared sessions
 }
 
 // clients are what a Dialer shares between sessions.
@@ -48,11 +60,13 @@ func NewDialer(cfg Config, opts ...Option) (*Dialer, error) {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	return &Dialer{cfg: cfg, o: o}, nil
+	return &Dialer{cfg: cfg, o: o, muxes: map[string]*muxSession{}, noMux: map[string]bool{}, done: make(chan struct{})}, nil
 }
 
-// Dial opens a port-forwarding session to address, as the package's Dial
-// does, with the Dialer's shared clients.
+// Dial opens a connection to address with the Dialer's shared clients: a
+// port-forwarding session of its own, as the package's Dial does, or with
+// Config.Mux a stream on the session shared with other connections to
+// address.
 func (d *Dialer) Dial(ctx context.Context, address string) (net.Conn, error) {
 	host, port, err := splitAddress(address)
 	if err != nil {
@@ -62,16 +76,32 @@ func (d *Dialer) Dial(ctx context.Context, address string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, err := d.startSession(ctx, cl, address, host, port)
+	if d.cfg.Mux {
+		return d.dialMux(ctx, cl, address, host, port)
+	}
+	c, err := d.startSession(ctx, cl, address, host, port, false)
 	if err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-// Close releases what the Dialer holds. Connections it returned stay open
-// until they are closed themselves.
-func (d *Dialer) Close() error { return nil }
+// Close ends the shared sessions, and with them the connections over them.
+// Connections with a session of their own stay open until they are closed
+// themselves.
+func (d *Dialer) Close() error {
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil
+	}
+	d.closed = true
+	close(d.done)
+	ms := slices.Collect(maps.Values(d.muxes))
+	clear(d.muxes)
+	d.mu.Unlock()
+	return d.closeMuxes(ms)
+}
 
 // load returns the shared clients, loading them the first time, and checks
 // that the credentials still resolve.
@@ -98,8 +128,8 @@ func (d *Dialer) load(ctx context.Context) (*clients, error) {
 }
 
 // startSession starts one Session Manager session to address and opens its
-// data channel.
-func (d *Dialer) startSession(ctx context.Context, cl *clients, address, host, port string) (*conn, error) {
+// data channel, asking the agent to multiplex it if wantMux is set.
+func (d *Dialer) startSession(ctx context.Context, cl *clients, address, host, port string, wantMux bool) (*conn, error) {
 	out, err := cl.api.StartSession(ctx, &ssm.StartSessionInput{
 		Target:       awsv2.String(d.cfg.Target),
 		DocumentName: awsv2.String(DocumentName),
@@ -117,6 +147,9 @@ func (d *Dialer) startSession(ctx context.Context, cl *clients, address, host, p
 	c := newConn(cl.api, sessionID, address, log)
 	c.resumeDelay = d.o.resumeDelay
 	c.kms, c.target = cl.kms, d.cfg.Target
+	if wantMux {
+		c.wantMux, c.version = true, muxClientVersion
+	}
 	if sessionID == "" || streamURL == "" || token == "" {
 		// Best effort: the session is unusable either way.
 		_ = c.terminate()

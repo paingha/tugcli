@@ -84,13 +84,13 @@ func TestDialEchoesThroughTheDataChannel(t *testing.T) {
 	}
 	s.mu.Unlock()
 
-	if hello.ClientVersion != clientVersion || hello.MessageSchemaVersion != "1.0" || hello.ClientID == "" || hello.RequestID == "" {
+	if hello.ClientVersion != basicClientVersion || hello.MessageSchemaVersion != "1.0" || hello.ClientID == "" || hello.RequestID == "" {
 		t.Errorf("open data channel request = %+v", hello)
 	}
 	if resp == nil {
 		t.Fatal("the agent got no handshake response")
 	}
-	if resp.ClientVersion != clientVersion || len(resp.ProcessedClientActions) != 1 ||
+	if resp.ClientVersion != basicClientVersion || len(resp.ProcessedClientActions) != 1 ||
 		resp.ProcessedClientActions[0].ActionType != actionSessionType || resp.ProcessedClientActions[0].ActionStatus != actionSuccess {
 		t.Errorf("handshake response = %+v", resp)
 	}

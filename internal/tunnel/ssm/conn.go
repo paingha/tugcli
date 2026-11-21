@@ -27,13 +27,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// clientVersion is the Session Manager plugin version tug reports. The agent
-// chooses the mode of a LocalPortForwarding session from it: plugins from
-// 1.1.70 on get TCP multiplexing over smux, and older ones get basic port
-// forwarding, where the session's stream data is one TCP connection. tug
-// opens a session per connection, so it reports 1.1.61.0, the last plugin
-// release before multiplexing (1.2.7.0), to be given the basic mode.
-const clientVersion = "1.1.61.0"
+// The Session Manager plugin version tug reports decides the mode of a
+// LocalPortForwarding session: the agent multiplexes it over smux for
+// plugins from 1.1.70 on, and gives older ones basic port forwarding, where
+// the session's stream data is one TCP connection. For a session of its
+// own, tug reports basicClientVersion, 1.1.61.0, the last plugin release
+// before multiplexing (1.2.7.0); for a shared session it reports
+// muxClientVersion to agents that can multiplex (see mux.go).
 
 // terminateFlagAgentVersion is the last agent version that does not
 // understand the TerminateSession flag; the plugin calls the
@@ -105,6 +105,8 @@ type conn struct {
 	// kms and target set up KMS encryption when the agent asks for it.
 	kms    KMSAPI
 	target string
+	// wantMux asks agents that can to multiplex the session.
+	wantMux bool
 
 	// handshakes and challenges carry handshake messages from the reader to
 	// open.
@@ -134,6 +136,8 @@ type conn struct {
 	agentVersion string
 	byService    bool           // Session Manager closed the channel, so the session is over
 	enc          *sessionCipher // set when the session is KMS-encrypted
+	version      string         // the client version reported
+	mux          bool           // the agent multiplexes the session
 
 	// Owned by the reader goroutine.
 	expected  int64
@@ -177,6 +181,7 @@ func newConn(api API, sessionID, address string, log *slog.Logger) *conn {
 		wsChanged:   make(chan struct{}),
 		handshakes:  make(chan message),
 		challenges:  make(chan message),
+		version:     basicClientVersion,
 		out:         make(chan []byte, outQueue),
 		rtt:         defaultRTT,
 		rto:         defaultRTO,
@@ -246,6 +251,31 @@ func (c *conn) encrypted() bool {
 	return c.enc != nil
 }
 
+// multiplexed reports whether the agent multiplexes the session with smux.
+func (c *conn) multiplexed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mux
+}
+
+// clientVersion is the version tug reports: what it asks for before the
+// handshake, and what it settled on after.
+func (c *conn) clientVersion() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.version
+}
+
+// isBroken reports whether the channel has stopped working.
+func (c *conn) isBroken() bool {
+	select {
+	case <-c.broken:
+		return true
+	default:
+		return false
+	}
+}
+
 // dialSocket opens a WebSocket to the stream URL and hands over the token.
 func (c *conn) dialSocket(ctx context.Context, streamURL, token string) (*websocket.Conn, error) {
 	u, err := url.Parse(streamURL)
@@ -277,7 +307,7 @@ func (c *conn) dialSocket(ctx context.Context, streamURL, token string) (*websoc
 		RequestID:            newUUID().String(),
 		TokenValue:           token,
 		ClientID:             c.clientID,
-		ClientVersion:        clientVersion,
+		ClientVersion:        c.clientVersion(),
 	})
 	if err != nil {
 		_ = ws.Close()
@@ -618,10 +648,17 @@ func (c *conn) process(m message) {
 	case payloadHandshakeComplete:
 		c.handleHandshakeComplete(m)
 	case payloadFlag:
-		if len(m.Payload) == 4 && flag(binary.BigEndian.Uint32(m.Payload)) == flagConnectToPortError {
-			err := fmt.Errorf("the instance could not connect to %s", c.address)
-			c.fail(err, err)
+		if len(m.Payload) != 4 || flag(binary.BigEndian.Uint32(m.Payload)) != flagConnectToPortError {
+			break
 		}
+		if c.multiplexed() {
+			// The agent closes the stream it could not connect, and the
+			// flag does not say which one it was, so the session goes on.
+			c.log.Warn("the instance could not connect a stream to its destination; check the SSM agent's logs")
+			break
+		}
+		err := fmt.Errorf("the instance could not connect to %s", c.address)
+		c.fail(err, err)
 	default:
 		c.log.Debug("ignoring output", "payloadType", m.PayloadType, "sequence", m.Sequence)
 	}
@@ -673,8 +710,9 @@ func (c *conn) answerHandshake(ctx context.Context, m message) error {
 	c.agentVersion = req.AgentVersion
 	c.mu.Unlock()
 
-	resp := handshakeResponse{ClientVersion: clientVersion, ProcessedClientActions: []processedAction{}}
+	resp := handshakeResponse{ProcessedClientActions: []processedAction{}}
 	var refused error
+	mux := false
 	for _, action := range req.RequestedClientActions {
 		done := processedAction{ActionType: action.ActionType, ActionStatus: actionSuccess}
 		switch action.ActionType {
@@ -690,7 +728,10 @@ func (c *conn) answerHandshake(ctx context.Context, m message) error {
 				Type string `json:"type"`
 			}
 			_ = json.Unmarshal(st.Properties, &props)
-			c.log.Debug("port session", "agent", req.AgentVersion, "type", props.Type)
+			// Multiplex as the plugin does: only LocalPortForwarding
+			// sessions, and only with agents that can.
+			mux = c.wantMux && props.Type == localPortForwarding && versionAfter(req.AgentVersion, muxAgentVersion)
+			c.log.Debug("port session", "agent", req.AgentVersion, "type", props.Type, "multiplexed", mux)
 		case actionKMSEncryption:
 			var kr kmsEncryptionRequest
 			_ = json.Unmarshal(action.ActionParameters, &kr)
@@ -713,6 +754,14 @@ func (c *conn) answerHandshake(ctx context.Context, m message) error {
 		}
 		resp.ProcessedClientActions = append(resp.ProcessedClientActions, done)
 	}
+	// The agent picks the mode from the version in this response.
+	resp.ClientVersion = basicClientVersion
+	if mux {
+		resp.ClientVersion = muxClientVersion
+	}
+	c.mu.Lock()
+	c.mux, c.version = mux, resp.ClientVersion
+	c.mu.Unlock()
 	if err := c.queueJSON(payloadHandshakeResponse, resp); err != nil {
 		return fmt.Errorf("answering the agent's handshake: %w", err)
 	}
