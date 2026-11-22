@@ -36,8 +36,9 @@ with the check's remediation as its next step.
 
 tug has one pack built in, baseline, whose checks are all advisory. Others
 come from policy.packs in config.yaml: files, or https URLs pinned by their
-sha256. Without --pack, check runs the packs that policy.default names, or
-else all of them; --list shows them and their checks.
+sha256, added with tug settings add policy.packs path=<file> or url=<url>
+sha256=<sha256>. Without --pack, check runs the packs that policy.default
+names, or else all of them; --list shows them and their checks.
 
 Pods, ReplicaSets and Jobs that a workload controls are checked through the
 workload. Kinds that are not namespaced are checked with --all-namespaces or

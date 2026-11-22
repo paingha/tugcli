@@ -122,7 +122,7 @@ func (a *app) printIntelligenceStatus(st intelligenceStatus) error {
 	case key != "none needed":
 		key = "stored in " + key
 	}
-	price := c.Yellow("unknown; add one under intelligence.prices in config.yaml")
+	price := c.Yellow("unknown; add one with `tug settings add intelligence.prices model=" + st.Model + " input=<$ per million> output=<$ per million>`")
 	if p := st.Price; p != nil {
 		price = priceText(*p)
 	}

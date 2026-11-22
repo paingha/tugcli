@@ -322,7 +322,7 @@ func TestWhyDeep(t *testing.T) {
 	}
 	// And a model without a price, under a cap.
 	r = tug(t, "why", "billing", "-n", "shop", "--deep", "--yes", "--model", "gpt-unknown")
-	if r.code != 1 || !strings.Contains(r.stderr, "cost unknown, as gpt-unknown has no price (add one under intelligence.prices)") ||
+	if r.code != 1 || !strings.Contains(r.stderr, "cost unknown, as gpt-unknown has no price (add one with `tug settings add intelligence.prices model=gpt-unknown input=<$ per million> output=<$ per million>`)") ||
 		!strings.Contains(r.stderr, "this model has no price, so tug cannot tell what the call would cost") || models.requests() != before {
 		t.Errorf("--deep with an unpriced model under a cap: %+v", r)
 	}

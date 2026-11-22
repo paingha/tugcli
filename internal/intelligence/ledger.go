@@ -165,7 +165,7 @@ func CheckCap(capUSD float64, spent Total, high float64, priced bool) error {
 		return nil
 	}
 	if !priced {
-		return fmt.Errorf("%w: intelligence.monthlySpendCapUSD is $%.2f and this model has no price, so tug cannot tell what the call would cost; add its price under intelligence.prices in config.yaml",
+		return fmt.Errorf("%w: intelligence.monthlySpendCapUSD is $%.2f and this model has no price, so tug cannot tell what the call would cost; add its price with `tug settings add intelligence.prices model=<id> input=<$ per million> output=<$ per million>`",
 			ErrOverCap, capUSD)
 	}
 	if spent.CostUSD+high <= capUSD {

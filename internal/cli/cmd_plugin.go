@@ -156,7 +156,8 @@ binary's sha256 are all checked.
 
 A plugin pinned in plugins.pins in config.yaml installs at its pinned
 version, and any other version is refused. --pin installs the version given
-and pins the plugin to it, replacing its pin. When the index names a Sigstore signature
+and pins the plugin to it, replacing its pin; tug settings unset
+plugins.pins.<name> unpins it. When the index names a Sigstore signature
 for the archive, tug downloads the bundle and checks it first: the Fulcio
 certificate chain, the Rekor transparency log entry and that the signer is
 the one the index names. With plugins.requireSignatures set in config.yaml,

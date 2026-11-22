@@ -138,7 +138,7 @@ func (a *app) explain(ctx context.Context, env *opsEnv, clients ops.Clients, obj
 		out.Estimate.CostLowUSD, out.Estimate.CostHighUSD = &low, &hi
 		estimate += fmt.Sprintf("; estimated cost %s to %s with up to %s output tokens", dollars(low), dollars(hi), tokenCount(s.MaxOutputTokens))
 	} else {
-		estimate += fmt.Sprintf("; cost unknown, as %s has no price (add one under intelligence.prices)", s.Model)
+		estimate += fmt.Sprintf("; cost unknown, as %s has no price (add one with `tug settings add intelligence.prices model=%s input=<$ per million> output=<$ per million>`)", s.Model, s.Model)
 	}
 	fmt.Fprintln(a.stderr, estimate+".")
 	if ev.Redactions > 0 {
