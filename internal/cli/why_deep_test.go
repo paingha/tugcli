@@ -124,7 +124,7 @@ func TestWhyDeep(t *testing.T) {
 	// Off unless config.yaml turns it on, and refused before the cluster is
 	// read.
 	r := tug(t, "why", "billing", "-n", "shop", "--deep", "--yes")
-	if r.code != 1 || r.stdout != "" || !strings.Contains(r.stderr, "--deep is off; turn it on in config.yaml with `intelligence: {enabled: true}`") {
+	if r.code != 1 || r.stdout != "" || !strings.Contains(r.stderr, "--deep is off; turn it on with `tug intelligence enable`") {
 		t.Fatalf("--deep while off: %+v", r)
 	}
 	if r := tug(t, "why", "billing", "-n", "shop", "--model", "x"); r.code != 1 || !strings.Contains(r.stderr, "--provider and --model choose the model --deep asks; add --deep") {

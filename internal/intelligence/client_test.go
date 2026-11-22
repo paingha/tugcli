@@ -549,3 +549,28 @@ func TestDefaultsAreTheDocumentedOnes(t *testing.T) {
 		t.Errorf("KeyEnv(openai) = %s", KeyEnv(OpenAI))
 	}
 }
+
+// TestValidate checks each setting alone, so that a custom provider can be
+// set before its model and address.
+func TestValidate(t *testing.T) {
+	for _, tt := range []struct {
+		in   config.IntelligenceConfig
+		want string
+	}{
+		{in: config.IntelligenceConfig{}},
+		{in: config.IntelligenceConfig{Provider: "Custom"}},
+		{in: config.IntelligenceConfig{Provider: "gemini"}, want: `intelligence.provider: "gemini" is not a provider; use one of anthropic, openai, mistral, custom`},
+		{in: config.IntelligenceConfig{Effort: "huge"}, want: `intelligence.effort "huge" is not one of low, medium, high, xhigh, max`},
+		{in: config.IntelligenceConfig{BaseURL: "http://llm.example.com/"}, want: `intelligence.baseURL "http://llm.example.com" must use https, so the API key is not sent in clear text`},
+		{in: config.IntelligenceConfig{BaseURL: "http://localhost:11434/v1"}},
+		{in: config.IntelligenceConfig{Timeout: config.Duration{Duration: -time.Second}}, want: "intelligence.timeout cannot be negative"},
+		{in: config.IntelligenceConfig{MaxOutputTokens: -1}, want: "intelligence.maxOutputTokens cannot be negative"},
+		{in: config.IntelligenceConfig{MonthlySpendCapUSD: -1}, want: "intelligence.monthlySpendCapUSD cannot be negative"},
+		{in: config.IntelligenceConfig{Prices: []config.ModelPrice{{Input: 1}}}, want: "intelligence.prices: a price has no model"},
+	} {
+		err := Validate(tt.in)
+		if (tt.want == "" && err != nil) || (tt.want != "" && (err == nil || err.Error() != tt.want)) {
+			t.Errorf("Validate(%+v) = %v, want %q", tt.in, err, tt.want)
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/paingha/tugcli/internal/config"
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/intelligence"
 	"github.com/paingha/tugcli/internal/render"
@@ -22,20 +23,23 @@ func newIntelligenceCmd(a *app) *cobra.Command {
 		Short: "Set up the model providers behind tug why --deep, and see what they cost",
 		Long: `tug why --deep asks a model to explain a diagnosis: Anthropic's Claude,
 OpenAI, Mistral, or any OpenAI-compatible endpoint (custom), such as Ollama,
-vLLM or LiteLLM. It is off until intelligence.enabled is set in config.yaml,
-where the provider, model, address, timeout, answer length and a monthly
-spend cap are set too.
+vLLM or LiteLLM. It is off until tug intelligence enable turns it on with a
+provider; tug settings changes the rest (model, address, timeout, answer
+length and a monthly spend cap), all kept in config.yaml.
 
 API keys live in the credential store, one per provider, or in
 TUG_SECRET_<PROVIDER>_API_KEY for scripts and CI; never in config.yaml or a
 flag. tug prices every call from a built-in table, which config.yaml can
 extend, and keeps a local ledger of what each call took.`,
-		Example: `  tug intelligence key set anthropic   # asks for the key and keeps it in the keychain
+		Example: `  tug intelligence enable anthropic    # turn --deep on, and store the API key
+  tug intelligence enable custom --base-url http://localhost:11434/v1 --model llama4:70b
+  tug intelligence key set anthropic   # asks for the key and keeps it in the keychain
   tug intelligence status
   tug intelligence models              # the providers' default models and prices
   tug intelligence usage               # calls, and what they cost by day and month`,
 	}
-	cmd.AddCommand(newIntelligenceStatusCmd(a), newIntelligenceUsageCmd(a), newIntelligenceKeyCmd(a), newIntelligenceModelsCmd(a))
+	cmd.AddCommand(newIntelligenceEnableCmd(a), newIntelligenceDisableCmd(a),
+		newIntelligenceStatusCmd(a), newIntelligenceUsageCmd(a), newIntelligenceKeyCmd(a), newIntelligenceModelsCmd(a))
 	return cmd
 }
 
@@ -105,7 +109,7 @@ func newIntelligenceStatusCmd(a *app) *cobra.Command {
 
 func (a *app) printIntelligenceStatus(st intelligenceStatus) error {
 	c := a.colors()
-	enabled := c.Yellow("no; set intelligence.enabled in config.yaml to use tug why --deep")
+	enabled := c.Yellow("no; turn tug why --deep on with `tug intelligence enable`")
 	if st.Enabled {
 		enabled = c.Green("yes")
 	}
@@ -449,4 +453,159 @@ func dollars(v float64) string {
 		return fmt.Sprintf("$%.4f", v)
 	}
 	return fmt.Sprintf("$%.2f", v)
+}
+
+// The settings tug intelligence enable and disable change. They are found
+// when tug starts, so a renamed one fails every test.
+var (
+	settingEnabled  = mustSetting("intelligence.enabled")
+	settingProvider = mustSetting("intelligence.provider")
+	settingModel    = mustSetting("intelligence.model")
+	settingBaseURL  = mustSetting("intelligence.baseURL")
+)
+
+func mustSetting(key string) config.Setting {
+	s, ok := config.LookupSetting(key)
+	if !ok {
+		panic("cli: no setting " + key) // a programmer error, during initialisation
+	}
+	return s
+}
+
+func newIntelligenceEnableCmd(a *app) *cobra.Command {
+	var model, baseURL string
+	cmd := &cobra.Command{
+		Use:   "enable [provider]",
+		Short: "Turn tug why --deep on with a provider, and store its API key",
+		Long: `Turn tug why --deep on, with anthropic, openai, mistral or custom (any
+OpenAI-compatible API, such as Ollama). Without a provider, it keeps the one
+config.yaml names, or anthropic. Choosing another provider goes back to its
+own model and address unless --model and --base-url say otherwise.
+
+On a terminal, when the provider needs an API key and none is stored, tug asks
+for it and keeps it in the keychain; leave it empty to add it later with
+tug intelligence key set. --deep still shows what it would send, and what it
+could cost, and asks before sending anything.`,
+		Example: `  tug intelligence enable                    # Claude, with its default model
+  tug intelligence enable openai --model gpt-6.2-sol
+  tug intelligence enable custom --base-url http://localhost:11434/v1 --model llama4:70b`,
+		Args:      cobra.MaximumNArgs(1),
+		ValidArgs: intelligence.Providers,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cur := a.cfg.Intelligence
+			provider := strings.ToLower(cmp.Or(strings.TrimSpace(cur.Provider), intelligence.DefaultProvider))
+			if len(args) == 1 {
+				provider = strings.ToLower(args[0])
+			}
+			if err := intelligence.CheckProvider(provider); err != nil {
+				return err
+			}
+			switching := !strings.EqualFold(provider, cmp.Or(strings.TrimSpace(cur.Provider), intelligence.DefaultProvider))
+			changes := []config.Change{
+				{Setting: settingEnabled, Value: "true"},
+				{Setting: settingProvider, Value: provider},
+			}
+			for _, c := range []struct {
+				setting config.Setting
+				value   string
+			}{{settingModel, model}, {settingBaseURL, baseURL}} {
+				switch {
+				case c.value != "":
+					changes = append(changes, config.Change{Setting: c.setting, Value: c.value})
+				case switching:
+					// The configured one was for the other provider.
+					changes = append(changes, config.Change{Setting: c.setting, Unset: true})
+				}
+			}
+			var s intelligence.Settings
+			check := func(c *config.Config) error {
+				if err := a.checkSettings(c); err != nil {
+					return err
+				}
+				var err error
+				s, err = intelligence.SettingsFrom(c.Intelligence, intelligence.Overrides{})
+				return err
+			}
+			if _, err := config.EditSettings(a.paths.Config, changes, check); err != nil {
+				return enableHint(err)
+			}
+			fmt.Fprintf(a.stdout, "tug why --deep is on, asking %s's %s at %s.\n", s.Provider, s.Model, intelligence.NewClient(s, "").Endpoint())
+			if err := a.offerIntelligenceKey(s.Provider); err != nil {
+				return err
+			}
+			fmt.Fprintln(a.stdout, "Try it with `tug why <target> --deep`: it shows what it would send, and the cost, before asking.")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&model, "model", "", "the model to ask (default: the provider's)")
+	cmd.Flags().StringVar(&baseURL, "base-url", "", "the API's address, for a gateway or a custom endpoint (default: the provider's)")
+	return cmd
+}
+
+// enableHint points an error about a missing address at enable's own flag;
+// the one about a missing model already names --model.
+func enableHint(err error) error {
+	if strings.Contains(err.Error(), "needs intelligence.baseURL") {
+		return fmt.Errorf("%w; pass --base-url", err)
+	}
+	return err
+}
+
+// offerIntelligenceKey says where the provider's API key comes from or, when
+// there is none, asks for one on a terminal and stores it.
+func (a *app) offerIntelligenceKey(provider string) error {
+	if !intelligence.KeyRequired(provider) {
+		return nil
+	}
+	key, source, err := a.intelligenceKey(provider)
+	switch {
+	case err != nil:
+		return err
+	case key != "" && strings.HasPrefix(source, "TUG_SECRET_"):
+		fmt.Fprintf(a.stdout, "It uses the API key in %s.\n", source)
+		return nil
+	case key != "":
+		fmt.Fprintf(a.stdout, "It uses the %s API key stored in %s.\n", provider, source)
+		return nil
+	}
+	later := fmt.Sprintf("Store the %s API key with `tug intelligence key set %s`, or set %s, before using it.", provider, provider, intelligence.KeyEnv(provider))
+	if !a.interactive() {
+		fmt.Fprintln(a.stdout, later)
+		return nil
+	}
+	v, err := a.readSecret(fmt.Sprintf("%s API key (leave empty to add it later)", provider))
+	if err != nil {
+		return err
+	}
+	if v == "" {
+		fmt.Fprintln(a.stdout, later)
+		return nil
+	}
+	store, err := a.credentialStore()
+	if err != nil {
+		return err
+	}
+	if err := store.Set(credentials.IntelligenceKey(provider), v); err != nil {
+		return fmt.Errorf("storing the %s API key in %s: %w", provider, store.Name(), err)
+	}
+	fmt.Fprintf(a.stdout, "Stored the %s API key in %s.\n", provider, store.Name())
+	return nil
+}
+
+func newIntelligenceDisableCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable",
+		Short: "Turn tug why --deep off",
+		Long: `Turn tug why --deep off. The other intelligence settings, the usage ledger and
+any stored API keys are kept, so tug intelligence enable turns it back on as
+it was; remove a key with tug intelligence key rm <provider>.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := config.EditSettings(a.paths.Config, []config.Change{{Setting: settingEnabled, Value: "false"}}, a.checkSettings); err != nil {
+				return err
+			}
+			fmt.Fprintln(a.stdout, "tug why --deep is off. Stored API keys are kept; remove one with `tug intelligence key rm <provider>`.")
+			return nil
+		},
+	}
 }

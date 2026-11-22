@@ -65,6 +65,8 @@ tug api deprecations            # API versions a later release removes, what rep
 tug api diff staging prod       # resource types and CRD versions two clusters serve differently
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug why api --deep              # opt-in: a model you choose explains the evidence, after showing it and the cost
+tug intelligence enable openai  # turn --deep on with a provider, and store its API key
+tug settings set sessions.maxAge 72h  # change config.yaml without editing it; tug settings list shows them all
 tug gitops status               # Flux and Argo CD: ready, synced, suspended, revision offered vs applied
 tug gitops explain apps         # where delivery fails: dependsOn, source, admission, apply, or what it manages
 tug pf api 8080                 # port-forward by short name
