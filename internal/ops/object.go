@@ -3,7 +3,6 @@ package ops
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -486,18 +485,12 @@ type apiResource struct {
 
 // listableResources returns the resources the cluster serves in their
 // preferred versions that can be listed, apart from subresources, with the
-// group versions whose discovery failed.
+// group versions whose discovery failed. It reads discovery through
+// PreferredResources, so afresh when an earlier command cached it.
 func listableResources(ctx context.Context, c Clients) ([]apiResource, []string, error) {
-	var failedGroups []string
-	lists, err := discovery.ServerPreferredResourcesWithContext(ctx, discovery.ToDiscoveryInterfaceWithContext(c.Discovery))
+	lists, failedGroups, err := PreferredResources(ctx, c.Discovery)
 	if err != nil {
-		var failed *discovery.ErrGroupDiscoveryFailed
-		if !errors.As(err, &failed) {
-			return nil, nil, fmt.Errorf("discovering the cluster's resources: %w", err)
-		}
-		for gv := range failed.Groups {
-			failedGroups = append(failedGroups, gv.String())
-		}
+		return nil, nil, err
 	}
 	var out []apiResource
 	for _, l := range lists {

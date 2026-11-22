@@ -3,13 +3,14 @@ package bundle
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
+
+	"github.com/paingha/tugcli/internal/ops"
 )
 
 // resourceInfo is one resource the cluster serves, at its preferred
@@ -34,19 +35,13 @@ type index struct {
 }
 
 // loadIndex reads the cluster's resources. A group whose discovery fails is
-// returned in failed rather than failing the whole.
+// returned in failed rather than failing the whole. A bundle goes through
+// every kind, so discovery cached by an earlier command is read afresh, as
+// ops.PreferredResources says.
 func loadIndex(ctx context.Context, d discovery.DiscoveryInterface) (*index, []string, error) {
-	lists, err := discovery.ServerPreferredResourcesWithContext(ctx, discovery.ToDiscoveryInterfaceWithContext(d))
-	var failed []string
+	lists, failed, err := ops.PreferredResources(ctx, d)
 	if err != nil {
-		var partial *discovery.ErrGroupDiscoveryFailed
-		if !errors.As(err, &partial) {
-			return nil, nil, fmt.Errorf("discovering the cluster's resources: %w", err)
-		}
-		for gv := range partial.Groups {
-			failed = append(failed, gv.String())
-		}
-		slices.Sort(failed)
+		return nil, nil, err
 	}
 	ix := &index{}
 	for _, l := range lists {
