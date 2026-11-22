@@ -1,0 +1,241 @@
+---
+title: Security
+description: How tug handles your credentials, plugins and clusters, what it trusts, where its protection stops, and how to report a vulnerability.
+icon: LockKeyhole
+---
+
+tug sits in your path to your clusters. It keeps credentials, writes the
+kubeconfigs your tools use, can proxy their API traffic, and runs provider
+plugins. This page is the overview of how it keeps that safe: what it trusts,
+what it protects, and what it doesn't. Each section links to the page with the
+details.
+
+To report a vulnerability, see [Reporting a vulnerability](#reporting-a-vulnerability).
+
+## At a glance
+
+| Area | What tug does | Details |
+| --- | --- | --- |
+| **Credentials** | Keeps tokens and keys only in your OS keychain, or an encrypted file you choose. The kubeconfigs it writes hold no secret; they run `tug auth token`. | [Credentials](/docs/concepts/credentials) |
+| **Production** | Opens clusters labelled `env=prod` read-only: changes need a confirmation or `tug unlock`. | [Read-only sessions](/docs/concepts/read-only) |
+| **Other tools** | With `--proxy`, kubectl, helm and k9s go through tugd, which applies the same read-only rule to them. | [The local proxy](/docs/guides/proxy) |
+| **Plugins** | Checks every archive and binary, shows what a plugin may reach before installing, passes it only the secrets it declares, and runs it in the OS sandbox with limits. | [Plugins](#plugins) |
+| **Repositories** | Ignores a `.tug.yaml` pin you didn't write until you allow it. | [Directory pins](/docs/guides/pins) |
+| **Teams** | Accepts only signed team catalogs, which carry no credentials and can only make clusters safer. | [Team catalogs](/docs/guides/teams) |
+| **Sharing** | Redacts support bundles and never reads a Secret's data into them. | [Support bundles](/docs/guides/workloads#send-it-to-someone-who-can-help) |
+| **Releases** | Signs every release's checksums with Sigstore. | [Installation](/docs/getting-started/installation) |
+
+## What tug trusts
+
+tug trusts **you**, and anything running as your user. It is a tool for one
+person on their own machine, not a gate between that person and their
+clusters.
+
+| tug trusts | tug does not trust |
+| --- | --- |
+| You, and processes running as your user | Other users on the same machine |
+| Your OS keychain | Plugin code, even from an index |
+| The certificate authorities in your kubeconfigs and providers' answers | Archives, indexes and team catalogs fetched over the network, until their checksums and signatures match |
+| Your cloud and identity providers' sign-in | A repository's `.tug.yaml`, until you allow it |
+| | What a cluster returns: logs, events, annotations and custom resources are shown, never run |
+
+What that means in practice:
+
+- **Other users** can't read tug's files or use tugd. tug's folders are private
+  to you (mode `0700`, files `0600` on macOS and Linux; on Windows, your user
+  profile's permissions apply), and tugd listens only on a loopback address,
+  behind a per-session token.
+- **Cluster content is never executed.** One exception is opt-in: the `argocd`
+  provider runs the commands named in Argo CD's cluster Secrets
+  (`execProviderConfig`) only when you import with `--set allowExec=true`.
+- **tug can't protect you from yourself or from your own account.** Anyone at
+  your keyboard, malware running as you, or an administrator of the machine
+  can unlock a session, read the keychain entries your login unlocks, or stop
+  tugd. Keep your machine and account secure; tug builds on that.
+- **tug doesn't secure your clusters.** A compromised cluster, provider or
+  identity provider is outside what tug can detect.
+
+## Credentials
+
+- **Where secrets live.** Tokens, client keys, provider API tokens and
+  sign-in tokens go to the OS keychain (Keychain on macOS, Credential Manager
+  on Windows, Secret Service on Linux), or, where there is no keychain, a
+  single file encrypted with AES-256-GCM under a passphrase you supply in
+  `TUG_KEYRING_PASSPHRASE`. Nothing else tug writes holds a secret: not the
+  catalog, not session kubeconfigs, not logs or error messages.
+- **Imported kubeconfigs.** `tug import` copies the token or key out of a
+  kubeconfig into the keychain and leaves your original file as it was. That
+  file still grants access to anyone who can read it, so delete it, or keep it
+  out of reach, once you've imported it.
+- **How tools get a credential.** Every kubeconfig tug writes uses the
+  standard exec mechanism and runs `tug auth token`, which hands over a cached
+  credential or a fresh one from the provider. Short-lived credentials (EKS,
+  GKE, AKS with Entra ID, OIDC) are cached only until shortly before they
+  expire.
+- **No secrets on the command line.** tug never takes a secret as a flag or
+  argument, where it would end up in shell history and process lists. It asks
+  with hidden input, or, in scripts and CI, reads `TUG_SECRET_<NAME>`.
+- **Signing in.** For clusters that trust an OpenID Connect issuer, tug uses
+  the authorization code flow with PKCE, with the browser returning to
+  `localhost`, or a device code over SSH. The refresh token stays in the
+  keychain. See [Signing in](/docs/guides/sign-in).
+- **Through tugd.** tugd holds a cluster's credential in memory only, and
+  clients authenticate to it with a per-session token that also exists only in
+  tugd's memory.
+- **When something leaks.** `tug auth rotate` replaces a credential for
+  providers that support it, and revokes the old one. `tug forget` removes a
+  source's credentials along with its clusters. See
+  [Rotating credentials](/docs/guides/rotating).
+
+## Read-only sessions and the proxy
+
+A cluster whose labels match `env=prod` (or your own
+[`guard.readOnlyLabels`](/docs/reference/configuration#guard), or a team's
+policy) opens **read-only**. tug asks before the first change a command
+would make, refuses changes in scripts unless the session is unlocked, and
+`tug unlock 15m` allows changes for a while. With `--proxy`, the same rule
+covers kubectl, helm, k9s and anything else that uses the session's
+kubeconfig, and a proxied session **fails closed**: if tugd is gone, clients
+can't reach the cluster at all.
+
+<Callout type="warn" title="A safety rail, not a security boundary">
+  The read-only guard and tugd stop honest mistakes: the command typed into the
+  wrong terminal. They don't stop someone who means to get around them, and
+  they don't see clients that bypass the session's kubeconfig. Put the real
+  controls in the cluster and your cloud account: least-privilege RBAC, cloud
+  IAM, admission control and API server audit logging.
+  [What tugd protects, and what it doesn't](/docs/concepts/proxy-limits) says
+  exactly where the rail ends.
+</Callout>
+
+tug also keeps a local [audit log](/docs/reference/commands/safety#tug-audit)
+of the changes it let through and refused. It's a record for you, on your
+machine, not tamper-proof evidence; the API server's audit log is the
+authoritative one.
+
+## Plugins
+
+A provider plugin is a program, so treat installing one like installing any
+other software: install plugins from publishers you trust, and look before
+you install.
+
+**Before installing.** `tug plugin inspect` shows, without installing, what a
+plugin may reach: the secrets it asks for, the hosts it talks to, the files
+and programs its sandbox allows, its limits, who signed it, and whether it's
+revoked or pinned. `tug plugin install` shows the same summary and asks
+first.
+
+**What install checks.**
+
+- From an index: the index's ed25519 signature, the archive's SHA-256 and
+  every binary's SHA-256, and, when the index names one, the archive's
+  Sigstore signature and the identity that must have made it.
+  `plugins.requireSignatures: true` refuses entries without a signature.
+- From a file or URL: HTTPS, and the `--sha256` you pass, which is then all
+  that ties the download to its release. tug warns that it can't tell who
+  built it.
+- Always: no links, special files or paths outside the plugin's folder, size
+  limits, a manifest checksum for this platform's binary, and that no index
+  has revoked the archive.
+- tug checks each binary's checksum again whenever it loads a plugin, and
+  skips one that has changed since it was installed.
+
+**While running.**
+
+- A plugin gets a **scrubbed environment** and only the secrets its manifest
+  declares, never your other credentials.
+- A native plugin runs in the **operating system's sandbox**: Landlock and
+  seccomp on Linux, `sandbox-exec` on macOS. It reads its own folder, system
+  files and the paths it declares, writes only its private temporary folder
+  and what it declares, runs only itself and its declared tools, and connects
+  only to port 443, DNS and the ports it declares. Windows has no sandbox for
+  plugins; there they rely on the process boundary and the scrubbed
+  environment. A WebAssembly plugin can reach only the hosts its manifest
+  declares, over HTTPS, on every platform.
+- **Limits** on CPU time, memory and each call's duration stop a plugin that
+  runs away. Linux enforces all of them; [Limits](/docs/plugins/managing#limits)
+  says what each OS enforces.
+
+**Keeping control.** [Pin a version](/docs/plugins/managing#pin-a-version)
+you've reviewed so nothing else installs or runs, and keep the sandbox on:
+`plugins.sandbox.exclude` and `plugins.sandbox.enabled: false` exist for
+plugins that need more, at the cost of that protection. An index can
+[revoke](/docs/plugins/managing#revoked-plugins) a bad release, and
+`tug plugin ls` warns about an installed plugin that has been revoked.
+
+Publishing a plugin? The
+[plugin guide](https://github.com/paingha/tugcli/blob/main/docs/plugins.md#the-sandbox-for-native-plugins)
+covers the sandbox from the plugin's side, and how to sign releases.
+
+## Repositories and directory pins
+
+A `.tug.yaml` file switches a terminal to a cluster when you `cd` into its
+folder. Because one you didn't write could point your terminal somewhere
+unexpected, tug ignores a pin until you run `tug pin allow`, and again after
+any change to it. `TUG_PIN_DISABLE=1` turns pins off. See
+[Directory pins](/docs/guides/pins#pins-you-didnt-write).
+
+## Tunnels
+
+- **SSH**: the jump host's key must already be in your `known_hosts`. tug
+  never trusts a host key it sees for the first time.
+- tug serves SSH, AWS SSM, Google IAP and Teleport tunnels to your tools as a
+  SOCKS5 proxy on a **loopback** port, guarded by a random username and
+  password that only tug knows.
+- Proxies that need a password aren't supported, because tug keeps no
+  secrets in its catalog. SSM and IAP tunnels use your own cloud credentials.
+
+See [Tunnels](/docs/guides/tunnels).
+
+## Team catalogs
+
+A [team catalog](/docs/guides/teams) shares cluster names, labels, provider
+accounts, plugin indexes and safety policies, signed with the team's key.
+tug refuses a catalog whose signature doesn't match, or whose account
+settings look like credentials (`token`, `secret`, `password`, `apiKey`).
+Everyone still signs in as themselves. A team's policies can make a cluster
+read-only or shorten unlocks, but neither the team nor you can make a cluster
+less safe than the other says. Following a catalog grants no Kubernetes
+permission: what you may do is still up to the cluster.
+
+## Sharing diagnostics
+
+- `tug why` and `tug tree` never print a Secret's values: `tug tree` shows a
+  Secret's key names only, and for custom resources tug reads Secrets through
+  the metadata API, which returns no data.
+- [`tug support bundle`](/docs/guides/workloads#send-it-to-someone-who-can-help)
+  redacts by default: no Secret data; environment variable and ConfigMap
+  values, credential-like fields and kubectl's last-applied annotation
+  replaced; tokens, keys and passwords removed from logs and events. Redaction
+  can't know everything your applications treat as private, so use
+  `--preview` and review the bundle before you send it.
+
+## Releases
+
+Every release's `checksums.txt` is signed with
+[Sigstore](https://www.sigstore.dev/) cosign using keyless signing in the
+release workflow, and lists every archive, including the first-party plugins.
+Releases also include SBOMs. [Installation](/docs/getting-started/installation)
+shows how to verify a download.
+
+## Good practice
+
+- Use a read-only identity for production day to day, and a separate role for
+  changes. tug's read-only sessions are a second line, not the first.
+- Connect to production with `--proxy`, so every tool gets the read-only rule.
+- Delete a kubeconfig's plain-text credentials once tug has imported them.
+- Prefer short-lived credentials: provider tokens and OIDC sign-in over static
+  tokens.
+- Inspect plugins before installing, pin the versions you've reviewed, and
+  keep the sandbox on.
+- Verify downloads, and keep tug up to date.
+- Review a support bundle before you share it.
+
+## Reporting a vulnerability
+
+Please **don't open a public issue** for a security problem. Report it
+privately through GitHub's
+[security advisories](https://github.com/paingha/tugcli/security/advisories/new)
+for the repository, with the tug version (`tug version`), your OS, and the
+steps to reproduce it. [SECURITY.md](https://github.com/paingha/tugcli/blob/main/SECURITY.md)
+says what's in scope and how reports are handled.

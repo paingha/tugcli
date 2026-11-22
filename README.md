@@ -50,6 +50,9 @@ tug bookmark add api deploy/api-server -n shop   # later, from any terminal: tug
 tug open deploy/api             # the file in this repository that defines it, in $EDITOR (and as path:line)
 tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's commands, or a write
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug reconcile explain db/orders # which controller reconciles it, on what evidence, and whether it runs
+tug reconcile status cert-manager  # a controller's health, leader Lease, restarts and the kinds it reconciles
+tug reconcile trace db/orders --logs  # a timeline: generations, conditions, events, owned objects, its controller's logs
 tug check -n payments           # policy packs: requests, probes, non-root, budgets, registries
 tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
 tug api resources cert          # search the resource types the cluster serves; tug api versions for group-versions
@@ -230,12 +233,12 @@ in tug's config directory.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `check`, `watch`, `logs`, `top`, `gitops`, `crd`
-and every `api` command but `diff`. Each line is prefixed with the cluster's
-name, failures are listed at the end, and tug exits 1 if any cluster failed.
-`--parallel` (default 8) caps how many run together. Writes, and commands that
-bind a local port or the terminal, are refused before anything runs.
-Tunnelled clusters go through their tunnels.
+reads, and `tug why`, `tree`, `check`, `watch`, `reconcile`, `logs`, `top`,
+`gitops`, `crd` and every `api` command but `diff`. Each line is prefixed with
+the cluster's name, failures are listed at the end, and tug exits 1 if any
+cluster failed. `--parallel` (default 8) caps how many run together. Writes,
+and commands that bind a local port or the terminal, are refused before
+anything runs. Tunnelled clusters go through their tunnels.
 
 ## Policy packs
 
@@ -400,7 +403,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Working-environment profiles | [internal/profile](internal/profile) |
 | Bookmarks and command aliases | [internal/bookmark](internal/bookmark), [internal/alias](internal/alias) |
 | Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
-| Logs, exec, debug containers, port-forward, rollouts, why and tree (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Logs, exec, debug containers, port-forward, rollouts, why, tree and reconcile (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Model providers behind `tug why --deep`: evidence, redaction, prompts, prices, usage | [internal/intelligence](internal/intelligence) |
 | Flux and Argo CD status, explain, drift and dependencies | [internal/gitops](internal/gitops) |
@@ -521,11 +524,22 @@ Code follows [Effective Go](https://go.dev/doc/effective_go),
 [AGENTS.md](AGENTS.md) holds the Go and CLI standards for this repository,
 for people and for AI coding agents.
 
+## Security
+
+tug keeps secrets only in the OS keychain, writes kubeconfigs that hold none,
+checks and sandboxes plugins, and treats its read-only guard as a safety rail
+rather than a security boundary. The
+[security guide](https://paingha.github.io/tugcli/docs/concepts/security)
+explains what tug trusts and where its protection stops.
+[SECURITY.md](SECURITY.md) says how to report a vulnerability privately;
+please don't open a public issue for one.
+
 ## Contributing
 
 Bug reports, docs fixes, plugins and pull requests are welcome.
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how to report a problem, set up a
-development copy and get a change merged.
+development copy and get a change merged. Everyone taking part follows the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

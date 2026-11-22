@@ -1,0 +1,42 @@
+name: Feature request
+description: Suggest something tug could do, or do better.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Describing the problem you're trying to solve, not just the feature you have in mind, helps find the best fix, and sometimes it already exists.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+      placeholder: When I switch between clusters for an incident, I have to …
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: How you imagine it working, such as the command you'd type and what you'd see.
+      render: console
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you've tried instead
+      description: Workarounds, kubectl commands, scripts or other tools you use for this now.
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Does it change a cluster?
+      description: Features that write to a cluster need to work with read-only sessions and the guard.
+      options:
+        - No, it only reads
+        - Yes, it makes changes
+        - Not sure
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself.

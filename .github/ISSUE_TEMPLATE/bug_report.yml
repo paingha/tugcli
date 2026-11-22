@@ -1,0 +1,89 @@
+name: Bug report
+description: Something tug does is wrong, crashes, or doesn't match the docs.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem.
+
+        **Before you paste anything**, remove cluster addresses, account IDs, user names and anything else you'd rather not publish. tug never prints secrets, but names and addresses can still be sensitive.
+
+        Found a security problem? Please don't report it here: see [SECURITY.md](https://github.com/paingha/tugcli/blob/main/SECURITY.md).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, and what happened, with the full output.
+      placeholder: |
+        $ tug connect prod
+        tug: ...
+      render: console
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: The steps, and any configuration (`config.yaml`, a `.tug.yaml` pin, a plugin manifest) needed to see it.
+  - type: input
+    id: version
+    attributes:
+      label: tug version
+      description: The output of `tug version`.
+      placeholder: tug 0.4.0 (abc1234, go1.26.0, darwin/arm64)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where the problem shows up, if you know.
+      options:
+        - Connecting, sessions or the shell prompt
+        - Importing clusters or a provider
+        - Credentials, sign-in or rotation
+        - The read-only guard, tugd or the audit log
+        - Tunnels
+        - Logs, shells, port-forwards or rollouts
+        - Diagnostics (doctor, why, tree, reconcile, watch, check)
+        - GitOps, diff or drift
+        - Plugins or the plugin SDKs
+        - The TUI
+        - Installing or updating tug
+        - Something else
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      description: The provider of the cluster involved, if any, such as `aws`, `google`, `kubeconfig` or a plugin such as `digitalocean`, and the cluster's Kubernetes version.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: tug doctor output
+      description: If the problem is reaching a cluster, the output of `tug doctor -o json`, with addresses and names removed.
+      render: json
+  - type: textarea
+    id: debug
+    attributes:
+      label: Debug log
+      description: Optional. The same command again with `--debug`, which logs to stderr.
+      render: text

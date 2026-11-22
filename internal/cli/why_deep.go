@@ -104,7 +104,7 @@ func (a *app) whyDeep(ctx context.Context, env *opsEnv, clients ops.Clients, obj
 	if out.Explanation == nil {
 		return nil
 	}
-	return a.printExplanation(out.Evidence, out.Explanation)
+	return a.printDeepExplanation(out.Evidence, out.Explanation)
 }
 
 // explain collects the evidence, shows it on stderr and, once agreed and
@@ -206,9 +206,9 @@ func (a *app) reportCall(c intelligence.Call) {
 	fmt.Fprintln(a.stderr, a.colors().Dim(line))
 }
 
-// printExplanation writes an explanation after the diagnosis it explains,
+// printDeepExplanation writes an explanation after the diagnosis it explains,
 // with the evidence it cites.
-func (a *app) printExplanation(ev *intelligence.Evidence, x *intelligence.Explanation) error {
+func (a *app) printDeepExplanation(ev *intelligence.Evidence, x *intelligence.Explanation) error {
 	c := a.colors()
 	w := a.stdout
 	width := render.Width(w)
