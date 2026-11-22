@@ -328,7 +328,7 @@ func (r *runner) checkList() ([]provider.Cluster, bool) {
 		}
 		seen[c.ID] = true
 	}
-	r.pass(name, "%d clusters", len(clusters))
+	r.pass(name, "%s", plural(len(clusters), "cluster", "clusters"))
 	return clusters, true
 }
 
@@ -344,7 +344,16 @@ func (r *runner) checkListStable(first []provider.Cluster) {
 		r.fail(name, "first list %v, second %v", a, b)
 		return
 	}
-	r.pass(name, "same %d ids", len(a))
+	r.pass(name, "same %s", plural(len(a), "id", "ids"))
+}
+
+// plural writes a count of things, using the singular noun for one:
+// "1 cluster", "2 clusters".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 func ids(cs []provider.Cluster) []string {
@@ -413,7 +422,7 @@ func (r *runner) checkAccounts(d provider.Description) {
 			return
 		}
 	}
-	r.pass(name, "%d accounts", len(accts))
+	r.pass(name, "%s", plural(len(accts), "account", "accounts"))
 }
 
 // checkCancellation starts list without finishing the request, sends SIGTERM,
@@ -551,7 +560,7 @@ func (r *runner) checkOnlyJSON() {
 			return
 		}
 	}
-	r.pass(name, "%d calls", len(r.calls))
+	r.pass(name, "%s", plural(len(r.calls), "call", "calls"))
 }
 
 func singleJSONObject(b []byte) error {

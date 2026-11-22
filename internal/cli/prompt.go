@@ -64,13 +64,15 @@ func (a *app) confirm(question string, def bool) bool {
 	}
 }
 
-// pick asks the user to choose one item and returns its index.
+// pick asks the user to choose one item and returns its index. The title
+// heads the list, so it usually ends in a colon.
 func (a *app) pick(title string, items []string) (int, error) {
 	if len(items) == 1 {
 		return 0, nil
 	}
 	if !a.interactive() {
-		return 0, fmt.Errorf("%s: %d matches (%s); be more specific", title, len(items), strings.Join(items, ", "))
+		return 0, fmt.Errorf("%s: %d matches (%s); be more specific",
+			strings.TrimSuffix(title, ":"), len(items), strings.Join(items, ", "))
 	}
 	fmt.Fprintln(a.stderr, title)
 	for i, it := range items {

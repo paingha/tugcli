@@ -159,7 +159,7 @@ func TestImportFromManagementCluster(t *testing.T) {
 	importManagementCluster(t)
 
 	out := mustTug(t, "import", "capi", "--account", "fleet", "--set", "cluster=payments-staging")
-	if !strings.Contains(out, "capi/fleet: 1 clusters") || !strings.Contains(out, "1 credentials moved") {
+	if !strings.Contains(out, "capi/fleet: 1 cluster") || !strings.Contains(out, "1 credential moved") {
 		t.Fatalf("import capi: %s", out)
 	}
 	if out := mustTug(t, "ls", "-o", "name", "-l", "provider=capi"); strings.TrimSpace(out) != "workload-a" {
@@ -170,7 +170,7 @@ func TestImportFromManagementCluster(t *testing.T) {
 	}
 
 	out = mustTug(t, "import", "argocd", "--account", "gitops", "--set", "cluster=payments-staging")
-	if !strings.Contains(out, "argocd/gitops: 1 clusters") || !strings.Contains(out, "1 credentials moved") {
+	if !strings.Contains(out, "argocd/gitops: 1 cluster") || !strings.Contains(out, "1 credential moved") {
 		t.Fatalf("import argocd: %s", out)
 	}
 	if out := mustTug(t, "ls", "-o", "name", "-l", "provider=argocd"); strings.TrimSpace(out) != "edge-1" {
@@ -199,7 +199,7 @@ esac
 	}
 	out = mustTug(t, "import", "clusterprofile", "--account", "inventory", "--set", "cluster=payments-staging",
 		"--set", "providerFile="+writeProvidersFile(t, plugin))
-	if !strings.Contains(out, "clusterprofile/inventory: 1 clusters") || !strings.Contains(out, "1 credentials moved") {
+	if !strings.Contains(out, "clusterprofile/inventory: 1 cluster") || !strings.Contains(out, "1 credential moved") {
 		t.Fatalf("import clusterprofile: %s", out)
 	}
 	if out := mustTug(t, "ls", "-o", "name", "-l", "provider=clusterprofile"); strings.TrimSpace(out) != "member-1" {

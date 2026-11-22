@@ -308,6 +308,6 @@ func (a *app) printDoctor(r doctor.Report) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(a.stdout, "%d ok, %d warnings, %d failed\n", r.Count(doctor.OK), r.Count(doctor.Warn), r.Count(doctor.Fail))
+	_, err := fmt.Fprintf(a.stdout, "%d ok, %s, %d failed\n", r.Count(doctor.OK), plural(r.Count(doctor.Warn), "warning", "warnings"), r.Count(doctor.Fail))
 	return err
 }
