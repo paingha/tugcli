@@ -24,22 +24,9 @@ import (
 	"github.com/paingha/tugcli/internal/version"
 )
 
-// diffErrorCode is what tug diff and tug drift exit with on an error, as
-// kubectl diff does: 1 means that something differs.
-const diffErrorCode = 2
-
-// diffFailed makes an error from tug diff or tug drift exit with
-// diffErrorCode once printed, leaving an exit code it already has alone.
-func diffFailed(err error) error {
-	var ee *exitError
-	if err == nil || errors.As(err, &ee) {
-		return err
-	}
-	return &codedError{code: diffErrorCode, err: err}
-}
-
 // diffCommand makes a command's every failure, from parsing its flags and
-// arguments and setting tug up to running it, exit with diffErrorCode.
+// arguments and setting tug up to running it, exit with diffTrouble, as
+// kubectl diff does: 1 means that something differs.
 func diffCommand(cmd *cobra.Command) *cobra.Command {
 	args, run := cmd.Args, cmd.RunE
 	cmd.Args = func(c *cobra.Command, a []string) error { return diffFailed(args(c, a)) }

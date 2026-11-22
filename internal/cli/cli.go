@@ -144,36 +144,37 @@ type app struct {
 	problems   []plugin.Problem
 }
 
-// exitError carries a specific exit code without printing anything more.
-type exitError struct{ code int }
-
-func (e *exitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
-
-// codedError is printed as any error is, but exits with code instead of 1,
-// for commands such as tug diff whose exit 1 means something else.
-type codedError struct {
+// exitError carries a specific exit code. Without err it prints nothing
+// more; with one, err is printed as any other error is.
+type exitError struct {
 	code int
 	err  error
 }
 
-func (e *codedError) Error() string { return e.err.Error() }
-func (e *codedError) Unwrap() error { return e.err }
+func (e *exitError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return fmt.Sprintf("exit status %d", e.code)
+}
+
+func (e *exitError) Unwrap() error { return e.err }
 
 func (a *app) fail(err error) int {
+	code := 1
 	var ee *exitError
 	if errors.As(err, &ee) {
-		return ee.code
+		if ee.err == nil {
+			return ee.code
+		}
+		code = ee.code
 	}
 	fmt.Fprintf(a.stderr, "tug: %v\n", err)
 	var pe *provider.Error
 	if errors.As(err, &pe) && pe.Hint != "" {
 		fmt.Fprintf(a.stderr, "hint: %s\n", pe.Hint)
 	}
-	var ce *codedError
-	if errors.As(err, &ce) {
-		return ce.code
-	}
-	return 1
+	return code
 }
 
 // setup resolves paths, loads config and the logger.
