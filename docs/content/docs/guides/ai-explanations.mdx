@@ -205,7 +205,10 @@ object is not ready.
   redirections), prints a Secret's data, passes a credential, holds a
   placeholder or is not kubectl or tug is removed. A command that changes
   something is also removed from the summary, facts and hypotheses. tug warns
-  on stderr about what it removed or moved.
+  on stderr about what it removed or moved. tug's own commands count as
+  reading when they only read, such as `tug check`, `tug diff` or
+  `tug reconcile explain`; `tug connect`, `tug gitops reconcile` or
+  `tug settings set` do not.
 - **It sends no more than it showed you,** in one request, retried only when
   the provider is busy or down.
 
@@ -331,8 +334,9 @@ what you suggest: the engineer reads your answer and decides.
   `kubectl get`, `kubectl describe`, `kubectl logs` (with `--previous` for
   the run before a restart), `kubectl events`, `kubectl top`, `kubectl auth
   can-i`, `kubectl rollout status` or `history`, `tug why`, `tug tree`,
-  `tug logs` or `tug top`, written out in full with the names and namespace
-  from the evidence.
+  `tug logs`, `tug top`, `tug check`, `tug reconcile explain`, `trace` or
+  `events`, `tug gitops explain` or `drift`, or `tug crd explain`, written
+  out in full with the names and namespace from the evidence.
 - Never make a command that changes anything the default step. When a fix
   needs a change (apply, edit, patch, scale, delete, restart, rollout undo,
   cordon, drain, label, annotate), list it under changesNeedingApproval with

@@ -42,16 +42,43 @@ var kubectlReadVerbs = map[string][]string{
 	"rollout":       {"status", "history"},
 }
 
-// tugReadCommands are tug's own commands that only read. Anything else tug
-// does not have runs as kubectl, so it is judged as a kubectl command.
-var tugReadCommands = []string{"why", "tree", "logs", "top", "status", "ls", "doctor", "version", "audit"}
+// tugReadCommands are tug's own commands that only read, by name and alias.
+// A command with subcommands lists the ones that only read; nil means the
+// command only reads whatever its arguments, as why does (but for --deep,
+// which tugReadOnly refuses). Anything else tug does not have runs as
+// kubectl, so it is judged as a kubectl command.
+var tugReadCommands = map[string][]string{
+	"why": nil, "tree": nil, "logs": nil, "top": nil, "doctor": nil, "version": nil, "audit": nil,
+	"status": nil, "current": nil,
+	"ls": nil, "list": nil, "clusters": nil,
+	// tug check runs policy packs; diff asks the API server for a dry
+	// run; drift and watch compare and follow.
+	"check": nil, "diff": nil, "drift": nil, "watch": nil,
+	"api":          {"resources", "versions", "deprecations", "server-version", "diff"},
+	"crd":          {"explain", "schema"},
+	"gitops":       {"status", "explain", "drift", "dependencies", "deps"},
+	"reconcile":    {"status", "explain", "trace", "events"},
+	"team":         {"ls", "list", "show", "verify"},
+	"bookmark":     {"ls", "list"},
+	"alias":        {"ls", "list"},
+	"profile":      {"ls", "list", "show"},
+	"intelligence": {"status", "usage", "models"},
+	"settings":     {"list", "get", "path"},
+	"plugin":       {"ls", "list", "search", "inspect"},
+	"plugins":      {"ls", "list", "search", "inspect"},
+	"tunnel":       {"ls", "list", "test"},
+	"pin":          {"show"},
+	"daemon":       {"status"},
+	"pf":           {"ls", "list"},
+}
 
-// tugCommands are tug's other commands, which may change something; a
-// suggestion of one is refused rather than taken for kubectl's.
+// tugCommands are tug's other commands, which change something or run
+// something else; a suggestion of one is refused rather than taken for
+// kubectl's.
 var tugCommands = []string{
-	"connect", "disconnect", "ns", "unlock", "lock", "shell", "sh", "pf", "restart", "scale",
-	"rollback", "import", "sync", "label", "forget", "auth", "pin", "plugin", "index", "tunnel",
-	"daemon", "ui", "init", "session", "search",
+	"connect", "c", "disconnect", "ns", "unlock", "lock", "shell", "sh", "restart", "scale",
+	"rollback", "import", "sync", "label", "forget", "auth", "index", "init", "session",
+	"search", "ui", "support", "open", "pick", "completion", "help",
 }
 
 // Runnable reports whether a suggested command is one tug shows at all: a
@@ -118,13 +145,20 @@ func tugReadOnly(args []string) (bool, string) {
 		return false, "it names no command"
 	case verb == "why" && slices.ContainsFunc(rest, func(a string) bool { return a == "--deep" || strings.HasPrefix(a, "--deep=") }):
 		return false, "it would send data to a model provider again"
-	case slices.Contains(tugReadCommands, verb):
-		return true, ""
 	case slices.Contains(tugCommands, verb):
 		return false, "tug " + verb + " is not a command that only reads"
-	default:
-		return kubectlReadOnly(args)
 	}
+	subs, ok := tugReadCommands[verb]
+	switch {
+	case !ok:
+		return kubectlReadOnly(args)
+	case subs == nil:
+		return true, ""
+	}
+	if sub, _ := verbOf(rest); !slices.Contains(subs, sub) {
+		return false, strings.TrimSpace("tug "+verb+" "+sub) + " is not a command that only reads"
+	}
+	return true, ""
 }
 
 func kubectlReadOnly(args []string) (bool, string) {
