@@ -105,6 +105,7 @@ func partial(u *unstructured.Unstructured) *metav1.PartialObjectMetadata {
 	p.Name, p.Namespace, p.UID = u.GetName(), u.GetNamespace(), u.GetUID()
 	p.OwnerReferences = u.GetOwnerReferences()
 	p.CreationTimestamp = u.GetCreationTimestamp()
+	p.DeletionTimestamp = u.GetDeletionTimestamp()
 	return p
 }
 
@@ -153,6 +154,14 @@ func objectOf(u *unstructured.Unstructured, r schema.GroupVersionResource) resol
 // ordersCluster is a Database that owns a failing Backup, a Secret, a
 // Service and a StatefulSet whose pod is crashing.
 func ordersCluster(t *testing.T) (Clients, *unstructured.Unstructured) {
+	typed, customs, db := ordersObjects()
+	c, _ := fakeClients(t, typed, customs...)
+	return c, db
+}
+
+// ordersObjects are the objects of ordersCluster: built-in ones, custom
+// resources, and the Database among them.
+func ordersObjects() ([]runtime.Object, []*unstructured.Unstructured, *unstructured.Unstructured) {
 	db := custom("db.example.com/v1", "Database", "web", "orders",
 		"Ready=False BackupFailing: the latest backup failed",
 		"Stalled=True BackupFailing: the latest backup failed",
@@ -191,8 +200,7 @@ func ordersCluster(t *testing.T) (Clients, *unstructured.Unstructured) {
 	stale := warningEvent("Database", "orders", "", "BackupFailed", "an old failure", 1, 3*time.Hour)
 	stale.InvolvedObject.UID = db.GetUID()
 
-	c, _ := fakeClients(t, []runtime.Object{sts, pod, secret, svc, dbEvent, normal, stale}, db, backup)
-	return c, db
+	return []runtime.Object{sts, pod, secret, svc, dbEvent, normal, stale}, []*unstructured.Unstructured{db, backup}, db
 }
 
 func TestObjectTree(t *testing.T) {

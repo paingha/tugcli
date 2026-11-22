@@ -7,12 +7,13 @@ expert to make a difference.
 This guide covers how to report problems, set up a development copy, and get
 a change merged. The code standards themselves live in
 [AGENTS.md](AGENTS.md), which is written for people and AI coding agents
-alike.
+alike. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Ways to help
 
 - **Report a bug** or ask a question in
-  [Issues](https://github.com/paingha/tugcli/issues).
+  [Issues](https://github.com/paingha/tugcli/issues/new/choose), with the
+  form for a bug, a feature, a new provider, the docs or a question.
 - **Improve the docs.** The user guide is in
   [docs/content/docs](docs/content/docs); every page has an "Open on GitHub"
   link. The plugin authors' guide is [docs/plugins.md](docs/plugins.md).
@@ -37,7 +38,8 @@ names and addresses can still be sensitive.
 
 **Security problems** don't belong in public issues. Report them privately
 through GitHub's **Report a vulnerability** button on the repository's
-Security tab.
+Security tab; [SECURITY.md](SECURITY.md) says what to include and what's in
+scope.
 
 ## Setting up
 
@@ -126,6 +128,8 @@ export TUG_HOME="$(mktemp -d)" TUG_KEYRING_BACKEND=file TUG_KEYRING_PASSPHRASE=d
 - Add a new Go module only when the standard library or an existing
   dependency can't do the job, and say why in the commit message.
 - In the pull request, explain the problem, the fix, and how you tested it.
+  The pull request template asks for these, with a short checklist of what
+  reviewers look for first.
 
 A maintainer reviews every pull request. Small, focused changes are reviewed
 fastest.

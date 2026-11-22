@@ -1,4 +1,4 @@
 {
   "title": "Guides",
-  "pages": ["importing", "labels", "workloads", "diff", "apis", "policy", "gitops", "pins", "profiles", "teams", "tunnels", "proxy", "doctor", "sign-in", "rotating", "scripting"]
+  "pages": ["importing", "labels", "workloads", "diff", "controllers", "apis", "policy", "gitops", "pins", "profiles", "teams", "tunnels", "proxy", "doctor", "sign-in", "rotating", "scripting"]
 }

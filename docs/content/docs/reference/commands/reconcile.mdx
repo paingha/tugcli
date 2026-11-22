@@ -1,0 +1,152 @@
+---
+title: Reconcile commands
+description: reconcile status, explain, trace and events.
+---
+
+`tug reconcile` diagnoses the controllers that reconcile objects: whether a
+controller runs and leads, which controller reconciles an object and on what
+evidence, what happened to an object and what it owns, and the events about
+them. See [Controllers and reconciling](/docs/guides/controllers) for a
+walk-through.
+
+Kubernetes doesn't record which controller acted on which object, so some of
+what tug says is its reading of indirect evidence. Every finding and every
+piece of evidence is labelled:
+
+| Label | Meaning |
+| --- | --- |
+| `observed` | Read from the API as it is: a condition, a timestamp, an event, a field manager's name, a Lease holder that is one of the controller's pods. |
+| `inferred` | tug's reading of evidence that could mislead: a field manager named after a deployment, a service account whose role lets it update the object's status, a log line that has the object's name but not its UID. |
+
+Kubernetes keeps no history of reconciles either. `trace` pieces a timeline
+together from the timestamps objects carry now and from events, which the API
+server keeps for an hour by default, so older changes, and objects deleted
+since, leave no trace.
+
+Every reconcile command only reads, never reads a Secret's data and, like
+`tug why`, runs on every cluster with some labels with `--cluster-selector`.
+Each takes `-n`, `--namespace` and `-o`, `--output table|json|yaml`.
+
+## tug reconcile status
+
+Show a controller's state: its deployment, statefulset or daemonset (or a
+static pod, as kube-controller-manager often is) with the diagnosis
+[`tug why`](/docs/reference/commands/workloads#tug-why) gives; which of its
+pods holds its leader-election Lease and how long ago it renewed it; its
+containers' restarts; and the kinds whose status its service account may
+update, which are the kinds it most likely reconciles.
+
+```bash
+tug reconcile status <controller> [-n namespace] [-o table|json|yaml]
+```
+
+Without `-n`, a controller that isn't in the session's namespace is looked for
+in every namespace, since controllers usually run in their own; a match in the
+session's namespace wins a tie. It exits 1 when the controller isn't healthy
+or has no leader.
+
+A Lease counts as the controller's when one of its pods holds it (observed;
+controllers built on client-go hold it as their pod's name, or their node's
+name for a static pod on the host's network). When none does, a Lease named
+after the controller counts instead, unless another running pod holds it
+(inferred).
+
+```bash
+tug reconcile status cert-manager
+tug reconcile status deploy/kustomize-controller -n flux-system
+tug reconcile status pod/kube-controller-manager-cp-1 -n kube-system -o json
+```
+
+## tug reconcile explain
+
+Explain how any object is reconciled. explain starts from `tug why`'s
+diagnosis, then looks for the controller that reconciles it:
+
+- the field managers that wrote its status, from `metadata.managedFields`;
+- who reported events about it;
+- the service accounts whose roles let them update its status by name
+  (a role such as cluster-admin, which may write everything, says nothing);
+- the operators that usually serve its API group, such as cert-manager for
+  `cert-manager.io` and Flux's controllers for `*.toolkit.fluxcd.io`.
+
+A name a controller gives itself is matched to a workload with the same name,
+or whose name it starts with, or that runs a container of that name. Field
+managers and event reporters that are part of Kubernetes, such as
+kube-controller-manager and its deployment-controller, are named as such.
+
+For the likeliest controller it finds a workload for, explain checks that the
+workload has a ready pod and a leader, and says when the controller is down,
+has no leader, or runs but hasn't reconciled the object's latest generation.
+It also reports a deletion that finalizers hold up and `spec.suspend` or
+`spec.paused` set to true. It exits 1 when the object isn't healthy, as `why`
+does.
+
+```bash
+tug reconcile explain <resource> [-n namespace] [-o table|json|yaml]
+```
+
+```bash
+tug reconcile explain certificate/web-tls
+tug reconcile explain kustomization.kustomize.toolkit.fluxcd.io/apps -n flux-system
+tug reconcile explain db/orders -o json
+```
+
+## tug reconcile trace
+
+Show a timeline of an object and what it owns, oldest first. Each entry has
+its age, its source and what happened:
+
+| Source | Entries |
+| --- | --- |
+| `metadata` | The object's creation, and its deletion with the finalizers that hold it. |
+| `managedFields` | When each field manager last wrote it, and what it wrote. |
+| `condition` | When each status condition last changed, and to what. |
+| `owned` | When what it owns, through ownerReferences, was created or marked for deletion. |
+| `container` | When the containers of pods it owns started and exited. |
+| `event` | Events about it and everything it owns, with their count. |
+| `log` | With `--logs`, the lines the controller logged that mention its name or UID. |
+
+A log line with the object's UID is observed; one with only its name, as a
+whole word, is marked inferred, since another object may share the name. The
+controller is the one named with `--controller` or, without it, the likeliest
+that `explain` finds. tug reads the default container of each of its pods and
+keeps the newest 200 lines that match. The timeline's notes, on stderr (or in
+`notes` with `-o json`), say what it can't show.
+
+```bash
+tug reconcile trace <resource> [--logs] [--controller <workload>] [--since <duration>] [-n namespace] [-o table|json|yaml]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--logs` | Add the lines the controller logged that mention the object. |
+| `--controller <workload>` | The controller whose logs to read, such as `deploy/db-operator`, looked for in every namespace. Implies `--logs`. |
+| `--since <duration>` | How far back to read the logs. Default: `1h`. |
+
+```bash
+tug reconcile trace kustomization.kustomize.toolkit.fluxcd.io/apps -n flux-system
+tug reconcile trace certificate/web-tls --logs
+tug reconcile trace db/orders --controller deploy/db-operator --since 2h
+```
+
+## tug reconcile events
+
+List the events about an object and everything it owns, oldest first, with
+who reported each. With `-f`, keep following new events, including those
+about objects it comes to own, such as the pods of a new rollout, until
+<kbd>Ctrl</kbd>+<kbd>C</kbd>. While following, each line starts with the time
+the event last happened; with `-o json` or `-o yaml`, each event is a document
+of its own.
+
+```bash
+tug reconcile events <resource> [-f] [-n namespace] [-o table|json|yaml]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-f`, `--follow` | Keep following new events until <kbd>Ctrl</kbd>+<kbd>C</kbd>. |
+
+```bash
+tug reconcile events db/orders
+tug reconcile events deploy/api -f
+```

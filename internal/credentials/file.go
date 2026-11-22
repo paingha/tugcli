@@ -73,7 +73,11 @@ func (f *FileStore) deriveKey(salt []byte, n, r, p int) ([]byte, error) {
 }
 
 func (f *FileStore) load() (map[string]string, []byte, error) {
-	b, err := os.ReadFile(f.path)
+	var b []byte
+	err := retry(func() (err error) {
+		b, err = os.ReadFile(f.path)
+		return err
+	}, transient, busyWait)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil, nil
 	}
@@ -137,7 +141,7 @@ func (f *FileStore) save(m map[string]string, salt []byte) error {
 	if err != nil {
 		return err
 	}
-	return config.WriteFileAtomic(f.path, b, 0o600)
+	return retry(func() error { return config.WriteFileAtomic(f.path, b, 0o600) }, transient, busyWait)
 }
 
 func newGCM(key []byte) (cipher.AEAD, error) {
@@ -185,32 +189,86 @@ func (f *FileStore) update(fn func(map[string]string)) error {
 	return f.save(m, salt)
 }
 
+// How long the store waits: for another holder's lock, before a lock is
+// taken to be abandoned, and for a file another holder is busy with.
+const (
+	lockWait  = 10 * time.Second
+	lockStale = 30 * time.Second
+	busyWait  = 2 * time.Second
+)
+
 // lockFile takes a simple exclusive lock by creating path. A lock older than
-// 30 seconds is assumed abandoned.
-func lockFile(path string) (func(), error) {
-	deadline := time.Now().Add(10 * time.Second)
+// 30 seconds is assumed abandoned. Every version of tug takes the lock this
+// way, so a tugd still running from before an upgrade and a newer tug take
+// turns.
+func lockFile(path string) (func(), error) { return takeLock(path, createExclusive, transient) }
+
+// createExclusive creates path, failing if it exists.
+func createExclusive(path string) error {
+	fh, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err == nil {
+		fh.Close()
+	}
+	return err
+}
+
+// takeLock is lockFile with how the lock file is created and which errors
+// mean another holder is busy with it passed in, so tests can make Windows'
+// refusals happen anywhere.
+func takeLock(path string, create func(string) error, isTransient func(error) bool) (func(), error) {
+	deadline := time.Now().Add(lockWait)
 	for {
-		fh, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			fh.Close()
-			return func() { os.Remove(path) }, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			if errors.Is(err, os.ErrNotExist) {
-				if mkErr := os.MkdirAll(filepath.Dir(path), 0o700); mkErr != nil {
-					return nil, mkErr
-				}
+		err := create(path)
+		switch {
+		case err == nil:
+			return func() {
+				// Best effort: a lock left behind is taken to be
+				// abandoned after lockStale.
+				_ = retry(func() error { return os.Remove(path) }, isTransient, busyWait)
+			}, nil
+		case errors.Is(err, os.ErrNotExist):
+			if mkErr := os.MkdirAll(filepath.Dir(path), 0o700); mkErr != nil {
+				return nil, mkErr
+			}
+			continue
+		case errors.Is(err, os.ErrExist):
+			if st, serr := os.Stat(path); serr == nil && time.Since(st.ModTime()) > lockStale {
+				os.Remove(path)
 				continue
 			}
+		case isTransient(err):
+			// On Windows, the holder is still removing the lock: it is
+			// being released, so wait as for a lock that is held.
+		default:
 			return nil, err
 		}
-		if st, serr := os.Stat(path); serr == nil && time.Since(st.ModTime()) > 30*time.Second {
-			os.Remove(path)
-			continue
-		}
 		if time.Now().After(deadline) {
+			if isTransient(err) {
+				return nil, fmt.Errorf("taking the lock %s: %w", path, err)
+			}
 			return nil, fmt.Errorf("timed out waiting for lock %s", path)
 		}
 		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// retry runs op until it succeeds, fails with an error isTransient does not
+// accept, or wait has passed, and returns its last error.
+func retry(op func() error, isTransient func(error) bool, wait time.Duration) error {
+	return retryClock(op, isTransient, wait, time.Now)
+}
+
+// retryClock is retry with the clock passed in. It stops once the clock
+// reaches the deadline, not only once it is past it: Windows' clock ticks
+// coarsely enough that straight after a short wait it can still read the
+// deadline exactly.
+func retryClock(op func() error, isTransient func(error) bool, wait time.Duration, now func() time.Time) error {
+	deadline := now().Add(wait)
+	for {
+		err := op()
+		if err == nil || !isTransient(err) || !now().Before(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
