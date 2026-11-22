@@ -72,11 +72,7 @@ Error from server (Forbidden): tug: refused DELETE pods/api-0: prod-eu is read-o
 In a terminal, tug **asks once** before the first change a command would make.
 Answer `y` to go ahead for that one command; anything else stops it.
 
-```console
-$ tug restart api
-prod-eu is read-only. Allow PATCH deployments/api-server? [y/N] n
-tug: refused PATCH deployments/api-server: prod-eu is read-only; run `tug unlock 15m` to allow writes
-```
+![On prod-eu, read-only and marked PROD in the prompt, tug restart cart asks: prod-eu is read-only. restart deploy/cart anyway? Answered n, it refuses: run tug unlock 15m to allow writes](/images/cli/read-only.png)
 
 kubectl commands through tug work the same way. tug knows which kubectl
 commands only read (`get`, `describe`, `logs`, `top`, `explain`, `events`,

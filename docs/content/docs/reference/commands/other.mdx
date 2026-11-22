@@ -78,6 +78,14 @@ live session or a named port-forward.
 | `tug daemon status [-o table\|json\|yaml]` | Show whether it's running and what it serves. |
 | `tug daemon stop` | Stop tugd. |
 
+```console
+$ tug daemon status
+running:   pid 98751, v0.2.0-23-ge1e7155, since 5:54PM
+proxy:     https://127.0.0.1:53742
+sessions:  0
+log:       /run/user/1000/tug/tugd.log
+```
+
 ## tug intelligence
 
 Set up the model providers behind [`tug why --deep`](/docs/guides/ai-explanations),
@@ -92,6 +100,17 @@ and see what they cost.
 | `tug intelligence key set <provider>` | Ask for a provider's API key on the terminal and keep it in the keychain. |
 | `tug intelligence key rm <provider>` | Remove a provider's stored key. |
 | `tug intelligence models [-o table\|json\|yaml\|name]` | Each provider's default model, and the prices tug assumes, with their sources. |
+
+```console
+$ tug intelligence status
+Enabled:     no; turn tug why --deep on with `tug intelligence enable`
+Provider:    anthropic
+Model:       claude-opus-5-5
+Endpoint:    https://api.anthropic.com/v1/messages
+API key:     none; run `tug intelligence key set anthropic`, or set TUG_SECRET_ANTHROPIC_API_KEY
+Price:       $4 in, $20 out, $0.2 cache read per million tokens
+This month:  $0.00 in 0 calls, of a $20.00 cap (UTC)
+```
 
 ## tug settings
 
@@ -151,6 +170,15 @@ tug settings unset plugins.pins.digitalocean      # unpin a plugin
 tug settings remove plugins.indexes acme
 ```
 
+```console
+$ tug settings set intelligence.monthlySpendCapUSD 20
+Set intelligence.monthlySpendCapUSD to 20 in ~/.config/tug/config.yaml.
+$ tug settings get intelligence.monthlySpendCapUSD
+20
+$ tug settings path
+~/.config/tug/config.yaml
+```
+
 [Team catalogs](/docs/guides/teams) are followed with `tug team add` and
 `tug team remove`, not with `tug settings`.
 
@@ -160,6 +188,11 @@ Print tug's version, commit, Go version and platform.
 
 ```bash
 tug version [-o table|json|yaml]
+```
+
+```console
+$ tug version
+tug v0.2.0-23-ge1e7155 (e1e715553705, go1.27.4, darwin/arm64)
 ```
 
 ## tug completion

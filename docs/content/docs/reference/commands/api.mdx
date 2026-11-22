@@ -37,6 +37,14 @@ tug api resources --group core --verb list
 tug api resources --scope cluster -o name
 ```
 
+```console
+$ tug api resources db
+NAME                   SHORTNAMES   GROUP            VERSIONS   SCOPE        KIND                  CATEGORIES
+databases              db           db.example.com   v1         Namespaced   Database              all
+backups                -            db.example.com   v1         Namespaced   Backup                -
+poddisruptionbudgets   pdb          policy           v1         Namespaced   PodDisruptionBudget   -
+```
+
 ## tug api versions
 
 List every API group-version the cluster serves, as `kubectl api-versions`
@@ -45,6 +53,35 @@ resource types it serves, and the upstream release that stops serving it.
 
 ```bash
 tug api versions [-o table|json|yaml|name]
+```
+
+```console
+$ tug api versions
+API VERSION                       PREFERRED   RESOURCES   REMOVED IN
+v1                                yes         17
+admissionregistration.k8s.io/v1   yes         6
+apiextensions.k8s.io/v1           yes         1
+apiregistration.k8s.io/v1         yes         1
+apps/v1                           yes         5
+authentication.k8s.io/v1          yes         2
+authorization.k8s.io/v1           yes         4
+autoscaling/v2                    yes         1
+autoscaling/v1                                1
+batch/v1                          yes         2
+certificates.k8s.io/v1            yes         3
+coordination.k8s.io/v1            yes         1
+db.example.com/v1                 yes         2
+discovery.k8s.io/v1               yes         1
+events.k8s.io/v1                  yes         1
+flowcontrol.apiserver.k8s.io/v1   yes         2
+networking.k8s.io/v1              yes         5
+node.k8s.io/v1                    yes         1
+policy/v1                         yes         1
+rbac.authorization.k8s.io/v1      yes         4
+resource.k8s.io/v1                yes         5
+scheduling.k8s.io/v1              yes         1
+storage.k8s.io/v1                 yes         6
+storagemigration.k8s.io/v1        yes         1
 ```
 
 ## tug api deprecations
@@ -132,6 +169,28 @@ tug crd explain certificate
 tug crd explain kustomizations.kustomize.toolkit.fluxcd.io -o yaml
 ```
 
+```console
+$ tug crd explain database
+Name:             databases.db.example.com
+Kind:             Database (list DatabaseList)
+Group:            db.example.com
+Scope:            Namespaced
+Names:            databases, database, db
+Categories:       all
+Conversion:       None
+Stored versions:  v1
+Conditions:       NamesAccepted=True, Established=True
+
+VERSION   SERVED   STORAGE   DEPRECATED   SUBRESOURCES
+v1        yes      yes       -            status
+
+Printer columns of v1:
+NAME      TYPE     JSONPATH                                        DESCRIPTION
+Engine    string   .spec.engine                                    -
+Version   string   .spec.version                                   -
+Ready     string   .status.conditions[?(@.type=="Ready")].status   -
+```
+
 ## tug crd schema
 
 Show a custom resource's schema from its definition's `openAPIV3Schema`, one
@@ -154,4 +213,14 @@ tug crd schema <crd> [flags]
 tug crd schema certificate
 tug crd schema certificate --field spec.issuerRef
 tug crd schema widgets.example.com --version v1beta1 --depth 2
+```
+
+```console
+$ tug crd schema database --field spec.backup
+spec.backup (object) in Database db.example.com/v1
+  When and where to back the database up.
+
+FIELD      TYPE     REQUIRED   DESCRIPTION
+bucket     string              Object storage bucket that holds them.
+schedule   string              Cron schedule for backups.
 ```

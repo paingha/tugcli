@@ -20,6 +20,8 @@ works, named as kubectl names it.
 tug pick [kind] [flags]
 ```
 
+![tug pick deploy --query pay: the picker filtered to deploy/payments in shop, 0/1 ready, with the keys at the bottom](/images/cli/pick.png)
+
 Type to filter. Each word must match the name, as
 [targets](/docs/concepts/targets) match, or appear in the kind, namespace,
 status or owner, so `api crash` finds the `api` pods in `CrashLoopBackOff`.
@@ -91,6 +93,18 @@ tug bookmark open db pf 5432
 tug bookmark open edge
 ```
 
+```console
+$ tug bookmark add orders db/orders -n shop
+Bookmarked orders: database/orders in shop on staging-us
+$ tug bookmark ls
+NAME     TARGET            NAMESPACE   CLUSTER
+orders   database/orders   shop        staging-us
+$ tug bookmark open orders tree
+database/orders                ✗ BackupFailing: the latest backup failed
+├── backup/orders-nightly      ✗ UploadFailed: bucket "orders-backups" not found
+└── secret/orders-credentials  ·
+```
+
 ### tug bookmark ls and rm
 
 `tug bookmark ls [-o table|json|yaml|name]` lists them;
@@ -139,6 +153,12 @@ tug open kustomization.kustomize.toolkit.fluxcd.io/apps -n flux-system
 tug open certificate/web-tls --print
 ```
 
+```console
+$ tug open deploy/frontend --print
+deployment/frontend, found through a search of ~/src/shop:
+k8s/frontend.yaml:1
+```
+
 ## tug alias
 
 Name your own shortcuts for tug and kubectl commands. Aliases are kept per
@@ -170,4 +190,12 @@ tug alias set wide 'get -o wide'
 tug alias set errs -- logs --since 10m --json
 tug alias set rs restart
 tug rs api            # alias rs: tug restart api, then the guard asks on a read-only session
+```
+
+```console
+$ tug alias set wide 'get -o wide'
+Alias wide runs tug get -o wide
+$ tug alias ls
+ALIAS   RUNS
+wide    tug get -o wide
 ```

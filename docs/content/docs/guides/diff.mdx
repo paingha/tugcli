@@ -58,6 +58,10 @@ spec.revisionHistoryLimit                         (not set)                     
 spec.template.spec.containers[name="web"].image   kubectl                           kubectl
 ```
 
+In a terminal, removed lines are red and added ones green:
+
+![tug diff -f k8s/ showing a new image tag and environment variable for deploy/frontend, with a field-ownership table and a conflict warning](/images/cli/diff.png)
+
 The table under each diff lists the fields that differ, who owns them now and
 after the apply (from the object's `managedFields`), and what set the new
 value. A **conflict** is a field another manager owns that the apply would

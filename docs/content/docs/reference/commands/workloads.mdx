@@ -32,6 +32,16 @@ tug logs sts/db -c postgres --since 10m
 tug logs api --json
 ```
 
+```console
+$ tug logs checkout --tail 3
+checkout-5d6b95f89f-pwdlh/checkout {"level":"info","msg":"order placed","order":"A1339","items":1,"ms":12}
+checkout-5d6b95f89f-pwdlh/checkout {"level":"info","msg":"cart priced","cart":"c-1148","items":4,"ms":21}
+checkout-5d6b95f89f-pwdlh/checkout {"level":"info","msg":"order placed","order":"A1341","items":4,"ms":51}
+checkout-5d6b95f89f-6wh26/checkout {"level":"info","msg":"order placed","order":"A1332","items":3,"ms":55}
+checkout-5d6b95f89f-6wh26/checkout {"level":"info","msg":"order placed","order":"A1333","items":1,"ms":77}
+checkout-5d6b95f89f-6wh26/checkout {"level":"info","msg":"order placed","order":"A1334","items":1,"ms":69}
+```
+
 ## tug sh
 
 Open a shell (bash, else sh) in a pod, or run a command. For a workload, tug
@@ -57,6 +67,12 @@ tug sh api -c sidecar
 tug sh api -- env
 ```
 
+```console
+$ tug sh frontend -- nginx -v
+pod/frontend-bc79969b9-9nw7c, container nginx; exit to leave
+nginx version: nginx/1.27.5
+```
+
 ## tug pf
 
 Port-forward to a workload by short name. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop.
@@ -75,6 +91,23 @@ tug pf api 8080          # localhost:8080 → container port 8080
 tug pf api 9000:http     # localhost:9000 → the port named http
 tug pf db                # every declared port to the same local port
 tug pf db 5432 --name db # in the background, through tugd
+```
+
+```console
+$ tug pf frontend 8080:80
+deploy/frontend via pod/frontend-bc79969b9-9nw7c; Ctrl-C to stop
+Forwarding from 127.0.0.1:8080 -> 80
+Forwarding from [::1]:8080 -> 80
+^C
+$ tug pf redis 6379 --name redis
+tugd keeps it open across pod restarts; tug pf ls shows it, tug pf stop redis ends it
+Forwarding localhost:6379 -> 6379 to sts/redis (pod/redis-0) as redis
+$ tug pf ls
+NAME    PROFILE   CLUSTER      NAMESPACE   TARGET      PORTS       STATE        RESTARTS   SINCE
+redis   -         staging-us   shop        sts/redis   6379:6379   forwarding   0          0s
+tugd starts a forward that drops again on a running pod, on the same local ports, after 1s and then up to 30s apart; tug pf stop <name> ends one, tug pf profile down <profile> a profile's
+$ tug pf stop redis
+Stopped redis
 ```
 
 | Subcommand | Meaning |
@@ -97,6 +130,11 @@ Rolling-restart a deployment, statefulset or daemonset.
 tug restart <target>
 ```
 
+```console
+$ tug restart cart
+Restarted deploy/cart
+```
+
 ## tug scale
 
 Set the replicas of a deployment or statefulset.
@@ -110,12 +148,22 @@ tug scale api 3
 tug scale worker 0
 ```
 
+```console
+$ tug scale frontend 4
+Scaled deploy/frontend to 4
+```
+
 ## tug rollback
 
 Roll a deployment back to its previous revision, or a chosen one.
 
 ```bash
 tug rollback <target> [--to-revision <n>]
+```
+
+```console
+$ tug rollback cart
+Rolled deploy/cart back to revision 3
 ```
 
 | Flag | Meaning |
@@ -165,6 +213,23 @@ tug why billing --deep
 tug why billing --deep --provider openai --model gpt-6.2-sol
 ```
 
+```console
+$ tug why payments
+deploy/payments in shop is not ready: 0/1 ready
+
+POD                         STATUS             READY   RESTARTS   NODE                     AGE
+payments-6c698d866b-nkpv4   CrashLoopBackOff   0/1     6          tug-docs-control-plane   10m
+
+error    pod/payments-6c698d866b-nkpv4, container payments: CrashLoopBackOff
+         keeps crashing and waits to restart; last exit code 1 (Error)
+         next: read the crashed container's logs:
+               tug logs pod/payments-6c698d866b-nkpv4 --previous
+
+Recent warning events:
+LAST SEEN   OBJECT                          REASON    MESSAGE
+67s (x10)   pod/payments-6c698d866b-nkpv4   BackOff   Back-off restarting failed container payments in pod payments-6c698d866b-nkpv4_shop(be123f29-4f70-4974-8c1f-d8177a5b3e67)
+```
+
 ## tug tree
 
 Show a workload's ownership tree with the health of each part: ReplicaSets or
@@ -180,6 +245,17 @@ tug tree <target> [-o table|json|yaml]
 ```bash
 tug tree checkout
 tug tree cronjob/nightly-backup
+```
+
+```console
+$ tug tree checkout
+deploy/checkout                        ✓ 2/2 ready
+├── svc/checkout                       ✓ ClusterIP 8080/TCP, 2/2 pods ready
+└── rs/checkout-5d6b95f89f             ✓ 2/2 ready, revision 1
+    ├── pod/checkout-5d6b95f89f-6wh26  ✓ Running
+    │   └── container checkout         ✓ running
+    └── pod/checkout-5d6b95f89f-pwdlh  ✓ Running
+        └── container checkout         ✓ running
 ```
 
 ## tug check
@@ -215,6 +291,42 @@ tug check certificate/web-tls
 tug check --cluster-selector env=prod --pack platform
 ```
 
+```console
+$ tug check deploy/checkout
+Checked deploy/checkout in shop against baseline 1.0.0: 7 advisory findings.
+
+warning  deploy/checkout, container checkout: baseline/resources
+         sets no cpu or memory request and no memory limit
+         next: set resources.requests.cpu, resources.requests.memory and resources.limits.memory on each container,
+               sized from what tug top shows it uses
+
+warning  deploy/checkout, container checkout: baseline/readiness-probe
+         has no readiness probe
+         next: add a readinessProbe, so that the container gets traffic only once it can serve it
+
+warning  deploy/checkout, container checkout: baseline/run-as-non-root
+         may run as root: neither it nor its pod sets runAsNonRoot: true
+         next: set securityContext.runAsNonRoot to true on the pod or the container, with an image whose user is not
+               root
+
+warning  deploy/checkout: baseline/disruption-budget
+         no PodDisruptionBudget selects its pods, so a node drain can evict all 2 replicas at once
+         next: add a PodDisruptionBudget whose selector matches the workload's pods, with maxUnavailable: 1
+
+info     deploy/checkout, container checkout: baseline/liveness-probe
+         has no liveness probe
+         next: add a livenessProbe that fails only when the container is stuck and a restart would help
+
+info     deploy/checkout, container checkout: baseline/read-only-root-filesystem
+         can write to its root filesystem: readOnlyRootFilesystem is not true
+         next: set securityContext.readOnlyRootFilesystem to true, with an emptyDir volume for any directory the
+               container writes to
+
+info     deploy/checkout: baseline/topology-spread
+         has no topology spread constraint, so its 2 replicas may all run on one node
+         next: add a topologySpreadConstraint on topology.kubernetes.io/zone or kubernetes.io/hostname
+```
+
 ## tug watch
 
 Follow a workload's rollout, or any object's reconciliation, as it happens: one
@@ -243,6 +355,21 @@ tug watch deploy/api --until ready --timeout 5m
 tug watch certificate/web-tls --events
 tug watch job/migrate --until ready -o json
 tug watch pod/api-7d9f-x2x4z --until deleted
+```
+
+```console
+$ tug restart cart
+Restarted deploy/cart
+$ tug watch cart --until ready
+17:54:36 ✗ deploy/cart  2/2 ready, 1 old (owns 7, 2 not ready)
+17:54:36 ✗ pod/cart-5fb67d6f6-qqjb8  ContainerCreating
+17:54:36 ✗ rs/cart-5fb67d6f6  1/2 ready, revision 4
+17:54:36 ✓ pod/cart-5fb67d6f6-qqjb8  became ready: Running
+17:54:36 ✓ rs/cart-5fb67d6f6  became ready: 2/2 ready, revision 4
+17:54:36 ✓ pod/cart-787c889778-7q9jm  is terminating
+17:54:36 ✗ deploy/cart  2/2 ready, 1 old → 3/2 ready, 1 old
+17:54:36 ✓ deploy/cart  Progressing is True (ReplicaSetUpdated → NewReplicaSetAvailable)
+17:54:36 ✓ deploy/cart  became ready: 2/2 ready
 ```
 
 ## tug diff
@@ -285,6 +412,32 @@ tug diff api -f k8s/ --field-manager kubectl
 kustomize build overlays/prod | tug diff -f -
 tug diff deploy/api --against payments-staging
 tug diff deploy/api --managed-fields
+```
+
+```console
+$ tug diff -f k8s/
+deployment/frontend in shop
+--- staging-us (live)
++++ k8s/frontend.yaml (server-side dry run as tug)
+@@ -27,7 +27,10 @@
+         team: web
+     spec:
+       containers:
+-      - image: nginx:1.27-alpine
++      - env:
++        - name: FEATURE_RECOMMENDATIONS
++          value: "on"
++        image: nginx:1.27.3-alpine
+         imagePullPolicy: IfNotPresent
+         name: nginx
+         ports:
+
+FIELD                                               LIVE OWNERS                 OWNERS AFTER   NOTE
+spec.template.spec.containers[name="nginx"].env     (not set)                   tug
+spec.template.spec.containers[name="nginx"].image   kubectl-client-side-apply   tug            conflicts with kubectl-client-side-apply
+
+warning: an apply as tug would conflict with the field managers named above; the dry run was forced to show the result. Leave those fields out, or apply with --force-conflicts to take them over
+note: a dry run shows what admission and defaulting make of an apply; it does not predict what controllers do once it is made, such as an autoscaler changing the replicas
 ```
 
 ## tug drift
@@ -355,6 +508,35 @@ tug support bundle certificate/web-tls -n ingress
 tug support bundle namespace/shop --since 6h
 tug support bundle api --preview
 tug support bundle api --exclude configmap --redact-pattern 'cust-[0-9]+'
+```
+
+```console
+$ tug support bundle checkout --preview
+discovering the cluster's resources…
+reading the cluster's version…
+reading deployment/checkout and what it owns…
+reading events…
+reading 1 node…
+reading 2 logs from 2 pods…
+running tug doctor's checks…
+FILE                                                     BYTES   SOURCE
+README.md                                                3794    tug: what is in this bundle and how to review it
+manifest.json                                            3295    tug: every other file, its size and where it came from
+cluster/api-resources.json                               17980   API discovery (GET /api, /apis)
+cluster/version.json                                     380     GET /version
+doctor.json                                              2261    tug doctor -o json
+events.json                                              4327    LIST /api/v1/namespaces/shop/events
+logs/shop/checkout-5d6b95f89f-6wh26/checkout.log         31606   GET /api/v1/namespaces/shop/pods/checkout-5d6b95f89f-6wh26/log?container=checkout&tailLines=1000&timestamps=true&limitBytes=10485760&sinceSeconds=3600
+logs/shop/checkout-5d6b95f89f-pwdlh/checkout.log         32450   GET /api/v1/namespaces/shop/pods/checkout-5d6b95f89f-pwdlh/log?container=checkout&tailLines=1000&timestamps=true&limitBytes=10485760&sinceSeconds=3600
+nodes/tug-docs-control-plane.yaml                        1970    GET /api/v1/nodes/tug-docs-control-plane (conditions, capacity and taints only)
+objects/shop/deployments.apps/checkout.yaml              2545    GET /apis/apps/v1/namespaces/shop/deployments/checkout
+objects/shop/pods/checkout-5d6b95f89f-6wh26.yaml         4303    GET /api/v1/namespaces/shop/pods/checkout-5d6b95f89f-6wh26
+objects/shop/pods/checkout-5d6b95f89f-pwdlh.yaml         4303    GET /api/v1/namespaces/shop/pods/checkout-5d6b95f89f-pwdlh
+objects/shop/replicasets.apps/checkout-5d6b95f89f.yaml   2251    GET /apis/apps/v1/namespaces/shop/replicasets/checkout-5d6b95f89f
+objects/shop/services/checkout.yaml                      595     GET /api/v1/namespaces/shop/services/checkout
+tree/deployment-checkout.json                            1134    tug tree deployments.apps/checkout -n shop -o json
+why/deployment-checkout.json                             827     tug why deployments.apps/checkout -n shop -o json
+16 files, 111.3 KiB before compression, under tug-bundle-staging-us-deployment-checkout-20261122T225443Z/ in the archive; nothing written
 ```
 
 ## tug gitops

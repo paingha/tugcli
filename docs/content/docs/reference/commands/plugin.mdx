@@ -16,6 +16,19 @@ and about pins to versions that are not installed.
 tug plugin ls
 ```
 
+```console
+$ tug plugin ls
+NAME             VERSION                    PINNED   KIND       CAPABILITIES               LOCATION
+argocd           v0.2.0-23-ge1e7155   -        built-in   list,credential            -
+aws              v0.2.0-23-ge1e7155   -        built-in   accounts,list,credential   -
+azure            v0.2.0-23-ge1e7155   -        built-in   accounts,list,credential   -
+capi             v0.2.0-23-ge1e7155   -        built-in   list,credential            -
+clusterprofile   v0.2.0-23-ge1e7155   -        built-in   list,credential            -
+google           v0.2.0-23-ge1e7155   -        built-in   accounts,list,credential   -
+kubeconfig       v0.2.0-23-ge1e7155   -        built-in   accounts,list,credential   -
+local            v0.2.0-23-ge1e7155   -        built-in   accounts,list,credential   -
+```
+
 ## tug plugin describe
 
 Run a plugin's `describe` operation and show its manifest.
@@ -115,6 +128,23 @@ Start a new plugin with the SDK, tests and a release workflow.
 tug plugin new <name> [flags]
 ```
 
+```console
+$ tug plugin new acme
+  created tug-provider-acme/go.mod
+  created tug-provider-acme/main.go
+  created tug-provider-acme/main_test.go
+  created tug-provider-acme/plugin.yaml
+  created tug-provider-acme/Makefile
+  created tug-provider-acme/.gitignore
+  created tug-provider-acme/.github/workflows/release.yml
+  created tug-provider-acme/README.md
+
+Next:
+  cd tug-provider-acme
+  go mod tidy && make test && make conformance
+go mod tidy fetches the SDK, github.com/paingha/tugcli. If you cannot reach it, set GOPRIVATE=github.com/paingha/tugcli with access to the repository, or scaffold again with --sdk-replace <tugcli checkout>.
+```
+
 | Flag | Meaning |
 | --- | --- |
 | `--lang <go\|python>` | Language. Default: `go`. |
@@ -140,6 +170,24 @@ built-in provider.
 
 ```bash
 tug plugin test <name> [flags]
+```
+
+```console
+$ tug plugin test kubeconfig --account default
+RESULT   CHECK                                  DETAIL
+pass     describe is valid                      kubeconfig v0.2.0-23-ge1e7155 (Clusters in kubeconfig files (~/.kube/config, $KUBECONFIG, or files you name)) speaks [provider/v1alpha1]
+pass     unknown operations are rejected        exit 2, InvalidConfig
+pass     an empty list request is rejected      exit 1, InvalidConfig
+pass     list returns valid clusters            2 clusters
+pass     list is stable across calls            same 2 ids
+pass     credential is valid and unexpired      cluster prod-eu: clientCert, expires 2027-11-22T22:42:22Z
+skip     invalid secrets give Unauthenticated   the plugin declares no secrets
+pass     accounts is valid                      1 account
+pass     SIGTERM stops the plugin promptly      exited within 2s
+pass     stdout carries only one JSON object    7 calls
+pass     serve answers like one-shot mode       answered 5 requests by ID and exited when stdin closed
+
+10 passed, 1 skipped, 0 failed
 ```
 
 | Flag | Meaning |

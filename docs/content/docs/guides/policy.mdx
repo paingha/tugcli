@@ -47,6 +47,8 @@ warning  deploy/checkout, container main: baseline/resources
          next: set resources.requests.cpu, resources.requests.memory and resources.limits.memory on each container, sized from what `tug top` shows it uses
 ```
 
+![tug check deploy/checkout against the baseline pack: warnings for resources, readiness probe, running as root and disruption budget, each with what to do next](/images/cli/check.png)
+
 Objects with the same problem share a finding. Pods, ReplicaSets and Jobs
 that a workload controls aren't reported on their own: the workload's
 template is what to fix, so that's what tug checks. Name one (`tug check

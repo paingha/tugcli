@@ -24,6 +24,14 @@ tug import kubeconfig ./lke.yaml    # import a downloaded kubeconfig
 tug import aws --account work --set regions=eu-west-1
 ```
 
+```console
+$ tug import kubeconfig
+Found these accounts:
+   1) kubeconfig/default  ~/.kube/config
+Import which? [all, or numbers like 1,3; none to cancel]:
+✓ kubeconfig/default: 2 clusters, 2 new, 2 credentials moved to keychain
+```
+
 Secrets a provider declares are asked for once and kept in the keychain. In
 scripts, set `TUG_SECRET_<NAME>` (for example `TUG_SECRET_API_TOKEN`).
 
@@ -36,6 +44,11 @@ are marked stale. Exits 1 if any source failed.
 tug sync
 ```
 
+```console
+$ tug sync
+✓ kubeconfig/default: 2 clusters, 2 credentials moved to keychain
+```
+
 ## tug ls
 
 List clusters in the catalog. Aliases: `tug clusters`, `tug list`. The cluster
@@ -43,6 +56,27 @@ this terminal is connected to is marked `*`.
 
 ```bash
 tug ls [flags]
+```
+
+```console
+$ tug ls
+  NAME               PROVIDER     ACCOUNT         REGION         VERSION   ENV       LABELS               STATUS
+  prod-eu            kubeconfig   default         -              -         prod      team=shop,tier=web
+  staging-us         kubeconfig   default         -              -         staging   team=shop,tier=web
+  payments-prod      aws          work            us-east-1      1.35      prod      team=payments
+  payments-staging   aws          work            us-east-1      1.36      staging   team=payments
+  data-prod          aws          work            us-west-2      1.35      prod      team=data
+  legacy-batch       aws          work            us-east-1      1.31      prod      team=data            stale
+  ml-training        google       analytics-412   us-central1    1.36      dev       gpu=true,team=ml
+  analytics-prod     google       analytics-412   europe-west4   1.35      prod      team=data
+  internal-tools     azure        corp            westeurope     1.36      dev       team=platform
+$ tug ls -l env=prod
+  NAME             PROVIDER     ACCOUNT         REGION         VERSION   ENV    LABELS               STATUS
+  prod-eu          kubeconfig   default         -              -         prod   team=shop,tier=web
+  payments-prod    aws          work            us-east-1      1.35      prod   team=payments
+  data-prod        aws          work            us-west-2      1.35      prod   team=data
+  legacy-batch     aws          work            us-east-1      1.31      prod   team=data            stale
+  analytics-prod   google       analytics-412   europe-west4   1.35      prod   team=data
 ```
 
 | Flag | Meaning |
@@ -79,6 +113,11 @@ tug forget <provider>/<account>
 
 ```bash
 tug forget aws/work
+```
+
+```console
+$ tug forget azure/corp
+Removed azure/corp and 1 cluster
 ```
 
 ## tug team
