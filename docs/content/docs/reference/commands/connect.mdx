@@ -29,6 +29,13 @@ tug connect prod -n payments --proxy
 tug connect gpu=true
 ```
 
+```console
+$ tug connect staging-us -n shop
+Connected to staging-us, namespace shop, read-write
+$ tug connect prod-eu -n shop
+Connected to prod-eu, namespace shop, read-only (tug unlock 15m to allow writes)
+```
+
 ## tug disconnect
 
 Stop pointing this terminal at a cluster. `KUBECONFIG` goes back to what it
@@ -46,6 +53,15 @@ Show this terminal's cluster, namespace and mode. Alias: `tug current`.
 tug status [-o table|json|yaml|name]
 ```
 
+```console
+$ tug status
+cluster:    staging-us
+namespace:  shop
+mode:       read-write
+kubeconfig: /run/user/1000/tug/sessions/feae99b08267/kubeconfig
+env:        staging
+```
+
 `-o name` prints just the cluster name, which is handy in prompts and scripts.
 JSON fields: `session`, `cluster`, `clusterID`, `namespace`, `readOnly`,
 `writable`, `unlockedUntil`, `kubeconfig`, `proxyURL`, `env` (the cluster's env
@@ -61,6 +77,11 @@ Switch this session's namespace. The name is matched fuzzily.
 tug ns [namespace]
 ```
 
+```console
+$ tug ns kube-sys
+Namespace kube-system on staging-us
+```
+
 With no name, tug shows a list in a terminal, or prints all namespaces (the
 current one marked `*`) in a script. If you aren't allowed to list namespaces,
 tug trusts the name you give.
@@ -72,6 +93,11 @@ hook. Takes the same cluster arguments as `connect`. Type `exit` to leave.
 
 ```bash
 tug shell [cluster] [label=value...] [flags]
+```
+
+```console
+$ tug shell prod-eu
+Connected to prod-eu, namespace default, read-only (tug unlock 15m to allow writes)
 ```
 
 | Flag | Meaning |
@@ -123,6 +149,31 @@ It only reads, and exits 1 when a check fails. See the
 tug doctor [cluster] [flags]
 ```
 
+```console
+$ tug doctor
+tug setup
+RESULT   CHECK                        DETAIL
+ok       shell session                session feae99b08267, connected to staging-us (read-write)
+ok       credential store             keychain
+ok       kubectl                      v1.37.2 at /opt/homebrew/bin/kubectl
+ok       kubectl credential plugins   no kuberc, so kubectl runs any credential plugin
+warn     catalog                      9 clusters from 4 sources; 1 no longer listed by their provider
+                                      fix: `tug ls` marks them stale; `tug forget <provider>/<account>` removes a source you no longer use
+
+cluster staging-us
+RESULT   CHECK          DETAIL
+ok       TCP            connected to 127.0.0.1:50931
+ok       TLS            certificate verified, valid until 2027-11-22
+ok       credentials    client certificate, expires in 364 days
+ok       API server     Kubernetes v1.37.0
+ok       clock          in step with the server
+ok       version skew   kubectl v1.37.2 with server v1.37.0
+ok       identity       kubernetes-admin (groups: kubeadm:cluster-admins, system:authenticated)
+ok       permissions    in shop: can list pods, logs, exec, port-forward, patch deployments, delete pods
+
+12 ok, 1 warning, 0 failed
+```
+
 | Flag | Meaning |
 | --- | --- |
 | `--egress-ip <ip>` | Your public IP, for providers that check access lists. |
@@ -141,6 +192,16 @@ Pin a directory, and everything below it, to a cluster and namespace with a
 | `tug pin revoke [dir]` | Stop trusting it. Alias: `deny`. |
 
 Set `TUG_PIN_DISABLE=1` to turn pins off in a shell.
+
+```console
+$ tug pin set staging-us -n shop
+Wrote ~/src/shop/.tug.yaml: staging-us, namespace shop
+pinned by ~/src/shop/.tug.yaml: staging-us, namespace shop
+$ tug pin show
+~/src/shop/.tug.yaml
+  pins:  staging-us, namespace shop
+  state: allowed, and this terminal is pinned by it
+```
 
 ## tug profile
 
@@ -161,6 +222,31 @@ folder. See [Profiles](/docs/guides/profiles).
 A profile can make a session read-only (`safety: read-only`) but never
 read-write: a cluster whose labels make it read-only still needs confirmation
 or `tug unlock` for writes.
+
+```console
+$ tug profile up shop
+Profile shop: connected to staging-us, namespace shop, read-write
+aliases: cache, checkout-logs; tug profile run <alias> runs one
+Forwarding localhost:6379 -> 6379 to sts/redis (pod/redis-0) as shop.redis
+Forwarding localhost:8080 -> 80 to frontend (pod/frontend-bc79969b9-9nw7c) as shop.web
+tugd keeps them open across pod restarts; tug pf profile ls shop shows them, tug profile down shop ends them
+$ tug profile show
+shop  ~/.config/tug/profiles/shop.yaml  (this terminal's)
+  cluster:    staging-us
+  namespace:  shop
+  safety:     auto: the cluster's labels decide
+  proxy:      no
+  aliases:
+    cache          tug sh sts/redis -- redis-cli info keyspace
+    checkout-logs  tug logs checkout -f
+  forwards:
+      NAME         TARGET      NAMESPACE   PORTS       STATE
+      shop.redis   sts/redis   shop        6379:6379   forwarding
+      shop.web     frontend    shop        8080:80     forwarding
+$ tug profile down shop
+Stopped shop.redis
+Stopped shop.web
+```
 
 ## tug tunnel
 

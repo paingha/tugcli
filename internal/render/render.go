@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -59,14 +58,60 @@ func Structured(w io.Writer, f Format, v any) error {
 	}
 }
 
-// Table writes rows under a header, aligned with spaces.
+// tableGap is the space between table columns.
+const tableGap = 3
+
+// Table writes rows under a header, aligned with spaces. Columns are as wide
+// as their widest cell as a terminal shows it, so a cell that carries colour
+// lines up with the cells that do not. The layout is text/tabwriter's: every
+// cell but a line's last is padded, and a column lines up over each run of
+// adjacent lines that have a cell after it.
 func Table(w io.Writer, header []string, rows [][]string) error {
-	tw := tabwriter.NewWriter(w, 0, 4, 3, ' ', 0)
-	fmt.Fprintln(tw, strings.Join(header, "\t"))
-	for _, r := range rows {
-		fmt.Fprintln(tw, strings.Join(r, "\t"))
+	lines := append([][]string{header}, rows...)
+	widths := columnWidths(lines)
+	var b strings.Builder
+	for i, cells := range lines {
+		for j, c := range cells {
+			b.WriteString(c)
+			if j < len(cells)-1 {
+				b.WriteString(strings.Repeat(" ", widths[i][j]-visibleWidth(c)+tableGap))
+			}
+		}
+		b.WriteByte('\n')
 	}
-	return tw.Flush()
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
+// columnWidths returns the width of each padded cell's column: the widest
+// cell, as a terminal shows it, in the run of adjacent lines that all have
+// that column and a cell after it.
+func columnWidths(lines [][]string) [][]int {
+	widths := make([][]int, len(lines))
+	for i, cells := range lines {
+		widths[i] = make([]int, max(len(cells)-1, 0))
+	}
+	for col := 0; ; col++ {
+		found := false
+		for i := 0; i < len(lines); {
+			if len(lines[i])-1 <= col {
+				i++
+				continue
+			}
+			found = true
+			end, width := i, 0
+			for ; end < len(lines) && len(lines[end])-1 > col; end++ {
+				width = max(width, visibleWidth(lines[end][col]))
+			}
+			for k := i; k < end; k++ {
+				widths[k][col] = width
+			}
+			i = end
+		}
+		if !found {
+			return widths
+		}
+	}
 }
 
 // TreeNode is one line of a tree drawn by Tree: a label, a detail shown in a

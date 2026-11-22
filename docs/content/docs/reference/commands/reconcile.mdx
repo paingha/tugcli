@@ -57,6 +57,25 @@ tug reconcile status deploy/kustomize-controller -n flux-system
 tug reconcile status pod/kube-controller-manager-cp-1 -n kube-system -o json
 ```
 
+```console
+$ tug reconcile status deploy/db-operator -n db-system
+deploy/db-operator in db-system is healthy: 1/1 ready, leader db-operator-9c7d999bc-zdrhp
+service account db-system/db-operator
+
+POD                                    STATUS    READY   RESTARTS   NODE                     AGE
+db-operator-9c7d999bc-zdrhp (leader)   Running   1/1     0          tug-docs-control-plane   8m55s
+
+LEASE               HOLDER                                                             RENEWED   DURATION   CHANGES   BASIS
+lease/db-operator   db-operator-9c7d999bc-zdrhp_6f1c2d3e-9a4b-4c11-8e2f-0d5b7a913c42   5s ago    15s        0         observed
+
+Reconciles, as its permissions tell (inferred):
+KIND       RESOURCE                   EVIDENCE
+Backup     backups.db.example.com     its service account may update backups/status through ClusterRole db-operator
+Database   databases.db.example.com   its service account may update databases/status through ClusterRole db-operator
+
+Nothing wrong found.
+```
+
 ## tug reconcile explain
 
 Explain how any object is reconciled. explain starts from `tug why`'s
@@ -89,6 +108,40 @@ tug reconcile explain <resource> [-n namespace] [-o table|json|yaml]
 tug reconcile explain certificate/web-tls
 tug reconcile explain kustomization.kustomize.toolkit.fluxcd.io/apps -n flux-system
 tug reconcile explain db/orders -o json
+```
+
+```console
+$ tug reconcile explain db/orders
+database/orders in shop is not ready: BackupFailing: the latest backup failed (owns 2, 1 not ready)
+generation 1, reconciled
+
+CONDITION   STATUS   REASON          SINCE
+Ready       False    BackupFailing   8m45s
+
+Controllers that may reconcile it, likeliest first:
+  deploy/db-operator in db-system is healthy: 1/1 ready, leader db-operator-9c7d999bc-zdrhp (inferred)
+    observed field manager db-operator has written its status, last at 2026-11-22T22:46:00Z
+    inferred deploy/db-operator in db-system has the same name
+    observed db-operator reported events about it
+    inferred it runs as db-system/db-operator, which may update databases/status through ClusterRole db-operator
+
+FIELD MANAGER               OPERATION   WROTE            LAST WRITE
+db-operator                 Update      status           8m45s ago
+kubectl-client-side-apply   Update      metadata, spec   8m52s ago
+
+error    database/orders: BackupFailing (observed)
+         Ready is False: the latest backup failed
+         next: see its status and events:
+               tug describe databases.db.example.com/orders
+
+error    backup/orders-nightly: UploadFailed (observed)
+         Ready is False: bucket "orders-backups" not found
+         next: see why:
+               tug why backups.db.example.com/orders-nightly
+
+Recent warning events:
+LAST SEEN    OBJECT            REASON         MESSAGE
+8m45s (x3)   database/orders   BackupFailed   backup orders-nightly failed
 ```
 
 ## tug reconcile trace
@@ -129,6 +182,27 @@ tug reconcile trace certificate/web-tls --logs
 tug reconcile trace db/orders --controller deploy/db-operator --since 2h
 ```
 
+```console
+$ tug reconcile trace db/orders --logs --since 1m
+database/orders in shop: generation 1, reconciled
+logs from deploy/db-operator in db-system, the likeliest controller (inferred)
+
+AGE     SOURCE          OBJECT                            WHAT
+33m     event           database/orders                   Warning BackupFailed: backup orders-nightly failed (x3, last 8m46s ago)
+8m53s   metadata        database/orders                   created
+8m53s   managedFields   database/orders                   kubectl-client-side-apply last wrote metadata and spec (Update)
+8m46s   managedFields   database/orders                   db-operator last wrote status (Update)
+8m46s   condition       database/orders                   Ready became False: BackupFailing: the latest backup failed (at generation 1)
+8m46s   owned           backup/orders-nightly             created, owned by database/orders
+8m46s   owned           secret/orders-credentials         created, owned by database/orders
+55s     log             pod/db-operator-9c7d999bc-zdrhp   (inferred) level=info msg="reconciling" database=shop/orders
+35s     log             pod/db-operator-9c7d999bc-zdrhp   (inferred) level=info msg="reconciling" database=shop/orders
+15s     log             pod/db-operator-9c7d999bc-zdrhp   (inferred) level=info msg="reconciling" database=shop/orders
+note: Kubernetes keeps no history of reconciles. This timeline is pieced together from the timestamps objects carry now
+      (when they were created, when each condition last changed, when each field manager last wrote) and from events,
+      which the API server keeps for an hour by default, so older changes, and objects deleted since, leave no trace.
+```
+
 ## tug reconcile events
 
 List the events about an object and everything it owns, oldest first, with
@@ -149,4 +223,10 @@ tug reconcile events <resource> [-f] [-n namespace] [-o table|json|yaml]
 ```bash
 tug reconcile events db/orders
 tug reconcile events deploy/api -f
+```
+
+```console
+$ tug reconcile events db/orders
+LAST SEEN    TYPE      OBJECT            REASON         FROM          MESSAGE
+8m46s (x3)   Warning   database/orders   BackupFailed   db-operator   backup orders-nightly failed
 ```

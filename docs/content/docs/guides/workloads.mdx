@@ -30,6 +30,8 @@ api-server-7d9c-m4qz/api POST /v1/orders 201 42ms
 With `-f`, pods that start later (during a rollout, say) join the stream
 automatically. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop.
 
+![tug logs checkout -f streaming JSON lines from both pods of deploy/checkout, each with a coloured pod/container prefix](/images/cli/logs.png)
+
 | Flag | What it does |
 | --- | --- |
 | `-f`, `--follow` | Keep streaming, including new pods. |
@@ -123,6 +125,8 @@ last exit code), images that won't pull, containers running out of memory,
 missing ConfigMaps or Secrets, failing probes, pods no node can take, volume
 claims stuck in Pending, and recent warning events.
 
+![tug why payments: the pod is in CrashLoopBackOff with last exit code 1, and the next command to run is tug logs with --previous](/images/cli/why.png)
+
 ```console
 $ tug why billing
 deploy/billing in shop is not ready: 0/1 ready
@@ -207,6 +211,8 @@ happened to it lately, use [`tug reconcile`](/docs/guides/controllers).
 part: its ReplicaSets (or revisions), pods and containers, the Services that
 send traffic to it, and the ConfigMaps, Secrets and volume claims its pods use.
 
+![tug tree checkout: the deployment, its Service, ReplicaSet, two pods and their containers, all ready](/images/cli/tree.png)
+
 ```console
 $ tug tree checkout
 deploy/checkout                  ✓ 2/2 ready
@@ -241,6 +247,8 @@ database/orders                ✗ BackupFailing: the latest backup failed
 `tug watch` follows a rollout, or any object's reconciliation, as it happens.
 It starts with the object's state and whatever it owns that isn't ready, then
 prints a line for each change that matters, marked as `tug tree` marks health:
+
+![tug watch cart --until ready following a restart: a new pod goes from Pending to Running, the old one terminates, and the deployment becomes ready](/images/cli/watch.png)
 
 ```console
 $ tug restart checkout

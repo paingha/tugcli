@@ -113,6 +113,37 @@ func TestTable(t *testing.T) {
 			header: []string{"NAME", "STATUS"},
 			want:   "NAME   STATUS\n",
 		},
+		{
+			// Escape sequences take no room on a terminal, so a coloured
+			// cell is padded as if it were plain.
+			name:   "coloured cells",
+			header: []string{"NAME", "ENV", "LABELS"},
+			rows: [][]string{
+				{"prod-eu", "\x1b[1;31mprod\x1b[0m", "team=shop"},
+				{"staging-us", "staging", "team=shop"},
+			},
+			want: "" +
+				"NAME         ENV       LABELS\n" +
+				"prod-eu      \x1b[1;31mprod\x1b[0m      team=shop\n" +
+				"staging-us   staging   team=shop\n",
+		},
+		{
+			// As in text/tabwriter, a column lines up only over adjacent
+			// lines that have a cell after it, and the last cell of a line
+			// is not padded.
+			name:   "ragged rows",
+			header: []string{"A", "B", "C"},
+			rows: [][]string{
+				{"long-cell", "x"},
+				{"y"},
+				{"z", "longer-cell", "w"},
+			},
+			want: "" +
+				"A           B   C\n" +
+				"long-cell   x\n" +
+				"y\n" +
+				"z   longer-cell   w\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
