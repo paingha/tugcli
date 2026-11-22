@@ -79,7 +79,10 @@ jobs:
       - name: Install shells for hook syntax checks
         if: runner.os == 'Linux'
         run: sudo apt-get install -y zsh fish
-      - run: go test -race ./...
+      # internal/cli alone takes 7 to 10 minutes with the race detector on
+      # these runners, so go test's default limit of 10 minutes per package
+      # stopped it more than once.
+      - run: go test -race -timeout 20m ./...
       # This uses the runner's python3. go test above has already run the
       # SDK's example through the conformance suite and compared the SDK's
       # output with the Go SDK's.
