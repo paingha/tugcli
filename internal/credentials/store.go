@@ -43,6 +43,9 @@ func SecretKey(provider, account, name string) string {
 	return "secret/" + provider + "/" + account + "/" + name
 }
 
+// IntelligenceKey holds a model provider's API key, for `tug why --deep`.
+func IntelligenceKey(provider string) string { return "intelligence/" + provider + "/api-key" }
+
 // Backend names.
 const (
 	BackendAuto     = "auto"

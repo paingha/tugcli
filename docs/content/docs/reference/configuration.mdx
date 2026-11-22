@@ -80,6 +80,13 @@ teams:
   - name: infra
     git: {repo: git@github.com:acme/tug-team.git, path: infra.yaml, ref: main}
     publicKey: <base64 ed25519 public key>
+
+intelligence:
+  # Let tug why --deep ask a model to explain a diagnosis. Off by default.
+  enabled: false
+  provider: anthropic
+  model: claude-opus-5-5
+  monthlySpendCapUSD: 20
 ```
 
 ## keyring
@@ -233,6 +240,64 @@ you review it.
     publicKey: {
       type: 'string',
       description: 'The base64 ed25519 key the catalog must be signed with, from tug team keygen.',
+    },
+  }}
+/>
+
+## intelligence
+
+Settings for [`tug why --deep`](/docs/guides/ai-explanations), which sends
+redacted evidence about an object to a model provider after showing it to you
+and asking. API keys are never set here: `tug intelligence key set <provider>`
+keeps one in the keychain, or set `TUG_SECRET_<PROVIDER>_API_KEY`.
+
+<TypeTable
+  type={{
+    enabled: {
+      type: 'boolean',
+      default: 'false',
+      description: 'Turns tug why --deep on. Without it, --deep fails before anything is read or sent.',
+    },
+    provider: {
+      type: 'string',
+      default: '"anthropic"',
+      description: 'anthropic, openai, mistral, or custom for any other OpenAI-compatible API (Ollama, vLLM, LiteLLM).',
+    },
+    model: {
+      type: 'string',
+      default: 'the provider\'s: claude-opus-5-5, gpt-6.2-astra, mistral-large-latest; none for custom',
+      description: 'Any model id the provider serves. tug why --model overrides it for one call.',
+    },
+    baseURL: {
+      type: 'string',
+      default: 'the provider\'s API; required for custom',
+      description: 'Where requests go, for a gateway or a custom endpoint, such as http://localhost:11434/v1. It must use https unless it is on this machine.',
+    },
+    timeout: {
+      type: 'duration',
+      default: '"5m"',
+      description: 'How long one request may take.',
+    },
+    maxOutputTokens: {
+      type: 'integer',
+      default: '16000',
+      description: 'The longest answer, thinking included. The cost estimate counts up to it.',
+    },
+    monthlySpendCapUSD: {
+      type: 'number',
+      default: '0 (no cap)',
+      description: 'Refuse a call that could take this calendar month\'s (UTC) spend past it, or whose model has no price.',
+    },
+    effort: {
+      type: 'string',
+      default: '"high"',
+      description: 'For Anthropic models: how hard the model works on its answer, low, medium, high, xhigh or max.',
+    },
+    prices: {
+      type: '{ model, input, output, cacheRead }[]',
+      default: '[]',
+      description:
+        'Prices in US dollars per million tokens that add to or override the built-in table. model is an id or the start of one; the longest match wins.',
     },
   }}
 />

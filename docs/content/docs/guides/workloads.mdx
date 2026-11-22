@@ -148,6 +148,11 @@ It works for deployments, statefulsets, daemonsets, jobs and pods
 "Nothing wrong found." Use `-o json` or `-o yaml` to feed the findings to
 another tool.
 
+When the cause still isn't clear, `tug why billing --deep` asks a model you
+choose to explain the same evidence and the end of the failing containers'
+logs, after showing you exactly what it will send and what it may cost. It is
+off until you turn it on; see [AI explanations](/docs/guides/ai-explanations).
+
 ### Custom resources and other kinds
 
 Name any other kind as kubectl does, by its plural, singular or short name,
