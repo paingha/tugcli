@@ -30,7 +30,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "ionos"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // DefaultAPIURL is version 6 of the IONOS Cloud API.

@@ -31,7 +31,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "scaleway"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // DefaultAPIURL is the Scaleway API.

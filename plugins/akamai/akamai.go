@@ -26,7 +26,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "akamai"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // DefaultAPIURL is the Linode API v4.

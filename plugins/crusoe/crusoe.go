@@ -32,7 +32,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "crusoe"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // DefaultAPIURL is version 1 of the Crusoe Cloud API.

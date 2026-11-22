@@ -31,7 +31,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "oracle"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // DefaultAPIURL is where OCI's services are in the commercial realm, oc1.

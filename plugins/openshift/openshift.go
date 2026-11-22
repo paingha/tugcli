@@ -41,7 +41,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "openshift"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // Endpoints of Red Hat's services.

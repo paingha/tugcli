@@ -39,7 +39,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "omni"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // Account settings.

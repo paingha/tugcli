@@ -29,7 +29,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "vultr"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // DefaultAPIURL is the Vultr API.

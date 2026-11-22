@@ -25,7 +25,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "tailscale"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // ConfigTag is the account setting that names the tag marking the API server

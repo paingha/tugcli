@@ -6,7 +6,8 @@ points each terminal at one cluster without touching `~/.kube/config`.
 
 **Documentation:** [paingha.github.io/tugcli](https://paingha.github.io/tugcli/)
 has the full user guide: installing, every provider and command, and writing
-plugins.
+plugins. [CHANGELOG.md](CHANGELOG.md) says what each release changed and how
+to upgrade.
 
 > Status: early development. Phases 0 and 1 are in place, and most of v1:
 > tugd (the local API proxy, tunnels to private clusters, named
