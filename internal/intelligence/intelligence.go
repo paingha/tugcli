@@ -171,6 +171,36 @@ func SettingsFrom(c config.IntelligenceConfig, o Overrides) (Settings, error) {
 	return s, nil
 }
 
+// Validate checks each of config.yaml's intelligence settings that is set,
+// without requiring the ones a working setup needs together, such as a
+// custom provider's model and address, so that they can be set one at a
+// time. SettingsFrom checks those.
+func Validate(c config.IntelligenceConfig) error {
+	if p := strings.ToLower(strings.TrimSpace(c.Provider)); p != "" {
+		if err := CheckProvider(p); err != nil {
+			return fmt.Errorf("intelligence.provider: %w", err)
+		}
+	}
+	if e := strings.ToLower(c.Effort); e != "" && !slices.Contains(efforts, e) {
+		return fmt.Errorf("intelligence.effort %q is not one of %s", c.Effort, strings.Join(efforts, ", "))
+	}
+	if u := strings.TrimRight(strings.TrimSpace(c.BaseURL), "/"); u != "" {
+		if err := checkBaseURL(u); err != nil {
+			return err
+		}
+	}
+	switch {
+	case c.Timeout.Duration < 0:
+		return errors.New("intelligence.timeout cannot be negative")
+	case c.MaxOutputTokens < 0:
+		return errors.New("intelligence.maxOutputTokens cannot be negative")
+	case c.MonthlySpendCapUSD < 0:
+		return errors.New("intelligence.monthlySpendCapUSD cannot be negative")
+	}
+	_, err := LoadPrices(c.Prices)
+	return err
+}
+
 // checkBaseURL refuses an address an API key would travel to in clear text,
 // unless it stays on this machine.
 func checkBaseURL(raw string) error {
