@@ -40,6 +40,13 @@ checksum:
     - glob: ./build/plugins/*.tar.gz
 
 release:
+  # The notes open with a link to the release's entry in CHANGELOG.md,
+  # written for users and with upgrade notes; GoReleaser's commit list
+  # follows. GitHub makes a heading's anchor by dropping its dots, so
+  # "## 0.2.0" is #020 and "## 1.0.0-rc.1" is #100-rc1. A release with no
+  # entry still links to the file.
+  header: |
+    What changed and how to upgrade: [CHANGELOG.md](https://github.com/paingha/tugcli/blob/{{ .Tag }}/CHANGELOG.md#{{ replace .Version "." "" }})
   extra_files:
     - glob: ./build/plugins/*.tar.gz
 
