@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -59,7 +60,7 @@ func TestSettingsCommands(t *testing.T) {
 		"intelligence.monthlySpendCapUSD": {Kind: "number", Value: "20", Source: "config.yaml"},
 	} {
 		want.Key = key
-		if got[key] != want {
+		if !reflect.DeepEqual(got[key], want) {
 			t.Errorf("settings list %s = %+v, want %+v", key, got[key], want)
 		}
 	}
@@ -87,7 +88,7 @@ func TestSettingsCommands(t *testing.T) {
 		{[]string{"intelligence.enabled", "maybe"}, `intelligence.enabled takes true or false, not "maybe"`},
 		{[]string{"keyring.backend", "vault"}, `keyring.backend "vault" is not one of auto, keychain, file`},
 		{[]string{"intelligence.apiKey", "sk-ant-not-in-config"}, "secrets never go in config.yaml; store a model provider's API key with `tug intelligence key set <provider>`"},
-		{[]string{"plugins.indexes", "x"}, `"plugins.indexes" is not a setting tug settings can change; see ` + "`tug settings list`"},
+		{[]string{"plugins.bogus", "x"}, `"plugins.bogus" is not a setting tug settings can change; see ` + "`tug settings list`"},
 	} {
 		r := tug(t, append([]string{"settings", "set"}, tt.args...)...)
 		if r.code != 1 || !strings.Contains(r.stderr, tt.want) {

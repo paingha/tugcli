@@ -514,7 +514,7 @@ could cost, and asks before sending anything.`,
 					changes = append(changes, config.Change{Setting: c.setting, Value: c.value})
 				case switching:
 					// The configured one was for the other provider.
-					changes = append(changes, config.Change{Setting: c.setting, Unset: true})
+					changes = append(changes, config.Change{Setting: c.setting, Op: config.OpUnset})
 				}
 			}
 			var s intelligence.Settings

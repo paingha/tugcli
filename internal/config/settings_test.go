@@ -23,11 +23,9 @@ func TestSettings(t *testing.T) {
 			t.Errorf("Settings lacks %q: %v", want, keys)
 		}
 	}
-	// Lists and maps are not settings.
-	for _, not := range []string{"guard.readOnlyLabels", "plugins.indexes", "plugins.timeouts", "plugins.pins", "intelligence.prices", "teams"} {
-		if _, ok := LookupSetting(not); ok {
-			t.Errorf("%s is listed as a setting", not)
-		}
+	// Teams have entries of their own, so they are left to tug team.
+	if _, ok := LookupSetting("teams"); ok {
+		t.Error("teams is listed as a setting")
 	}
 	s, ok := LookupSetting("Intelligence.MonthlySpendCapUSD")
 	if !ok || s.Key != "intelligence.monthlySpendCapUSD" {
@@ -97,16 +95,16 @@ func TestEditSettings(t *testing.T) {
 
 	// Unset removes a key and a mapping it leaves empty, but not one with a
 	// comment of its own.
-	removed, err := EditSettings(dir, []Change{
-		{Setting: mustSetting(t, "sessions.maxAge"), Unset: true},
-		{Setting: mustSetting(t, "intelligence.model"), Unset: true},
-		{Setting: mustSetting(t, "intelligence.effort"), Unset: true},
+	effects, err := EditSettings(dir, []Change{
+		{Setting: mustSetting(t, "sessions.maxAge"), Op: OpUnset},
+		{Setting: mustSetting(t, "intelligence.model"), Op: OpUnset},
+		{Setting: mustSetting(t, "intelligence.effort"), Op: OpUnset},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(removed) != 2 || removed[0].Key != "sessions.maxAge" || removed[1].Key != "intelligence.model" {
-		t.Errorf("removed = %v, want sessions.maxAge and intelligence.model", removed)
+	if strings.Join(effects, " ") != "removed removed unchanged" {
+		t.Errorf("effects = %v, want removed removed unchanged", effects)
 	}
 	if got, want := read(), "# my settings\nkubectl: kubectl # the one on PATH\nintelligence:\n  # for --deep\n  provider: openai # mine\n  enabled: true\n"; got != want {
 		t.Errorf("file after unset =\n%s\nwant\n%s", got, want)
@@ -139,11 +137,11 @@ func TestEditSettingsRefuses(t *testing.T) {
 		check  func(*Config) error
 		want   string
 	}{
-		{name: "a bool", change: Change{Setting: mustSetting(t, "intelligence.enabled"), Value: "maybe"}, want: `intelligence.enabled takes true or false, not "maybe"`},
-		{name: "an int", change: Change{Setting: mustSetting(t, "intelligence.maxOutputTokens"), Value: "lots"}, want: `intelligence.maxOutputTokens takes a whole number, not "lots"`},
-		{name: "a number", change: Change{Setting: mustSetting(t, "intelligence.monthlySpendCapUSD"), Value: "$20"}, want: `intelligence.monthlySpendCapUSD takes a number, not "$20"`},
-		{name: "a duration", change: Change{Setting: mustSetting(t, "sessions.maxAge"), Value: "a week"}, want: `sessions.maxAge takes a duration such as "30s" or "5m", not "a week"`},
-		{name: "an empty string", change: Change{Setting: mustSetting(t, "kubectl"), Value: " "}, want: "kubectl cannot be set to nothing; use tug settings unset kubectl"},
+		{name: "a bool", change: Change{Setting: mustSetting(t, "intelligence.enabled"), Value: "maybe"}, want: "intelligence.enabled in " + path + `: intelligence.enabled takes true or false, not "maybe"`},
+		{name: "an int", change: Change{Setting: mustSetting(t, "intelligence.maxOutputTokens"), Value: "lots"}, want: "intelligence.maxOutputTokens in " + path + `: intelligence.maxOutputTokens takes a whole number, not "lots"`},
+		{name: "a number", change: Change{Setting: mustSetting(t, "intelligence.monthlySpendCapUSD"), Value: "$20"}, want: "intelligence.monthlySpendCapUSD in " + path + `: intelligence.monthlySpendCapUSD takes a number, not "$20"`},
+		{name: "a duration", change: Change{Setting: mustSetting(t, "sessions.maxAge"), Value: "a week"}, want: "sessions.maxAge in " + path + `: sessions.maxAge takes a duration such as "30s" or "5m", not "a week"`},
+		{name: "an empty string", change: Change{Setting: mustSetting(t, "kubectl"), Value: " "}, want: "kubectl in " + path + ": kubectl cannot be set to nothing"},
 		{
 			name: "what check refuses", change: Change{Setting: mustSetting(t, "kubectl"), Value: "oc"},
 			check: func(c *Config) error {
@@ -172,7 +170,7 @@ func TestEditSettingsRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := EditSettings(dir, []Change{{Setting: mustSetting(t, "intelligence.model"), Value: "x"}}, nil); err == nil ||
-		err.Error() != "intelligence.model in "+path+": intelligence is not a mapping; edit it by hand" {
+		err.Error() != "intelligence.model in "+path+": intelligence is not a mapping" {
 		t.Errorf("EditSettings under a scalar = %v", err)
 	}
 	if err := os.WriteFile(path, []byte("- a list\n"), 0o600); err != nil {
