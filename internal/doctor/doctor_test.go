@@ -30,7 +30,12 @@ const token = "doctor-token"
 
 // fakeAPI is a Kubernetes API server with a configurable clock and version.
 type fakeAPI struct {
-	srv     *httptest.Server
+	srv *httptest.Server
+	// base is the moment the check runs at, as config gives it, in whole
+	// seconds as HTTP dates are. now is the server's clock, which a case
+	// sets relative to base, so the skew the check finds does not depend
+	// on how long the test takes.
+	base    time.Time
 	now     time.Time
 	version string
 	// versionStatus, when set, is the status /version answers with.
@@ -41,7 +46,8 @@ type fakeAPI struct {
 
 func newFakeAPI(t *testing.T) *fakeAPI {
 	t.Helper()
-	f := &fakeAPI{now: time.Now(), version: "v1.35.1"}
+	base := time.Now().Truncate(time.Second)
+	f := &fakeAPI{base: base, now: base, version: "v1.35.1"}
 	f.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Date", f.now.UTC().Format(http.TimeFormat))
 		w.Header().Set("Content-Type", "application/json")
@@ -97,8 +103,9 @@ func (f *fakeAPI) caPEM() []byte {
 func (f *fakeAPI) config(t *testing.T) Config {
 	t.Helper()
 	cl := &catalog.Cluster{ID: "kubeconfig/x/dev", Name: "dev", Server: f.srv.URL, CAData: f.caPEM()}
-	exp := time.Now().Add(14 * time.Minute)
+	exp := f.base.Add(14 * time.Minute)
 	return Config{
+		Now:     func() time.Time { return f.base },
 		Session: SessionInfo{ID: "abc123", Cluster: "dev", Kubeconfig: "/run/k", Env: "/run/k"},
 		Store:   StoreInfo{Name: "memory"},
 		Kubectl: KubectlInfo{Path: "/usr/bin/kubectl", Version: func(context.Context) (string, error) { return "v1.35.0", nil }},
@@ -236,13 +243,13 @@ func TestClusterFailures(t *testing.T) {
 		},
 		{
 			name:   "clock far off",
-			mutate: func(f *fakeAPI, _ *Config) { f.now = time.Now().Add(-10 * time.Minute) },
+			mutate: func(f *fakeAPI, _ *Config) { f.now = f.base.Add(-10 * time.Minute) },
 			check:  "clock", status: Fail, detail: "10m0s off", fixHint: "synchronisation",
 		},
 		{
 			name:   "clock slightly off",
-			mutate: func(f *fakeAPI, _ *Config) { f.now = time.Now().Add(time.Minute) },
-			check:  "clock", status: Warn, detail: "off the server's",
+			mutate: func(f *fakeAPI, _ *Config) { f.now = f.base.Add(time.Minute) },
+			check:  "clock", status: Warn, detail: "1m0s off the server's",
 		},
 		{
 			name: "old kubectl",
