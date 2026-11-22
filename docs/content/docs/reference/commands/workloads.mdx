@@ -182,6 +182,39 @@ tug tree checkout
 tug tree cronjob/nightly-backup
 ```
 
+## tug check
+
+Check the workloads and other objects in a namespace, in every namespace, or
+one target, against policy packs: resource requests and limits, probes, a
+non-root user, allowed image registries and storage classes,
+PodDisruptionBudgets, topology spread, labels, annotations, and conditions a
+custom resource must have. Findings are written as `tug why` writes them. tug
+has one pack built in, `baseline`, whose checks are all advisory; others come
+from `policy.packs` in config.yaml. check exits 1 only when a blocking check
+fails. It only reads, and never reads a Secret's data. See
+[Policy packs](/docs/guides/policy).
+
+```bash
+tug check [target] [-n namespace | -A] [--pack name]... [-o table|json|yaml]
+tug check --list [--pack name]...
+```
+
+| Flag | What it does |
+| --- | --- |
+| `-n`, `--namespace` | The namespace to check. Default: the session's. |
+| `-A`, `--all-namespaces` | Check every namespace, and the kinds that aren't namespaced. |
+| `--pack <name>` | Run this pack (repeatable). Default: the packs `policy.default` names, or all. |
+| `-o`, `--output` | `table`, `json` or `yaml`. |
+| `--list` | List the packs check would run and their checks, without reading the cluster. |
+
+```bash
+tug check
+tug check -A --pack platform
+tug check deploy/api -o json
+tug check certificate/web-tls
+tug check --cluster-selector env=prod --pack platform
+```
+
 ## tug watch
 
 Follow a workload's rollout, or any object's reconciliation, as it happens: one

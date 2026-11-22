@@ -1,0 +1,69 @@
+# A pack with a check of every type, as a team might write one.
+apiVersion: tug.policy/v1alpha1
+kind: PolicyPack
+name: acme
+version: 2.1.0
+description: What Acme's platform team asks of every service.
+checks:
+  - id: team-label
+    severity: error
+    enforcement: blocking
+    description: Workloads say which team owns them.
+    remediation: add a team label to the workload
+    requiredLabels: [team]
+  - id: on-call
+    severity: info
+    description: Workloads say who to page.
+    requiredAnnotations: [acme.example/on-call]
+  - id: registries
+    severity: error
+    enforcement: blocking
+    description: Images come from Acme's registries.
+    remediation: push the image to registry.acme.example and run it from there
+    imageRegistries:
+      allow: [registry.acme.example, ghcr.io/acme]
+  - id: memory
+    severity: warning
+    description: Containers ask for memory and have a memory limit.
+    resources:
+      requests: [memory]
+      limits: [memory]
+  - id: probes
+    severity: warning
+    description: Services have readiness and startup probes.
+    match:
+      kinds: [Deployment]
+      excludeNamespaces: [kube-system]
+    probes: [readiness, startup]
+  - id: budget
+    severity: warning
+    description: Services with three or more replicas have a budget.
+    podDisruptionBudget:
+      minReplicas: 3
+  - id: non-root
+    severity: error
+    enforcement: blocking
+    description: Nothing runs as root or privileged.
+    securityContext:
+      runAsNonRoot: true
+      privileged: false
+  - id: zones
+    severity: info
+    description: Services spread over zones.
+    match:
+      labels: {tier: frontend}
+    topologySpread:
+      topologyKeys: [topology.kubernetes.io/zone]
+  - id: storage
+    severity: warning
+    description: Volumes use the replicated storage classes.
+    match:
+      kinds: [PersistentVolumeClaim, StatefulSet]
+    storageClasses:
+      allow: [replicated-ssd]
+  - id: databases-ready
+    severity: error
+    description: Databases are ready.
+    match:
+      kinds: [Database.db.example.com]
+    conditions: [Ready]
