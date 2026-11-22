@@ -26,7 +26,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "rancher"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // ConfigURL is the account setting that names the Rancher server, such as

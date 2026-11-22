@@ -29,7 +29,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "ibm"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // Default endpoints: the global Kubernetes Service API and IAM.

@@ -29,7 +29,7 @@ lists its SHA-256 in the release's signed `checksums.txt`.
     its `checksums.txt`:
 
     ```bash
-    tug plugin install https://github.com/paingha/tugcli/releases/download/<tag>/tug-provider-akamai_0.1.0.tar.gz \
+    tug plugin install https://github.com/paingha/tugcli/releases/download/<tag>/tug-provider-akamai_0.1.1.tar.gz \
       --sha256 <sha256>
     ```
 
@@ -44,7 +44,7 @@ lists its SHA-256 in the release's signed `checksums.txt`.
     git clone https://github.com/paingha/tugcli.git && cd tugcli
     make plugins                                  # builds the plugins for this machine
     tug plugin package plugins/akamai -o dist     # an archive that records the build's checksum
-    tug plugin install dist/tug-provider-akamai_0.1.0.tar.gz
+    tug plugin install dist/tug-provider-akamai_0.1.1.tar.gz
     ```
 
     Once it's installed, you can delete the clone. Working on the plugin

@@ -26,7 +26,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "ovhcloud"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // Endpoints are the OVHcloud API's regional endpoints, by the name the

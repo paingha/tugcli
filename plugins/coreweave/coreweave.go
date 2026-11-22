@@ -20,7 +20,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "coreweave"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // DefaultAPIURL is the CoreWeave API.

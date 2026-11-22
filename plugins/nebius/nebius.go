@@ -27,7 +27,7 @@ import (
 // Name and version of the plugin.
 const (
 	Name    = "nebius"
-	Version = "0.1.0"
+	Version = "0.1.1"
 )
 
 // CLI is the name of the Nebius AI Cloud CLI executable.

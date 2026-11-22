@@ -2,7 +2,7 @@ apiVersion: tug.plugin/v1alpha1
 kind: ProviderPlugin
 metadata:
   name: akamai
-  version: 0.1.0
+  version: 0.1.1
   publisher: tug
   homepage: https://github.com/paingha/tugcli/tree/main/plugins/akamai
 spec:
