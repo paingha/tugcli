@@ -476,6 +476,14 @@ func TestAPIAcrossClusters(t *testing.T) {
 	if !strings.Contains(out, "shop-staging-old | autoscaling/v2beta2") || !strings.Contains(out, "shop-staging-new | Nothing deprecated") {
 		t.Errorf("tug api deprecations across clusters:\n%s", out)
 	}
+	for _, tt := range []struct{ args, want string }{
+		{"api --cluster-selector env=staging", "tug api does not run across clusters, but its commands deprecations, resources, server-version and versions do"},
+		{"crd --cluster-selector env=staging", "tug crd does not run across clusters, but its commands explain and schema do"},
+	} {
+		if r := tug(t, strings.Fields(tt.args)...); r.code != 1 || !strings.Contains(r.stderr, tt.want) {
+			t.Errorf("tug %s = %d, stderr %q, want %q", tt.args, r.code, r.stderr, tt.want)
+		}
+	}
 	out = mustTug(t, "crd", "explain", "widget", "--cluster-selector", "env=staging")
 	if !strings.Contains(out, "shop-staging-old | Stored versions:  v1beta1, v1 (objects may still be stored at v1beta1") ||
 		!strings.Contains(out, "shop-staging-new | Stored versions:  v1\n") {

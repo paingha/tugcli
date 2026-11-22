@@ -28,10 +28,9 @@ import (
 func newAPICmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "api",
-		// The commands beneath it that only read one cluster run across
+		// The commands beneath it that read one cluster run across
 		// clusters; diff, which reads two of its own, does not.
-		Annotations: acrossClusters(acrossInProcess),
-		Short:       "Explore the APIs a cluster serves, their deprecations and its Kubernetes version",
+		Short: "Explore the APIs a cluster serves, their deprecations and its Kubernetes version",
 		Long: `Explore what the session's cluster serves: its resource types and API versions
 from discovery, the versions that upstream Kubernetes removes in a later
 release or that a custom resource definition deprecates, and where its
@@ -622,9 +621,8 @@ func (a *app) apiWarning(msg string) {
 
 func newCRDCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:         "crd",
-		Annotations: acrossClusters(acrossInProcess),
-		Short:       "Explain a custom resource definition and its schema",
+		Use:   "crd",
+		Short: "Explain a custom resource definition and its schema",
 		Long: `Explain a custom resource definition: its versions and which are served,
 stored and deprecated, how objects are converted between them, its printer
 columns, and its schema field by field. Name it as kubectl names its resource,
