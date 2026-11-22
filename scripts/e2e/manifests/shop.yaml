@@ -1,0 +1,29 @@
+# What tug diff -f and tug drift compare. The commands suite applies it
+# server-side, as field manager e2e, to both clusters.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-config
+  namespace: e2e-diff
+data:
+  greeting: hello
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop
+  namespace: e2e-diff
+  labels: {app: shop}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: shop}
+  template:
+    metadata:
+      labels: {app: shop}
+    spec:
+      containers:
+        - name: shop
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80

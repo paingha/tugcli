@@ -1,0 +1,56 @@
+# What tug support bundle collects and must redact. Every value that ends in
+# a short hex code must stay out of the bundle. kubectl apply copies the
+# Secret's data into its last-applied annotation, which tug redacts too.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault
+  namespace: e2e-bundle
+stringData:
+  password: e2e-secret-data-7f3a
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: settings
+  namespace: e2e-bundle
+data:
+  mode: e2e-configmap-value-91c2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: e2e-bundle
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: api}
+  template:
+    metadata:
+      labels: {app: api}
+    spec:
+      containers:
+        - name: api
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              echo "api started"
+              echo "Authorization: Bearer e2e-bearer-token-44d1"
+              echo "serving cust-80417"
+              while true; do sleep 3600; done
+          env:
+            - name: API_KEY
+              value: e2e-env-value-5b8e
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: vault, key: password}
+          envFrom:
+            - configMapRef: {name: settings}
+          volumeMounts:
+            - {name: vault, mountPath: /etc/vault, readOnly: true}
+      volumes:
+        - name: vault
+          secret: {secretName: vault}

@@ -22,7 +22,7 @@ each piece.
 | Lint (golangci-lint v2, [.golangci.yml](.golangci.yml)) | `make lint` |
 | Format | `make fmt` |
 | Build the first-party plugins | `make plugins` |
-| End to end against a kind cluster | `make e2e-kind` |
+| End to end against kind clusters | `make e2e-kind` (some suites: `E2E_SUITES="core flux"`) |
 
 Before calling a change done, run `make lint test`. If golangci-lint is not
 installed, run `go vet ./...` and `make test`, and say that lint was not run.

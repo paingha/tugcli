@@ -1,0 +1,77 @@
+# A custom resource that no controller reconciles: the commands suite sets
+# its status by hand. v1alpha1 is served and deprecated, for tug api
+# deprecations; v1 is stored and has printer columns and a schema with
+# descriptions, an enum and a default, for tug crd.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.e2e.tug.dev
+spec:
+  group: e2e.tug.dev
+  names:
+    kind: Widget
+    listKind: WidgetList
+    plural: widgets
+    singular: widget
+    shortNames: [wdg]
+    categories: [e2e]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: false
+      deprecated: true
+      deprecationWarning: e2e.tug.dev/v1alpha1 Widget is deprecated; use e2e.tug.dev/v1
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Size
+          type: integer
+          jsonPath: .spec.size
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Widget is a custom resource that tug's end-to-end test owns.
+          properties:
+            spec:
+              type: object
+              description: Spec says what the widget should be.
+              required: [size]
+              properties:
+                size:
+                  type: integer
+                  minimum: 1
+                  description: Size is how many parts the widget has.
+                colour:
+                  type: string
+                  enum: [red, green, blue]
+                  default: green
+                  description: Colour is the widget's colour.
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type: {type: string}
+                      status: {type: string}
+                      reason: {type: string}
+                      message: {type: string}
+                      lastTransitionTime: {type: string, format: date-time}
+                      observedGeneration: {type: integer, format: int64}

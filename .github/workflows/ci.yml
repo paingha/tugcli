@@ -87,9 +87,16 @@ jobs:
         if: runner.os == 'Linux'
         run: make python-sdk-test
 
+  # Each suite of scripts/e2e-kind.sh runs on new clusters of its own, in
+  # parallel, so the e2e run takes as long as the slowest suite.
   e2e-kind:
+    name: e2e-kind (${{ matrix.suite }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [core, commands, flux, argocd]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -99,8 +106,13 @@ jobs:
       - uses: helm/kind-action@v1
         with:
           cluster_name: tug-e2e
+      # tug drift compares the cluster with a second one, made with the
+      # same kind, and so the same Kubernetes version.
+      - name: Create a second cluster
+        if: matrix.suite == 'commands'
+        run: kind create cluster --name tug-e2e-b --wait 120s
       - run: make build
-      - run: TUG_BIN=$PWD/bin/tug KIND_CLUSTER=tug-e2e ./scripts/e2e-kind.sh
+      - run: TUG_BIN=$PWD/bin/tug KIND_CLUSTER=tug-e2e KIND_CLUSTER_B=tug-e2e-b ./scripts/e2e-kind.sh ${{ matrix.suite }}
 
   # A fast config check on every push. The full snapshot build (about ten
   # minutes for six targets) runs in release-snapshot.yml only when release

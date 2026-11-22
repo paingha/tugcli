@@ -14,6 +14,10 @@ LDFLAGS  := -s -w \
 
 GOLANGCI_LINT ?= golangci-lint
 KIND_CLUSTER  ?= tug-e2e
+# The commands suite of e2e-kind compares KIND_CLUSTER with a second cluster.
+KIND_CLUSTER_B ?= $(KIND_CLUSTER)-b
+# The suites e2e-kind runs, such as "core flux"; every suite when empty.
+E2E_SUITES    ?=
 
 .PHONY: all
 all: lint test build
@@ -93,9 +97,15 @@ sigstore-root: ## Refresh the Sigstore trust root built into tug; review the dif
 	go generate ./internal/sigstore
 
 .PHONY: e2e-kind
-e2e-kind: build ## Create a kind cluster and run the end-to-end script against it
+e2e-kind: build ## Create kind clusters and run the end-to-end suites (E2E_SUITES) against them
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --name $(KIND_CLUSTER) --wait 60s
-	TUG_BIN=$(abspath $(BIN)) KIND_CLUSTER=$(KIND_CLUSTER) ./scripts/e2e-kind.sh
+	$(if $(filter commands,$(or $(E2E_SUITES),commands)),kind get clusters | grep -qx $(KIND_CLUSTER_B) || kind create cluster --name $(KIND_CLUSTER_B) --wait 60s)
+	TUG_BIN=$(abspath $(BIN)) KIND_CLUSTER=$(KIND_CLUSTER) KIND_CLUSTER_B=$(KIND_CLUSTER_B) ./scripts/e2e-kind.sh $(E2E_SUITES)
+
+.PHONY: e2e-kind-clean
+e2e-kind-clean: ## Delete the kind clusters e2e-kind made, so the next run starts on new ones
+	kind delete cluster --name $(KIND_CLUSTER)
+	kind delete cluster --name $(KIND_CLUSTER_B)
 
 .PHONY: snapshot
 snapshot: ## Build release artifacts locally without publishing
@@ -107,4 +117,4 @@ clean:
 
 .PHONY: help
 help:
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'

@@ -1,0 +1,33 @@
+# A deployment that passes every check of tug check's baseline pack: requests
+# and a memory limit, probes, a user that is not root and a read-only root
+# filesystem. With one replica, it needs no PodDisruptionBudget or spread.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checked
+  namespace: e2e-check
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: checked}
+  template:
+    metadata:
+      labels: {app: checked}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+        - name: checked
+          image: busybox:1.37
+          command: ["sh", "-c", "while true; do sleep 3600; done"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 32Mi}
+          readinessProbe:
+            exec: {command: ["true"]}
+          livenessProbe:
+            exec: {command: ["true"]}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false

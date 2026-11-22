@@ -1,0 +1,15 @@
+# A job that fails at once and is not retried, for tug watch --until ready.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fails
+  namespace: e2e-why
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fails
+          image: busybox:1.37
+          command: ["false"]
