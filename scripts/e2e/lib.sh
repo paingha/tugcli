@@ -64,6 +64,21 @@ eventually() {
   fail "timed out waiting for $what"
 }
 
+# rolled_out waits up to five minutes for the workloads of each kind given
+# after the namespace to roll out, and when they do not, shows the
+# namespace's pods and events before it fails.
+rolled_out() {
+  local ns=$1 kind
+  shift
+  for kind in "$@"; do
+    if ! kubectl -n "$ns" rollout status "$kind" --timeout=300s; then
+      kubectl -n "$ns" get pods -o wide >&2 || true
+      kubectl -n "$ns" get events --sort-by=.lastTimestamp >&2 || true
+      fail "the ${kind}s in $ns did not roll out in five minutes"
+    fi
+  done
+}
+
 # serves reports whether a URL answers, writing what it sends to the file
 # given, if any.
 serves() {

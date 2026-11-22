@@ -10,7 +10,7 @@ lacks "$out" '"flux"'
 
 echo "--- install Flux $FLUX_VERSION, and deliver podinfo with it"
 kubectl apply -f "https://github.com/fluxcd/flux2/releases/download/$FLUX_VERSION/install.yaml"
-kubectl -n flux-system wait --for=condition=Available deployment --all --timeout=300s
+rolled_out flux-system deployment
 kubectl create namespace e2e-flux
 kubectl apply -f "$manifests/flux.yaml"
 kubectl -n flux-system wait --for=condition=Ready kustomization/podinfo --timeout=300s

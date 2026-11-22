@@ -9,10 +9,15 @@ lacks "$out" '"argocd"'
 
 echo "--- install Argo CD $ARGOCD_VERSION's core, and deliver the guestbook through an app of apps"
 kubectl create namespace argocd
-kubectl apply -n argocd --server-side --force-conflicts \
-  -f "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_VERSION/manifests/core-install.yaml"
-kubectl -n argocd rollout status deployment --timeout=300s
-kubectl -n argocd rollout status statefulset --timeout=300s
+# Redis is pulled from Docker Hub, as every other image of these suites is,
+# rather than from public.ecr.aws, which limits anonymous pulls: on CI, its
+# redis once did not start in five minutes while the images from quay.io
+# took seconds.
+curl -fsSL "https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_VERSION/manifests/core-install.yaml" |
+  sed 's#public\.ecr\.aws/docker/library/redis:#redis:#' > "$work/argocd-core.yaml"
+grep -q 'image: redis:' "$work/argocd-core.yaml" || fail "Argo CD's core install no longer names redis as expected" "$work/argocd-core.yaml"
+kubectl apply -n argocd --server-side --force-conflicts -f "$work/argocd-core.yaml"
+rolled_out argocd deployment statefulset
 kubectl apply -f "$manifests/argocd.yaml"
 eventually 60 "the app of apps to create example.guestbook" kubectl -n argocd get application example.guestbook
 kubectl -n argocd wait --for=jsonpath='{.status.sync.status}'=Synced application/example.guestbook --timeout=300s
