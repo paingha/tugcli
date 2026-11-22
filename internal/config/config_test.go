@@ -224,6 +224,8 @@ plugins:
   wasm:
     prefer: true
     memoryLimitMiB: 512
+  limits: {cpuSeconds: 60, memoryMiB: 1024, timeout: 10m}
+  pins: {acme: "0.3.1"}
 sessions:
   maxAge: 24h
 oidc:
@@ -250,6 +252,12 @@ oidc:
 	}
 	if !c.Plugins.WASM.Prefer || c.Plugins.WASM.MemoryLimit() != 512<<20 {
 		t.Errorf("Plugins.WASM = %+v (limit %d), want prefer and 512 MiB", c.Plugins.WASM, c.Plugins.WASM.MemoryLimit())
+	}
+	if l := c.Plugins.Limits; l.CPUSeconds != 60 || l.MemoryMiB != 1024 || l.Timeout.Duration != 10*time.Minute {
+		t.Errorf("Plugins.Limits = %+v, want 60s of CPU, 1024 MiB and 10m", l)
+	}
+	if pin, ok := c.Plugins.PluginPin("acme"); !ok || pin != "0.3.1" {
+		t.Errorf("PluginPin(acme) = %q, %v, want 0.3.1", pin, ok)
 	}
 	if got := (WASMConfig{}).MemoryLimit(); got != 0 {
 		t.Errorf("MemoryLimit() unset = %d, want 0 for the default", got)
@@ -546,6 +554,63 @@ func TestWriteFileAtomicErrors(t *testing.T) {
 		if strings.Contains(e.Name(), ".tmp-") {
 			t.Fatalf("temporary file %s left behind after a failed rename", e.Name())
 		}
+	}
+}
+
+func TestSetPluginPin(t *testing.T) {
+	clearConfigEnv(t)
+	tests := []struct {
+		name, before, version, want, was string
+	}{
+		{"new file", "", "0.3.1", "plugins:\n  pins:\n    acme: \"0.3.1\"\n", ""},
+		{"only comments", "# my settings\n", "1.10", "# my settings\nplugins:\n  pins:\n    acme: \"1.10\"\n", ""},
+		{
+			"keeps the rest",
+			"# keyring first\nkeyring: {backend: file}\nplugins:\n  # trusted\n  allowOverride: [aws]\n",
+			"0.3.1",
+			"# keyring first\nkeyring: {backend: file}\nplugins:\n  # trusted\n  allowOverride: [aws]\n  pins:\n    acme: \"0.3.1\"\n",
+			"",
+		},
+		{"replaces", "plugins:\n  pins:\n    acme: 0.2.0 # old\n    other: \"1\"\n", "0.3.1", "plugins:\n  pins:\n    acme: \"0.3.1\"\n    other: \"1\"\n", "0.2.0"},
+		{"empty plugins", "plugins:\n", "0.3.1", "plugins:\n  pins:\n    acme: \"0.3.1\"\n", ""},
+		{"removes", "plugins:\n  pins:\n    acme: 0.2.0\n    other: \"1\"\n", "", "plugins:\n  pins:\n    other: \"1\"\n", "0.2.0"},
+		{"removes nothing", "kubectl: kubectl\n", "", "kubectl: kubectl\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.before != "" {
+				if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(tt.before), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			was, err := SetPluginPin(dir, "acme", tt.version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if was != tt.was {
+				t.Errorf("SetPluginPin returned %q as the old pin, want %q", was, tt.was)
+			}
+			b, _ := os.ReadFile(filepath.Join(dir, "config.yaml"))
+			if tt.before == "" && tt.version == "" {
+				return
+			}
+			if string(b) != tt.want {
+				t.Errorf("config.yaml =\n%s\nwant\n%s", b, tt.want)
+			}
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := c.Plugins.PluginPin("acme"); got != tt.version {
+				t.Errorf("PluginPin(acme) = %q, want %q", got, tt.version)
+			}
+		})
+	}
+
+	dir := writeConfig(t, "plugins: [1, 2]\n")
+	if _, err := SetPluginPin(dir, "acme", "0.1.0"); err == nil {
+		t.Error("SetPluginPin on a plugins list succeeded, want an error")
 	}
 }
 

@@ -59,6 +59,10 @@ type WASMOptions struct {
 	// system's certificate roots and the proxy from the environment. tug
 	// adds no cookies or credentials of its own either way.
 	Transport http.RoundTripper
+
+	// beforeCompile, when set, runs before the module is compiled; tests
+	// use it to make start-up slow.
+	beforeCompile func()
 }
 
 // wasmHost is a WebAssembly plugin compiled and ready to run: one wazero
@@ -264,7 +268,7 @@ func (e *wasmExitError) Error() string { return fmt.Sprintf("exit status %d", e.
 type memoryLimitError struct{ limit uint64 }
 
 // memoryHint is the hint for a memoryLimitError.
-const memoryHint = "if the plugin needs more, raise plugins.wasm.memoryLimitMiB in tug's config.yaml"
+const memoryHint = "if the plugin needs more, raise spec.limits.memoryMiB in its plugin.yaml, within plugins.wasm.memoryLimitMiB and plugins.limits.memoryMiB in tug's config.yaml"
 
 func (e *memoryLimitError) Error() string {
 	return fmt.Sprintf("ran out of memory: WebAssembly plugins may use %d MiB", e.limit>>20)
@@ -339,7 +343,9 @@ func (w *wasmInstance) kill() error { return w.terminate() }
 
 // startWASM starts a module instance in serve mode.
 func (r *Runner) startWASM(stderr io.Writer) (instance, io.WriteCloser, io.ReadCloser, error) {
-	h, err := r.wasmHost()
+	// callServe has compiled the module already, unless the runner has been
+	// closed since.
+	h, err := r.wasmHost(context.Background())
 	if err != nil {
 		return nil, nil, nil, err
 	}

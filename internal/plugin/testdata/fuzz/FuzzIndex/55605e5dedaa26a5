@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("ApiVersion: tug.plugin.index/v1alpha1\nkind: PluginIndex\nplugins:\n- nAme: 0\n  versions:\n  - {version: $,url: https://00,shA256: 000000000000000000000000000000000000000000000000000000000000000A} ")

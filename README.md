@@ -381,6 +381,8 @@ tug plugin search gpu                  # the signed plugin indexes in plugins.in
 tug plugin install acme                # by name from an index, or acme@0.1.0
 tug plugin install ./dist/tug-provider-acme_0.1.0.tar.gz
 tug plugin install https://.../tug-provider-acme_0.1.0.tar.gz --sha256 <archive sha256>
+tug plugin install acme@0.1.0 --pin    # and keep it at 0.1.0 (plugins.pins)
+tug plugin inspect acme@0.2.0          # what it may access, without installing it
 tug plugin test acme --account prod    # protocol conformance suite
 tug plugin ls | describe | link | unlink | remove
 ```
@@ -399,7 +401,13 @@ plugin that needs more goes in `plugins.sandbox.exclude`, and
 in `plugin.yaml` that tug does not know are ignored with a warning, and
 `tug import` warns about `--set` keys the plugin's `accountConfig` does not
 describe. `plugins.timeouts` in `config.yaml` sets the time allowed for each
-operation, for example `{list: 60s, rotate: 2m}`.
+operation, for example `{list: 60s, rotate: 2m}`. A manifest's `spec.limits`
+asks for CPU time, memory and timeouts, which `plugins.limits` caps; tug sets
+the CPU and memory limits as rlimits on Unix (memory on Linux only), and
+timeouts apply everywhere. `plugins.pins` holds a plugin at one version:
+install refuses others and tug runs that one. `tug plugin inspect` explains
+what an archive, an installed plugin or an index entry may access, who
+signed it and whether it is revoked or pinned, without installing it.
 
 A plugin index lists reviewed plugins with each archive's URL and sha256 and
 is signed with ed25519, so installing by name checks the index's signature,
@@ -410,7 +418,11 @@ public Sigstore logs before installing, and `plugins.requireSignatures: true`
 refuses entries without one. Add an index to
 `plugins.indexes` in `config.yaml` with its `name`, `url` and `publicKey`;
 there is no default until one is published. Publishers use
-`tug plugin index keygen | add | sign | verify`.
+`tug plugin index keygen | add | sign | verify`. An index can revoke an
+archive (`tug plugin index revoke`), which install then refuses and
+`tug plugin ls` warns about, and hand over to a new signing key
+(`tug plugin index rotate`), which tug follows from the key in `config.yaml`
+and from then on requires.
 
 Plugins that declare the `serve` capability, as every SDK plugin can, run as
 one process that answers many requests over stdio, so tugd and commands that

@@ -48,8 +48,21 @@ Rules worth knowing:
 | `rotate` | 60 s |
 | everything else | 30 s |
 
-A call that runs out of time fails as `Unavailable`. People can change these
-with [`plugins.timeouts`](/docs/reference/configuration#plugins).
+A call that runs out of time fails as `Unavailable`. A plugin can ask for
+other timeouts in its manifest's `spec.limits.timeouts`, up to five minutes
+unless `plugins.limits.timeout` allows more, and people can change them with
+[`plugins.timeouts`](/docs/reference/configuration#plugins).
+
+### CPU time and memory
+
+`spec.limits.cpuSeconds` and `spec.limits.memoryMiB` ask for processor time
+and memory per plugin process, within the caps in
+[`plugins.limits`](/docs/reference/configuration#plugins), which apply to
+plugins that ask for nothing as well. tug sets them as resource limits on
+Unix: Linux enforces both, and macOS signals `SIGXCPU` at the CPU limit, on
+which SDK plugins exit, but has no memory limit. Windows relies on timeouts.
+`memoryMiB` is also a WebAssembly build's memory limit. In serve mode one
+process answers many calls, so `cpuSeconds` covers all of them.
 
 ### Versioning
 
@@ -276,6 +289,10 @@ On failure, write an `Error` message to stdout and exit non-zero:
 | `Internal` | Anything else. | Reports it. |
 
 `hint` is for people: say what to do next. tug prints it on its own line.
+Keep the message and hint to plain text on one line: tug turns tabs and line
+breaks into spaces and drops other control characters, such as terminal
+escape sequences. tug reads a negative `retryAfterSeconds` as none and waits
+at most a day.
 
 ## The manifest
 
@@ -286,7 +303,7 @@ Every plugin folder has a `plugin.yaml`:
     'apiVersion': { type: 'string', required: true, description: 'tug.plugin/v1alpha1' },
     'kind': { type: 'string', required: true, description: 'ProviderPlugin' },
     'metadata.name': { type: 'string', required: true, description: 'Lower-case letters, digits and dashes. The binary is tug-provider-<name>.' },
-    'metadata.version': { type: 'string', required: true },
+    'metadata.version': { type: 'string', required: true, description: 'Letters, digits, dots, dashes, underscores and pluses, such as 0.1.0 or 1.2.0-rc.1.' },
     'metadata.publisher': { type: 'string', description: 'Shown before install.' },
     'metadata.homepage': { type: 'string', description: 'Shown before install.' },
     'spec.protocols': { type: 'string[]', required: true, description: 'Must include provider/v1alpha1.' },
@@ -296,6 +313,7 @@ Every plugin folder has a `plugin.yaml`:
     'spec.secrets': { type: '{ name, prompt?, optional? }[]', description: 'Secrets tug asks for and sends in requests.' },
     'spec.env': { type: 'string[]', description: 'Host environment variables passed through, such as AWS_PROFILE.' },
     'spec.network': { type: 'string[]', description: 'Hosts the plugin talks to. Shown before install.' },
+    'spec.limits': { type: '{ cpuSeconds?, memoryMiB?, timeouts? }', description: 'Processor time and memory per process, and timeouts per operation such as { list: 2m }, within plugins.limits in config.yaml.' },
     'spec.accountConfig': { type: 'JSON Schema', description: 'Describes the settings people pass with --set.' },
   }}
 />

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -52,28 +53,66 @@ func (a *app) indexSources() ([]plugin.IndexSource, error) {
 }
 
 func (a *app) indexCache() *plugin.IndexCache {
-	return &plugin.IndexCache{Dir: filepath.Join(a.paths.Cache, "plugin-index"), Now: a.now}
+	return &plugin.IndexCache{
+		Dir:      filepath.Join(a.paths.Cache, "plugin-index"),
+		Now:      a.now,
+		KeysFile: filepath.Join(a.paths.Data, "plugin-index-keys.yaml"),
+	}
 }
 
-// resolveIndexed finds name[@version] in the configured indexes and
-// returns the archive's URL and sha256.
-func (a *app) resolveIndexed(ctx context.Context, ref string) (plugin.Match, plugin.IndexVersion, error) {
+// loadIndexes loads the configured indexes, and warns about each one that
+// is now trusted under a key other than the one in config.yaml. Indexes
+// that fail to load are in errs; the error is for config.yaml itself.
+func (a *app) loadIndexes(ctx context.Context) (loaded []plugin.Loaded, errs []error, err error) {
 	srcs, err := a.indexSources()
+	if err != nil || len(srcs) == 0 {
+		return nil, nil, err
+	}
+	loaded, errs = a.indexCache().LoadAll(ctx, srcs)
+	for _, l := range loaded {
+		if key, changed := l.KeyChanged(); changed {
+			fmt.Fprintf(a.stderr, "%s index %s has handed over from the key in config.yaml to %s, which tug now trusts for it; set its publicKey in plugins.indexes to that key\n",
+				a.colors().Yellow("warning:"), l.Source.Name, key)
+		}
+	}
+	return loaded, errs, nil
+}
+
+// resolveIndexed finds name[@version] in the loaded indexes and returns
+// the archive's URL and sha256. Without a version it is the highest one no
+// index has revoked; a revoked version is refused.
+func resolveIndexed(loaded []plugin.Loaded, errs []error, ref string) (plugin.Match, plugin.IndexVersion, error) {
+	m, v, err := lookupIndexed(loaded, errs, ref)
 	if err != nil {
-		return plugin.Match{}, plugin.IndexVersion{}, err
+		return m, v, err
 	}
-	if len(srcs) == 0 {
-		return plugin.Match{}, plugin.IndexVersion{}, errNoIndex
+	if r, by, revoked := plugin.FindRevoked(loaded, v.SHA256); revoked {
+		if !strings.Contains(ref, "@") {
+			return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has revoked every version of %s", by, m.Plugin.Name)
+		}
+		return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has revoked %s %s: %s; not installed", by, m.Plugin.Name, v.Version, dash(r.Reason))
 	}
+	return m, v, nil
+}
+
+// lookupIndexed finds name[@version] in the loaded indexes, revoked or not.
+// Without a version it is the highest one no index has revoked, or the
+// highest of all when every one is.
+func lookupIndexed(loaded []plugin.Loaded, errs []error, ref string) (plugin.Match, plugin.IndexVersion, error) {
 	name, version, _ := strings.Cut(ref, "@")
-	matches, errs := a.indexCache().Search(ctx, srcs, name)
-	for _, m := range matches {
+	for _, m := range plugin.Search(loaded, name) {
 		if m.Plugin.Name != name {
 			continue
 		}
-		v, ok := m.Plugin.Latest()
-		if version != "" {
+		v, ok := m.Plugin.LatestFunc(func(v plugin.IndexVersion) bool {
+			_, _, revoked := plugin.FindRevoked(loaded, v.SHA256)
+			return !revoked
+		})
+		switch {
+		case version != "":
 			v, ok = m.Plugin.Version(version)
+		case !ok:
+			v, ok = m.Plugin.Latest()
 		}
 		if !ok {
 			return plugin.Match{}, plugin.IndexVersion{}, fmt.Errorf("index %s has no version %q of %s", m.Index, version, name)
@@ -97,14 +136,14 @@ func newPluginSearchCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			srcs, err := a.indexSources()
+			loaded, errs, err := a.loadIndexes(cmd.Context())
 			if err != nil {
 				return err
 			}
-			if len(srcs) == 0 {
+			if len(loaded) == 0 && len(errs) == 0 {
 				return errNoIndex
 			}
-			matches, errs := a.indexCache().Search(cmd.Context(), srcs, argOr(args, ""))
+			matches := plugin.Search(loaded, argOr(args, ""))
 			for _, err := range errs {
 				fmt.Fprintf(a.stderr, "%s %v\n", a.colors().Yellow("warning:"), err)
 			}
@@ -117,7 +156,13 @@ func newPluginSearchCmd(a *app) *cobra.Command {
 			}
 			rows := make([]row, 0, len(matches))
 			for _, m := range matches {
-				v, _ := m.Plugin.Latest()
+				v, ok := m.Plugin.LatestFunc(func(v plugin.IndexVersion) bool {
+					_, _, revoked := plugin.FindRevoked(loaded, v.SHA256)
+					return !revoked
+				})
+				if !ok {
+					continue // nothing left to install
+				}
 				rows = append(rows, row{m.Plugin.Name, v.Version, m.Plugin.Publisher, m.Plugin.Description, m.Index})
 			}
 			switch format {
@@ -157,7 +202,7 @@ index names one, the archive's sha256 and every binary's sha256.
   tug plugin index sign index.yaml              # writes index.yaml.sig
   # publish index.yaml and index.yaml.sig side by side`,
 	}
-	cmd.AddCommand(newIndexKeygenCmd(a), newIndexAddCmd(a), newIndexSignCmd(a), newIndexVerifyCmd(a))
+	cmd.AddCommand(newIndexKeygenCmd(a), newIndexAddCmd(a), newIndexRevokeCmd(a), newIndexRotateCmd(a), newIndexSignCmd(a), newIndexVerifyCmd(a))
 	return cmd
 }
 
@@ -276,6 +321,117 @@ flags for each release.`,
 	return cmd
 }
 
+// indexKey returns the private index key with this name from the
+// credential store, or from TUG_INDEX_KEY when fromEnv is set and it is.
+func (a *app) indexKey(name string, fromEnv bool) (string, error) {
+	if key := os.Getenv(IndexKeyEnv); fromEnv && key != "" {
+		return key, nil
+	}
+	store, err := a.credentialStore()
+	if err != nil {
+		return "", err
+	}
+	key, err := store.Get(indexKeyName(name))
+	if errors.Is(err, credentials.ErrNotFound) {
+		return "", fmt.Errorf("no index key named %s; run tug plugin index keygen --name %s, or set %s", name, name, IndexKeyEnv)
+	}
+	return key, err
+}
+
+type indexRevokeOptions struct {
+	reason  string
+	plugin  string
+	version string
+}
+
+func newIndexRevokeCmd(a *app) *cobra.Command {
+	var o indexRevokeOptions
+	cmd := &cobra.Command{
+		Use:   "revoke <index.yaml> <archive|sha256>",
+		Short: "Withdraw a plugin archive from an index",
+		Long: `Record in an index that an archive must not be installed, such as a release
+found to be malicious or to leak secrets. tug plugin install then refuses
+the archive, by name or from a file, and tug plugin ls warns everyone who
+has it installed. The version stays listed, so people can see why it went.
+
+Give the archive itself or its sha256. The plugin and version come from
+the index's entry for it, or from the archive; --plugin and --version name
+them for an archive the index never listed.`,
+		Example: `  tug plugin index revoke index.yaml dist/tug-provider-acme_0.3.0.tar.gz --reason "sends tokens to a third party"
+  tug plugin index revoke index.yaml 9f2c... --reason "built from a compromised workflow"
+  tug plugin index sign index.yaml`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			r := plugin.Revocation{SHA256: args[1], Plugin: o.plugin, Version: o.version, Reason: o.reason}
+			if _, err := os.Stat(args[1]); err == nil {
+				u, err := a.pluginDirs().Unpack(args[1])
+				if err != nil {
+					return err
+				}
+				_ = u.Close() // only the manifest and sha256 were needed
+				r.SHA256 = u.SHA256
+				if r.Plugin == "" {
+					r.Plugin, r.Version = u.Plugin.Name(), u.Plugin.Manifest.Metadata.Version
+				}
+			}
+			r, err := plugin.RevokeInIndex(args[0], r)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(a.stderr, a.colors().Dim("sign the index again before publishing it: tug plugin index sign "+args[0]))
+			_, err = fmt.Fprintf(a.stdout, "Revoked %s in %s\n", r, args[0])
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&o.reason, "reason", "", "why, in a sentence for the people who installed it")
+	cmd.Flags().StringVar(&o.plugin, "plugin", "", "plugin the archive holds (default: from the index or the archive)")
+	cmd.Flags().StringVar(&o.version, "version", "", "version the archive holds (default: from the index or the archive)")
+	return cmd
+}
+
+func newIndexRotateCmd(a *app) *cobra.Command {
+	var from, to string
+	cmd := &cobra.Command{
+		Use:   "rotate <index.yaml> --to <key name>",
+		Short: "Hand an index over from its signing key to a new one",
+		Long: `Record in an index that its signing key has been replaced. The old key signs
+the new one, and the index lists the old key under supersededKeys. tug
+then checks the index against the new key for everyone whose config.yaml
+still names the old one, tells them to update it, and from then on refuses
+an index signed with the old key.
+
+Make the new key with tug plugin index keygen --name <new> first, then sign
+the index with the new key. The old key comes from the credential store, or
+from TUG_INDEX_KEY when that is set. Keep the old key's entry in the index:
+it is how users who have not updated config.yaml reach the new key.`,
+		Example: `  tug plugin index keygen --name 2027
+  tug plugin index rotate index.yaml --to 2027
+  tug plugin index sign index.yaml --name 2027`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			oldKey, err := a.indexKey(from, true)
+			if err != nil {
+				return err
+			}
+			newKey, err := a.indexKey(to, false)
+			if err != nil {
+				return err
+			}
+			oldPub, newPub, err := plugin.RotateIndexKey(args[0], oldKey, newKey)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(a.stderr, a.colors().Dim("sign the index with the new key before publishing it: tug plugin index sign "+args[0]+" --name "+to))
+			_, err = fmt.Fprintf(a.stdout, "%s hands over from %s to %s\n", args[0], oldPub, newPub)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&from, "from", "default", "name of the key being replaced")
+	cmd.Flags().StringVar(&to, "to", "", "name of the new key, from tug plugin index keygen --name")
+	_ = cmd.MarkFlagRequired("to")
+	return cmd
+}
+
 func newIndexSignCmd(a *app) *cobra.Command {
 	var name string
 	cmd := &cobra.Command{
@@ -283,17 +439,9 @@ func newIndexSignCmd(a *app) *cobra.Command {
 		Short: "Sign an index file, writing <index.yaml>.sig",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			key := os.Getenv(IndexKeyEnv)
-			if key == "" {
-				store, err := a.credentialStore()
-				if err != nil {
-					return err
-				}
-				if key, err = store.Get(indexKeyName(name)); errors.Is(err, credentials.ErrNotFound) {
-					return fmt.Errorf("no index key named %s; run tug plugin index keygen, or set %s", name, IndexKeyEnv)
-				} else if err != nil {
-					return err
-				}
+			key, err := a.indexKey(name, true)
+			if err != nil {
+				return err
 			}
 			data, err := os.ReadFile(args[0])
 			if err != nil {
@@ -338,7 +486,11 @@ func newIndexVerifyCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.stdout, "%s is signed by that key and lists %d plugins\n", args[0], len(ix.Plugins))
+			by := "that key"
+			if !ix.SignedBy().Equal(key) {
+				by = base64.StdEncoding.EncodeToString(ix.SignedBy()) + ", which that key handed over to,"
+			}
+			_, err = fmt.Fprintf(a.stdout, "%s is signed by %s and lists %d plugins and %d revoked archives\n", args[0], by, len(ix.Plugins), len(ix.Revoked))
 			return err
 		},
 	}
