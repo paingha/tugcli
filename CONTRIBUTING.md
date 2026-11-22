@@ -12,7 +12,8 @@ alike. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 ## Ways to help
 
 - **Report a bug** or ask a question in
-  [Issues](https://github.com/paingha/tugcli/issues).
+  [Issues](https://github.com/paingha/tugcli/issues/new/choose), with the
+  form for a bug, a feature, a new provider, the docs or a question.
 - **Improve the docs.** The user guide is in
   [docs/content/docs](docs/content/docs); every page has an "Open on GitHub"
   link. The plugin authors' guide is [docs/plugins.md](docs/plugins.md).
@@ -127,6 +128,8 @@ export TUG_HOME="$(mktemp -d)" TUG_KEYRING_BACKEND=file TUG_KEYRING_PASSPHRASE=d
 - Add a new Go module only when the standard library or an existing
   dependency can't do the job, and say why in the commit message.
 - In the pull request, explain the problem, the fix, and how you tested it.
+  The pull request template asks for these, with a short checklist of what
+  reviewers look for first.
 
 A maintainer reviews every pull request. Small, focused changes are reviewed
 fastest.

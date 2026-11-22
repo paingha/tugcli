@@ -1,0 +1,24 @@
+name: Documentation
+description: Something in the README or the docs site is wrong, missing or unclear.
+labels: [documentation]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: A link to the page or section, or the file in the repository.
+      placeholder: https://paingha.github.io/tugcli/docs/guides/proxy#…
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong
+      description: What the page says, and what is wrong, missing or hard to follow.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
+      description: Optional. How you'd word it, or what you'd add. Small fixes are welcome as pull requests straight away.
