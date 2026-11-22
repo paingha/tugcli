@@ -1,0 +1,196 @@
+---
+title: Flux and Argo CD
+description: See what your GitOps tools deliver, where delivery fails, what has drifted and what depends on what.
+icon: GitBranch
+---
+
+When a change you merged hasn't shown up, the answer is spread over several
+objects: the Git source, the Kustomization or HelmRelease that applies it,
+what that depends on, and the deployments it manages. `tug gitops` reads
+what Flux and Argo CD report about all of them and ties it to the live
+objects, so you can see where delivery stops without stepping through each
+with kubectl.
+
+tug finds each tool through the cluster's API discovery and leaves out one
+the cluster doesn't serve, so the same commands work with Flux, Argo CD or
+both. It reads through Kubernetes' own APIs, so it needs neither tool's CLI.
+
+`tug gitops` only reads. It never syncs, reconciles, suspends, resumes or
+rolls anything back. When one of those is the next step, it tells you the
+command to run.
+
+## What's delivered here?
+
+```console
+$ tug gitops status -n shop
+NAME                       NAMESPACE     READY   STATUS                    SUSPENDED   REVISION            APPLIED             RECONCILED   MESSAGE
+gitrepository/fleet        flux-system   True    Succeeded                 False       main@sha1:1a2b3c4   -                   12m          stored artifact for revision 'main@sha1:1a2b3c4'
+kustomization/apps         flux-system   False   DependencyNotReady        False       main@sha1:1a2b3c4   main@sha1:9f8e7d6   15m          dependency 'flux-system/infra' is not ready
+kustomization/storefront   flux-system   True    ReconciliationSucceeded   False       main@sha1:1a2b3c4   main@sha1:1a2b3c4   15m          Applied revision: main@sha1:1a2b3c4
+application/guestbook      argocd        False   OutOfSync, Degraded       -           3f2c1a0             3f2c1a0             11m          -
+```
+
+The list has Flux's sources (GitRepositories, OCIRepositories,
+HelmRepositories and Buckets), Kustomizations and HelmReleases, and Argo
+CD's Applications. For each it shows:
+
+- whether it's ready. For an Application, that means synced and healthy,
+  and STATUS gives Argo CD's sync and health status;
+- whether Flux has been told to suspend it;
+- REVISION, what its source offers now, against APPLIED, what it last
+  applied. When they differ, the newest commit hasn't reached the cluster;
+- RECONCILED, how long ago its controller last reported. Argo CD records
+  each comparison. Flux doesn't, so for Flux it's the latest change of the
+  object's conditions or artifact.
+
+GitOps objects usually live in `flux-system` or `argocd`, not in the
+namespace they deploy to. So without `-A`, `status` shows what *concerns* the
+namespace: objects that live in it, deploy into it (`spec.targetNamespace`,
+an Application's destination) or manage objects in it, and the sources those
+apply. Use `-A` for everything, `-o json` or `-o yaml` for scripts, and
+`-o name` for names kubectl understands.
+
+## Why isn't it delivered?
+
+`tug gitops explain` takes one Kustomization, HelmRelease or Application and
+decides where delivery fails, in the order the tool works through it:
+
+1. **Suspended**: Flux has been told not to reconcile it, so the result of
+   its last reconcile stands.
+2. **Dependency**: something in its `spec.dependsOn` isn't ready. tug follows
+   the chain to where it stops, so you go straight to the real cause.
+3. **Source**: the Git, OCI, Helm or bucket source can't be fetched, or a
+   HelmRelease's chart can't be pulled.
+4. **Reconcile**: the controller hasn't caught up with the latest change, or
+   a newer revision is waiting to be applied.
+5. **Admission**: a webhook (Kyverno, Gatekeeper), a ValidatingAdmissionPolicy
+   or Pod Security rejected what it applies.
+6. **Apply**: building, rendering or applying it fails, or its Helm chart
+   doesn't install or upgrade.
+7. **Health**: it applied, but what it manages isn't healthy.
+
+```console
+$ tug gitops explain apps
+kustomization/apps in flux-system is not ready: something it depends on is not ready
+source gitrepository/fleet at main@sha1:1a2b3c4, last applied main@sha1:9f8e7d6, reported 15m ago
+
+CONDITION   STATUS   REASON               SINCE
+Ready       False    DependencyNotReady   15m
+
+error    kustomization/apps, kustomization/infra: DependencyNotReady
+         depends on kustomization/infra, which is not ready: ReconciliationFailed: ClusterIssuer/letsencrypt dry-run failed (Forbidden): admission webhook "validate.kyverno.svc-fail" denied the request: require-team-label: check-team: 'validation error: label team is required.'
+         next: see why:
+               tug gitops explain kustomization/infra -n flux-system
+
+info     kustomization/apps: RevisionNotApplied
+         its source offers revision main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b, but it last applied main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e; Flux applies it once the failure here clears
+```
+
+For the health stage, tug finds what the object manages from Flux's
+inventory, from the labels helm-controller puts on everything it installs,
+or from Argo CD's status. Each unhealthy object gets the diagnosis
+[`tug why`](/docs/guides/workloads#why-isnt-it-working) would give it:
+
+```console
+$ tug gitops explain storefront
+kustomization/storefront in flux-system is not ready: what it manages is not healthy
+source gitrepository/fleet at main@sha1:1a2b3c4, last applied main@sha1:1a2b3c4, reported 15m ago
+
+CONDITION   STATUS   REASON                    SINCE
+Ready       True     ReconciliationSucceeded   15m
+
+error    pod/pricing-9f2a-m4k7p, container main: CreateContainerConfigError
+         cannot start: secret "pricing-api-key" not found
+         next: create the missing ConfigMap or Secret, or fix the reference; `tug tree deploy/pricing -n shop` shows which is missing
+
+error    database/orders: BackupFailing
+         Ready is False: the latest backup failed
+         next: see its status and events:
+               tug describe databases.db.example.com/orders -n shop
+
+error    backup/orders-nightly: UploadFailed
+         Ready is False: bucket "orders-backups" not found
+         next: see why:
+               tug why backups.db.example.com/orders-nightly -n shop
+
+Manages 5 objects, 2 of them not healthy:
+OBJECT            NAMESPACE   HEALTH      SYNC   STATUS
+deploy/pricing    shop        not-ready   -      0/1 ready
+database/orders   shop        not-ready   -      BackupFailing: the latest backup failed (owns 2, 1 not ready)
+```
+
+Flux reported that Kustomization as ready, because it applied cleanly and
+has no health checks. tug still found the broken deployment it manages.
+
+For an Argo CD Application, explain also says why it's out of sync: no
+automated sync policy, a sync that failed (with each object that failed and
+why), or changes made in the cluster that automated sync won't undo while
+`selfHeal` is off. It also warns when Argo CD hasn't compared the
+Application with its source for a while. When an Application or a
+Kustomization deploys to another cluster, tug relies on the tool's own health
+of what it manages.
+
+Name the object by name alone, or with a kind when names clash: `ks/apps`,
+`hr/podinfo`, `app/guestbook`, or the full resource name
+`kustomizations.kustomize.toolkit.fluxcd.io/apps`. Without `-n`, every
+namespace is searched. explain exits 1 when the object isn't healthy, as
+`tug why` does, so a script can wait on it.
+
+## What has drifted?
+
+`tug gitops drift` lists what the tool *itself* reports out of sync with the
+source. It computes no diff of its own:
+
+```console
+$ tug gitops drift app/guestbook
+application/guestbook in argocd has 2 objects out of sync
+Argo CD last compared it with its source 11m ago.
+
+OBJECT            NAMESPACE   STATUS      HEALTH     NOTE
+deploy/pricing    shop        OutOfSync   Degraded   -
+cm/guestbook-ui   shop        OutOfSync   -          no longer in its source; a sync with pruning deletes it
+```
+
+- For an **Argo CD Application**, these are the objects Argo CD found out of
+  sync, missing or due to be pruned when it last compared them.
+- For a **Flux HelmRelease** with `spec.driftDetection.mode` set to `warn` or
+  `enabled`, they're what helm-controller last reported drifted. Without
+  drift detection, tug says how to turn it on.
+- A **Flux Kustomization** has no drift report: kustomize-controller applies
+  its source at every reconcile, undoing changes made in the cluster, and
+  reports nothing in between. tug gives the `flux diff` command that compares
+  a checkout of the source with the cluster.
+
+drift exits 1 when something has drifted, as `diff` does.
+
+## What does it depend on?
+
+```console
+$ tug gitops dependencies tenants
+Depends on:
+kustomization/tenants               ✗ DependencyNotReady: dependency 'flux-system/apps' is not ready
+├── kustomization/apps              ✗ DependencyNotReady: dependency 'flux-system/infra' is not ready
+│   └── kustomization/infra         ✗ ReconciliationFailed: ClusterIssuer/letsencrypt dry-run failed (Forbidden): admission webhook "validate.kyverno.svc-fail" denied the request: require-team-label…
+└── kustomization/crds in platform  ✗ not in the cluster
+
+Required by:
+nothing
+```
+
+`tug gitops dependencies` (or `deps`) draws the `spec.dependsOn` graph both
+ways, what the object depends on and what depends on it, with the readiness
+of each. A dependency that isn't in the cluster says so, and so does a cycle,
+which Flux never resolves. Argo CD Applications have no `dependsOn`, so for
+one the graph shows the Applications it manages, as an app of apps does, and
+those that manage it.
+
+## Permissions
+
+tug needs to list the Flux and Argo CD resources: in every namespace, or at
+least in the one you name with `-n` (it says when it could only read one).
+For the health of what they manage, it needs to read those objects. For
+Secrets it reads only their metadata, so their data never leaves the API
+server.
+
+All four commands work across clusters, for example
+`tug gitops status -A --cluster-selector env=prod`.

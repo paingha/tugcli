@@ -224,6 +224,8 @@ func TestManifestValidation(t *testing.T) {
 		want string
 	}{
 		{"bad name", func(m *Manifest) { m.Metadata.Name = "Bad_Name" }, "metadata.name"},
+		{"version escaping its directory", func(m *Manifest) { m.Metadata.Version = "../../../.config/tug" }, "metadata.version"},
+		{"version with a trailing dot", func(m *Manifest) { m.Metadata.Version = "1." }, "metadata.version"},
 		{"no protocols", func(m *Manifest) { m.Spec.Protocols = []string{"provider/v9"} }, "spec.protocols"},
 		{"escaping bin", func(m *Manifest) { m.Spec.Platforms[0].Bin = "../../bin/sh" }, "inside the plugin directory"},
 		{"bad env", func(m *Manifest) { m.Spec.Env = []string{"A=B"} }, "spec.env"},

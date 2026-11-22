@@ -46,6 +46,14 @@ plugins:
     list: 60s
     credential: 15s
     rotate: 2m
+  # The most any plugin may use, whatever its manifest asks for.
+  limits:
+    cpuSeconds: 60
+    memoryMiB: 1024
+    timeout: 10m
+  # Plugins held at one version.
+  pins:
+    acme: "0.3.1"
 
 sessions:
   # Remove sessions untouched for this long.
@@ -130,7 +138,30 @@ teams:
       type: 'map of operation to duration',
       default: '{list: 30s, credential: 10s, rotate: 60s, others: 30s}',
       description:
-        'Per-operation time limits: describe, accounts, list, credential, rotate, checkAccess. Operations left out keep the default. A call that runs out of time fails as Unavailable.',
+        'Per-operation time limits for every plugin: describe, accounts, list, credential, rotate, checkAccess. They win over what a manifest asks for in spec.limits.timeouts. Operations left out keep the manifest’s or the default. A call that runs out of time fails as Unavailable.',
+    },
+    'limits.cpuSeconds': {
+      type: 'integer',
+      default: 'none',
+      description:
+        'The most processor time each plugin process may use, whatever its manifest asks for; it also applies to plugins that ask for no limit. Enforced on Linux (the plugin is killed) and macOS (SIGXCPU, which SDK plugins exit on).',
+    },
+    'limits.memoryMiB': {
+      type: 'integer',
+      default: 'none',
+      description:
+        'The most memory each plugin process may map, enforced on Linux, and the most a WebAssembly build may use, within wasm.memoryLimitMiB. It also applies to plugins that ask for no limit.',
+    },
+    'limits.timeout': {
+      type: 'duration',
+      default: 'none (manifests may ask for up to 5m)',
+      description: 'The longest any one call to a plugin may take, timeouts above included.',
+    },
+    pins: {
+      type: 'map of plugin to version',
+      default: '{}',
+      description:
+        'Plugins held at one version, written in quotes, such as {acme: "0.3.1"}. tug plugin install refuses other versions, and tug runs the pinned version even when a newer one is installed. tug plugin install --pin writes the entry.',
     },
   }}
 />

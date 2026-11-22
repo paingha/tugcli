@@ -56,6 +56,7 @@ func TestIndexValidate(t *testing.T) {
 		{"plain http", strings.Replace(indexYAML, "https://example.com/a-0.9.0", "http://example.com/a-0.9.0", 1), "https url"},
 		{"short sha", strings.Replace(indexYAML, `sha256: "%s"}`+"\n  - ", `sha256: "abc"}`+"\n  - ", 1), "sha256"},
 		{"unknown field", strings.Replace(indexYAML, "- name: acme", "- name: acme\n  rating: 5", 1), "rating"},
+		{"version with a path", strings.Replace(indexYAML, "version: 0.9.0", "version: ../0.9.0", 1), "not a version"},
 	}
 	priv, _, _ := NewIndexKey()
 	for _, tt := range tests {

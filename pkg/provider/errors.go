@@ -45,10 +45,18 @@ type Error struct {
 // print it separately.
 func (e *Error) Error() string { return string(e.Code) + ": " + e.Message }
 
+// maxRetryAfter is the longest wait RetryAfter returns.
+const maxRetryAfter = 24 * time.Hour
+
 // RetryAfter returns how long a RateLimited error suggests waiting, or zero
-// when it does not say.
+// when it does not say. The value comes from the plugin, so a negative one
+// counts as not saying and one longer than a day is cut to a day; either
+// would otherwise overflow or make a caller wait for ever.
 func (e *Error) RetryAfter() time.Duration {
-	return time.Duration(e.RetryAfterSeconds) * time.Second
+	if e.RetryAfterSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(min(e.RetryAfterSeconds, int(maxRetryAfter/time.Second))) * time.Second
 }
 
 // Errorf returns an *Error with the given code.

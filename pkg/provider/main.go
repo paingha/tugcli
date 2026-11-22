@@ -66,13 +66,15 @@ func Capabilities(p Provider) Capability {
 }
 
 // Main runs p as a plugin process using os.Args, stdin and stdout, and returns
-// the exit code. SIGINT and SIGTERM cancel the context passed to p. A plugin's
-// main function is typically:
+// the exit code. SIGINT and SIGTERM cancel the context passed to p, and on
+// Unix, SIGXCPU, which says the plugin has used up the processor time tug
+// allowed it, ends the process. A plugin's main function is typically:
 //
 //	func main() { os.Exit(provider.Main(myProvider{})) }
 func Main(p Provider) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer stopOnCPULimit()()
 	return Run(ctx, p, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
 }
 

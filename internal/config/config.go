@@ -175,6 +175,36 @@ type PluginsConfig struct {
 	// Sandbox confines plugins' native builds with the operating system's
 	// sandbox.
 	Sandbox SandboxConfig `json:"sandbox,omitzero"`
+	// Limits caps the processor time, memory and time that plugins may
+	// ask for in their manifests' spec.limits.
+	Limits PluginLimits `json:"limits,omitzero"`
+	// Pins holds a version for each plugin that must stay at it, such as
+	// {acme: "0.3.1"}. tug plugin install refuses any other version of a
+	// pinned plugin, and tug runs the pinned version even when a newer one
+	// is installed. Linked plugins are not affected.
+	Pins map[string]string `json:"pins,omitempty"`
+}
+
+// PluginPin returns the version the named plugin is pinned to, if any.
+func (c PluginsConfig) PluginPin(name string) (string, bool) {
+	v, ok := c.Pins[name]
+	return v, ok && v != ""
+}
+
+// PluginLimits is plugins.limits: the most any plugin may use, whatever its
+// manifest asks for. A zero field leaves that limit to the manifest.
+type PluginLimits struct {
+	// CPUSeconds caps the processor time of each plugin process, and
+	// applies to plugins that ask for no limit as well.
+	CPUSeconds int `json:"cpuSeconds,omitempty"`
+	// MemoryMiB caps each plugin process's memory on Linux, and each
+	// WebAssembly plugin's everywhere, and applies to plugins that ask for
+	// no limit as well.
+	MemoryMiB int `json:"memoryMiB,omitempty"`
+	// Timeout caps how long any one call to a plugin may take, including
+	// the timeouts set in plugins.timeouts. Without it, a manifest may ask
+	// for at most five minutes.
+	Timeout Duration `json:"timeout,omitzero"`
 }
 
 // WASMConfig controls the WebAssembly builds of plugins, which tug runs in
