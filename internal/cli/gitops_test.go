@@ -397,6 +397,38 @@ func TestGitOpsWithoutFluxOrArgoCD(t *testing.T) {
 	}
 }
 
+// TestGitOpsFindsToolsInstalledLater installs Flux and Argo CD in the fake
+// cluster after a first tug gitops status has filled the discovery cache,
+// which stays fresh for hours: the next command must find them all the same.
+func TestGitOpsFindsToolsInstalledLater(t *testing.T) {
+	isolate(t)
+	base, writes := fakeAPIServer(t)
+	inner := base.Config.Handler
+	objects := gitopsObjects()
+	var installed atomic.Bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if installed.Load() && r.Header.Get("Authorization") == "Bearer "+secretToken && serveGitOps(t, w, r, objects, writes) {
+			return
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, srv))
+	newSession(t)
+	mustTug(t, "connect", "payments-prod")
+
+	if r := tug(t, "gitops", "status", "-A"); r.code != 0 || !strings.Contains(r.stderr, "Neither Flux nor Argo CD is installed") {
+		t.Fatalf("tug gitops status -A before the install = %d, stderr %q", r.code, r.stderr)
+	}
+	installed.Store(true)
+	names := mustTug(t, "gitops", "status", "-A", "-o", "name")
+	for _, want := range []string{"kustomizations.kustomize.toolkit.fluxcd.io/infra\n", "applications.argoproj.io/guestbook\n"} {
+		if !strings.Contains(names, want) {
+			t.Errorf("tug gitops status -A -o name after the install lacks %q:\n%s", want, names)
+		}
+	}
+}
+
 func TestGitOpsRevisions(t *testing.T) {
 	a := &app{now: time.Now}
 	for _, tt := range []struct {
