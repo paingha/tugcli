@@ -191,7 +191,7 @@ such as `demo_test`. It keeps the token in the keychain (here, the encrypted
 file) and runs `list`:
 
 ```text
-✓ acme/demo: 1 clusters, 1 new
+✓ acme/demo: 1 cluster, 1 new
 ```
 
 Then:
@@ -259,7 +259,7 @@ tug ls
 ```
 
 ```text
-✓ acme/demo: 1 clusters
+✓ acme/demo: 1 cluster
   NAME   PROVIDER   ACCOUNT   REGION    VERSION   ENV   LABELS          STATUS
   dev    acme       demo      eu-west   -         dev   team=platform
 ```

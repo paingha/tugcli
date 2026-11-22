@@ -190,6 +190,42 @@ esac`,
 	}
 }
 
+// TestOneClusterDetails checks that the details count a single cluster in
+// the singular.
+func TestOneClusterDetails(t *testing.T) {
+	bin := shellPlugin(t, `case "$1" in
+  `+goodDescribe+`
+  list) cat >/dev/null; echo '{"apiVersion":"provider/v1alpha1","kind":"ListResponse","clusters":[{"id":"c1","name":"one","endpoints":{"public":"https://one.example:6443"}}]}' ;;
+  `+unknown+`
+esac`)
+	r := Run(context.Background(), Target{Command: bin}, Options{Name: "bad", Account: provider.Account{ID: "a"}})
+	got := results(r)
+	for name, want := range map[string]string{
+		"list returns valid clusters": "1 cluster",
+		"list is stable across calls": "same 1 id",
+	} {
+		if got[name].Status != Pass || got[name].Detail != want {
+			t.Errorf("%q = %+v, want pass with %q", name, got[name], want)
+		}
+	}
+}
+
+func TestPlural(t *testing.T) {
+	tests := []struct {
+		n    int
+		want string
+	}{
+		{0, "0 ids"},
+		{1, "1 id"},
+		{2, "2 ids"},
+	}
+	for _, tt := range tests {
+		if got := plural(tt.n, "id", "ids"); got != tt.want {
+			t.Errorf("plural(%d, \"id\", \"ids\") = %q, want %q", tt.n, got, tt.want)
+		}
+	}
+}
+
 func TestSingleJSONObject(t *testing.T) {
 	tests := []struct {
 		in string
