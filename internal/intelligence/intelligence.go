@@ -88,7 +88,7 @@ func CheckProvider(name string) error {
 }
 
 // ErrDisabled is returned when config.yaml does not turn explanations on.
-var ErrDisabled = errors.New("--deep is off; turn it on in config.yaml with `intelligence: {enabled: true}`")
+var ErrDisabled = errors.New("--deep is off; turn it on with `tug intelligence enable`")
 
 // Settings are config.yaml's intelligence settings, checked, with one call's
 // overrides applied and the defaults filled in.

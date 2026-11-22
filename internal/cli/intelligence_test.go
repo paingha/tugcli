@@ -21,7 +21,7 @@ func TestIntelligenceStatus(t *testing.T) {
 
 	out := mustTug(t, "intelligence", "status")
 	for _, want := range []string{
-		"Enabled:     no; set intelligence.enabled in config.yaml to use tug why --deep\n",
+		"Enabled:     no; turn tug why --deep on with `tug intelligence enable`\n",
 		"Provider:    anthropic\n",
 		"Model:       claude-opus-5-5\n",
 		"Endpoint:    https://api.anthropic.com/v1/messages\n",
@@ -197,4 +197,73 @@ func fileStore(t *testing.T) credentials.Store {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func TestIntelligenceEnableAndDisable(t *testing.T) {
+	home := isolate(t)
+	for _, p := range intelligence.Providers {
+		t.Setenv(intelligence.KeyEnv(p), "")
+	}
+	writeConfig(t, home, "# mine\nintelligence:\n  model: claude-sonnet-5-5\n  monthlySpendCapUSD: 20\n")
+
+	// Without a terminal it cannot ask for the key, so it says how to add
+	// one.
+	out := mustTug(t, "intelligence", "enable")
+	for _, want := range []string{
+		"tug why --deep is on, asking anthropic's claude-sonnet-5-5 at https://api.anthropic.com/v1/messages.\n",
+		"Store the anthropic API key with `tug intelligence key set anthropic`, or set TUG_SECRET_ANTHROPIC_API_KEY, before using it.\n",
+		"Try it with `tug why <target> --deep`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("enable lacks %q:\n%s", want, out)
+		}
+	}
+	if got, want := readConfig(t, home), "# mine\nintelligence:\n  model: claude-sonnet-5-5\n  monthlySpendCapUSD: 20\n  enabled: true\n  provider: anthropic\n"; got != want {
+		t.Errorf("config.yaml after enable =\n%s\nwant\n%s", got, want)
+	}
+
+	// Another provider goes back to its own model, and a stored key is
+	// found.
+	if err := fileStore(t).Set(credentials.IntelligenceKey("openai"), "sk-openai-stored-0123456789"); err != nil {
+		t.Fatal(err)
+	}
+	out = mustTug(t, "intelligence", "enable", "openai")
+	if !strings.Contains(out, "asking openai's gpt-6.2-astra at https://api.openai.com/v1/chat/completions.\n") || !strings.Contains(out, "It uses the openai API key stored in ") || strings.Contains(out, "sk-openai") {
+		t.Errorf("enable openai:\n%s", out)
+	}
+	if got := readConfig(t, home); strings.Contains(got, "claude-sonnet") || !strings.Contains(got, "provider: openai") || !strings.Contains(got, "monthlySpendCapUSD: 20") {
+		t.Errorf("config.yaml after enable openai =\n%s", got)
+	}
+
+	// A custom endpoint needs a model and an address, and no key.
+	if r := tug(t, "intelligence", "enable", "custom"); r.code != 1 || !strings.Contains(r.stderr, "the custom provider has no default model; set intelligence.model or pass --model") {
+		t.Errorf("enable custom without a model: %+v", r)
+	}
+	if r := tug(t, "intelligence", "enable", "custom", "--model", "llama4:70b"); r.code != 1 || !strings.Contains(r.stderr, "needs intelligence.baseURL") || !strings.Contains(r.stderr, "; pass --base-url") {
+		t.Errorf("enable custom without an address: %+v", r)
+	}
+	if r := tug(t, "intelligence", "enable", "custom", "--model", "llama4:70b", "--base-url", "http://llm.example.com/v1"); r.code != 1 || !strings.Contains(r.stderr, "must use https") {
+		t.Errorf("enable custom with http elsewhere: %+v", r)
+	}
+	out = mustTug(t, "intelligence", "enable", "custom", "--model", "llama4:70b", "--base-url", "http://localhost:11434/v1")
+	if !strings.Contains(out, "asking custom's llama4:70b at http://localhost:11434/v1/chat/completions.\n") || strings.Contains(out, "API key") {
+		t.Errorf("enable custom:\n%s", out)
+	}
+	if r := tug(t, "intelligence", "enable", "gemini"); r.code != 1 || !strings.Contains(r.stderr, `"gemini" is not a provider`) {
+		t.Errorf("enable gemini: %+v", r)
+	}
+
+	out = mustTug(t, "intelligence", "disable")
+	if !strings.HasPrefix(out, "tug why --deep is off. Stored API keys are kept") {
+		t.Errorf("disable = %q", out)
+	}
+	if got := readConfig(t, home); !strings.Contains(got, "enabled: false") || !strings.Contains(got, "model: llama4:70b") {
+		t.Errorf("config.yaml after disable =\n%s", got)
+	}
+	if r := tug(t, "why", "billing", "--deep"); r.code != 1 || !strings.Contains(r.stderr, "--deep is off; turn it on with `tug intelligence enable`") {
+		t.Errorf("--deep after disable: %+v", r)
+	}
+	if v, err := fileStore(t).Get(credentials.IntelligenceKey("openai")); err != nil || v == "" {
+		t.Errorf("disable removed a stored key: %q, %v", v, err)
+	}
 }
