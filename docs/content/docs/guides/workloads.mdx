@@ -343,10 +343,14 @@ tug top                      # every pod in the namespace
 `tug top` uses `kubectl top`, so it needs kubectl and the cluster's
 [metrics-server](https://github.com/kubernetes-sigs/metrics-server).
 
-## Open k9s
+## All of it in one view
 
 ```bash
 tug ui
 ```
 
-Opens [k9s](https://k9scli.io) on this terminal's cluster and namespace.
+[`tug ui`](/docs/guides/tui) shows the namespace's workloads with their
+health and runs most of this page with one key: <kbd>l</kbd> for logs,
+<kbd>w</kbd> for why, <kbd>t</kbd> for the tree, <kbd>s</kbd> for a shell,
+<kbd>p</kbd> to port-forward, <kbd>r</kbd> to restart and <kbd>S</kbd> to
+scale. `tug ui --k9s` opens [k9s](https://k9scli.io) instead.

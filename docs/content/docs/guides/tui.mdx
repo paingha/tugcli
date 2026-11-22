@@ -1,0 +1,152 @@
+---
+title: The terminal UI
+description: A full-screen view of your clusters and workloads, with logs, diagnoses, shells and port-forwards one key away.
+icon: SquareTerminal
+---
+
+`tug ui` opens a full-screen view of this terminal's session: the catalog's
+clusters, and the workloads of the session's namespace with their health.
+Logs, [`tug why`](/docs/guides/workloads#why-isnt-it-working),
+[`tug tree`](/docs/guides/workloads#what-is-it-made-of), shells,
+port-forwards, restarts and scaling are each one key away. Connecting to a
+cluster or switching namespace changes this terminal's session, just as
+`tug connect` and `tug ns` do.
+
+```bash
+tug ui
+```
+
+![The workloads view: deployments, a statefulset, a daemonset and a job in the shop namespace, two of them failing](/images/tui/workloads.png)
+
+It opens on the workloads when this terminal is connected, and on the
+clusters when it isn't. Press <kbd>?</kbd> at any time to see every key, and
+<kbd>q</kbd> to quit.
+
+## Workloads
+
+The list shows every deployment, statefulset, daemonset and job in the
+session's namespace, and any pods that none of them controls, with their
+ready count, status, restarts and age. `✓` is ready and `✗` is not. The list
+reloads every five seconds, and <kbd>Ctrl</kbd>+<kbd>R</kbd> reloads it now.
+
+Move with the arrow keys or <kbd>j</kbd> and <kbd>k</kbd>, and press
+<kbd>/</kbd> to filter by name. The bar at the bottom shows the cluster, the
+namespace, whether the session can write, and how tug reaches the cluster:
+`direct`, `via tugd` or through a [tunnel](/docs/guides/tunnels).
+
+These keys act on the selected workload:
+
+| Key | What it does | Like |
+| --- | --- | --- |
+| <kbd>l</kbd> | Stream logs from every pod, following new ones. | `tug logs -f` |
+| <kbd>w</kbd> | Say why it isn't ready, and what to do next. | `tug why` |
+| <kbd>t</kbd> | Show what it's made of, and the health of each part. | `tug tree` |
+| <kbd>s</kbd> | Open a shell in a running pod. The UI comes back when you exit. | `tug sh` |
+| <kbd>p</kbd> | Port-forward through tugd, in the background. | `tug pf --name` |
+| <kbd>r</kbd> | Rolling restart, after asking. | `tug restart` |
+| <kbd>S</kbd> | Scale to a number of replicas. | `tug scale` |
+
+They work from the logs, why and tree panes as well, so you can go from a
+diagnosis straight to the logs. <kbd>Esc</kbd> goes back to the list.
+
+## Logs
+
+![Logs from both pods of deploy/checkout, each line prefixed with its pod and container](/images/tui/logs.png)
+
+<kbd>l</kbd> streams the logs of every pod with a coloured `pod/container`
+prefix, as `tug logs -f` does, and pods that start later join the stream.
+Scroll up to stop following, and press <kbd>G</kbd> to follow again.
+
+## Why isn't it ready?
+
+![tug ui explaining that deploy/payments is not ready because its container exits with code 1, with the command to run next](/images/tui/why.png)
+
+<kbd>w</kbd> runs the same diagnosis as
+[`tug why`](/docs/guides/workloads#why-isnt-it-working): crashing
+containers, images that won't pull, failing probes, pods no node can take and
+recent warning events, each with the next thing to try.
+
+<kbd>t</kbd> shows the workload's tree, as
+[`tug tree`](/docs/guides/workloads#what-is-it-made-of) does: its Services,
+ReplicaSets, pods and containers, and the health of each.
+
+![The tree of deploy/frontend: its Service, ReplicaSet, three pods and their containers, all ready](/images/tui/tree.png)
+
+Both read once when they open. <kbd>Ctrl</kbd>+<kbd>R</kbd> reads again.
+
+## Shells, port-forwards, restarts and scaling
+
+- <kbd>s</kbd> picks a running pod and its default container, as `tug sh`
+  does, and hands the terminal over until you exit. When the container has no
+  shell, it offers to add an
+  [ephemeral debug container](/docs/guides/workloads#images-without-a-shell)
+  (`busybox:1.36`) to the pod.
+- <kbd>p</kbd> asks for ports (`8080`, `9000:http`, or nothing for every port
+  the pod declares) and a name, and [tugd](/docs/guides/proxy) runs the
+  forward in the background. It keeps the same local port and follows the
+  workload to new pods. `tug pf ls` shows it and `tug pf stop <name>` ends it.
+- <kbd>r</kbd> asks before a rolling restart, and <kbd>S</kbd> asks for a
+  replica count.
+
+## Read-only sessions
+
+![On prod-eu, a read-only session, tug ui asks: prod-eu is read-only. Restart deploy/checkout anyway?](/images/tui/read-only.png)
+
+On a [read-only session](/docs/concepts/read-only), such as a cluster
+labelled `env=prod`, shells, restarts and scaling ask first, as the commands
+do. The answer defaults to no, and then nothing changes:
+
+```text
+refused restart deploy/checkout: prod-eu is read-only; run `tug unlock 15m` to allow writes
+```
+
+Logs, diagnoses and port-forwards only read, so they never ask. While the
+session is unlocked, the bar says until when.
+
+## Clusters
+
+![The clusters view: clusters from kubeconfig, AWS, Google, Azure and kind, with their regions, env and labels](/images/tui/clusters.png)
+
+<kbd>c</kbd> lists the [catalog](/docs/concepts/catalog), with each cluster's
+provider, region, env and labels. `*` marks this terminal's cluster, and
+production clusters show `prod` in red.
+
+Type to filter by name, label value or `label=value`; type <kbd>/</kbd> first
+when the filter starts with `q` or `?`. <kbd>Enter</kbd> connects this
+terminal to the selected cluster, as `tug connect` does: read-only when its
+labels say so, and through tugd when it has a tunnel.
+
+## Namespaces
+
+![The namespace picker on staging-us, with shop as the current namespace](/images/tui/namespaces.png)
+
+<kbd>n</kbd> lists the cluster's namespaces. Type to filter and press
+<kbd>Enter</kbd> to switch, as `tug ns` does. Other terminals keep their own
+namespace.
+
+## Every key
+
+![The help screen, listing every key](/images/tui/help.png)
+
+## k9s
+
+If you prefer [k9s](https://k9scli.io), `tug ui --k9s` opens it with the
+session's kubeconfig. Arguments after `--` go to k9s:
+
+```bash
+tug ui --k9s
+tug ui --k9s -- --readonly
+```
+
+<Callout type="info">
+  k9s talks to the cluster directly, so tug's read-only guard covers it only
+  when you connected with `--proxy`. tug's own view goes through the guard
+  either way.
+</Callout>
+
+## In scripts
+
+`tug ui` needs a terminal, and says so without one. In scripts, use `tug ls`,
+`tug status` and the other commands. While the view is open, tug holds its
+own warnings and prints them when you quit. Colour is left out when
+`NO_COLOR` is set or `TERM=dumb`.

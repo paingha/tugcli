@@ -92,10 +92,24 @@ Set `TUG_PROMPT_DISABLE=1` to keep your prompt unchanged.
 
 ## tug ui
 
-Open [k9s](https://k9scli.io) on this session's cluster. k9s must be installed.
+Open a full-screen terminal UI on this terminal's session: the catalog's
+clusters, and the namespace's workloads with their health. Logs, why, tree,
+shells, port-forwards, restarts and scaling are one key away, and on a
+read-only session writes ask first. See [the terminal UI](/docs/guides/tui).
+
+```bash
+tug ui [--k9s] [-- k9s arguments...]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--k9s` | Open [k9s](https://k9scli.io) with the session's kubeconfig instead. Arguments after `--` go to k9s. |
+
+`tug ui` needs a terminal.
 
 ```bash
 tug ui
+tug ui --k9s -- --readonly
 ```
 
 ## tug doctor

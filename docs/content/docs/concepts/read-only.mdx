@@ -54,9 +54,9 @@ stricter wins: a cluster opens read-only when either says so.
 
 | What you run | Normal session | `tug connect --proxy` |
 | --- | --- | --- |
-| tug's own commands (`tug restart`, `tug scale`, `tug sh`…) | Guarded | Guarded |
+| tug's own commands (`tug restart`, `tug scale`, `tug sh`…) and [`tug ui`](/docs/guides/tui) | Guarded | Guarded |
 | kubectl through tug (`tug delete pod x`, `tug apply -f …`) | Guarded | Guarded |
-| `kubectl`, `helm`, `k9s` and other tools run directly | **Not guarded** | Guarded |
+| `kubectl`, `helm`, `k9s` (`tug ui --k9s` too) and other tools run directly | **Not guarded** | Guarded |
 
 With `--proxy`, every client talks to the cluster through
 [tugd](/docs/guides/proxy), a small proxy on your machine, which refuses

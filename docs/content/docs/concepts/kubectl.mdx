@@ -18,7 +18,7 @@ cluster and namespace. There's nothing to configure.
 tug connect staging
 kubectl get pods        # staging-us, default namespace
 helm list               # same cluster
-k9s                     # same cluster (or: tug ui)
+k9s                     # same cluster (or: tug ui --k9s)
 ```
 
 ## Anything tug doesn't know runs as kubectl
@@ -72,15 +72,19 @@ export TUG_KUBECTL=/opt/kubectl-1.32/kubectl
 
 ## k9s
 
-`tug ui` opens [k9s](https://k9scli.io) on this terminal's cluster:
+k9s follows the session like kubectl does. `tug ui --k9s` opens
+[k9s](https://k9scli.io) on this terminal's cluster too, and passes any
+arguments after `--` to it:
 
 ```bash
-tug ui
+tug ui --k9s
 ```
 
-You need k9s installed; tug tells you where to get it if it isn't.
+You need k9s installed; tug tells you where to get it if it isn't. Without
+`--k9s`, `tug ui` opens tug's own [terminal UI](/docs/guides/tui).
 
 <Callout type="info">
   k9s talks to the cluster directly, so tug's read-only guard covers it only
-  when you connected with `--proxy`.
+  when you connected with `--proxy`. tug's own UI goes through the guard
+  either way.
 </Callout>

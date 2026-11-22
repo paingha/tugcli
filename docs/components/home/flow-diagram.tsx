@@ -57,7 +57,7 @@ const tools: Item[] = [
   {
     icon: <Telescope />,
     name: 'k9s',
-    detail: 'opened with tug ui',
+    detail: 'or tug ui --k9s',
     tint: 'bg-[#eef0f3] text-[#33404f] dark:bg-white/10 dark:text-[#dbe6ef]',
   },
   {
