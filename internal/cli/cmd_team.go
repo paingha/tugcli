@@ -307,14 +307,14 @@ func (a *app) printPlan(p team.Plan) {
 }
 
 func planCounts(p team.Plan) string {
-	s := teamPlural(len(p.Changes), "change", "changes")
+	s := plural(len(p.Changes), "change", "changes")
 	if n := len(p.Conflicts); n > 0 {
-		s += ", " + teamPlural(n, "conflict", "conflicts")
+		s += ", " + plural(n, "conflict", "conflicts")
 	}
 	return s
 }
 
-func teamPlural(n int, one, many string) string {
+func plural(n int, one, many string) string {
 	if n == 1 {
 		return "1 " + one
 	}
@@ -373,7 +373,7 @@ last good version, so names, labels and policies keep working offline.`,
 			switch {
 			case unreviewed > 0:
 				return fmt.Errorf("%s waiting for review; run tug team sync in a terminal, or pass --yes to apply without asking",
-					teamPlural(unreviewed, "new version", "new versions"))
+					plural(unreviewed, "new version", "new versions"))
 			case failed > 0:
 				return fmt.Errorf("%d of %d teams could not be checked; tug keeps using their last good versions", failed, len(srcs))
 			}
@@ -421,7 +421,7 @@ func (a *app) syncTeam(cmd *cobra.Command, src team.Source, yes bool) (bool, err
 		}
 		msg := fmt.Sprintf("version %d, up to date", u.Document.Version)
 		if len(plan.Changes) > 0 {
-			msg += ", " + teamPlural(len(plan.Changes), "change", "changes") + " for clusters listed since"
+			msg += ", " + plural(len(plan.Changes), "change", "changes") + " for clusters listed since"
 		}
 		fmt.Fprintf(a.stdout, "%s team %s: %s\n", c.Green("✓"), src.Name, msg)
 		return true, nil
@@ -837,8 +837,8 @@ func newTeamVerifyCmd(a *app) *cobra.Command {
 				return err
 			}
 			_, err = fmt.Fprintf(a.stdout, "%s is version %d, signed by that key: %s, %s, %s, %s\n", args[0], doc.Version,
-				teamPlural(len(doc.Accounts), "account", "accounts"), teamPlural(len(doc.Clusters), "cluster", "clusters"),
-				teamPlural(len(doc.PluginIndexes), "plugin index", "plugin indexes"), teamPlural(len(doc.Policies), "policy", "policies"))
+				plural(len(doc.Accounts), "account", "accounts"), plural(len(doc.Clusters), "cluster", "clusters"),
+				plural(len(doc.PluginIndexes), "plugin index", "plugin indexes"), plural(len(doc.Policies), "policy", "policies"))
 			return err
 		},
 	}

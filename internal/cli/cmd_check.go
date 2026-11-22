@@ -143,9 +143,9 @@ func (a *app) printCheck(r *policy.Report, allNamespaces bool) {
 			subject += " in " + r.Namespace
 		}
 	case allNamespaces:
-		subject = plural(r.Objects, "object") + " in every namespace"
+		subject = plural(r.Objects, "object", "objects") + " in every namespace"
 	default:
-		subject = plural(r.Objects, "object") + " in " + r.Namespace
+		subject = plural(r.Objects, "object", "objects") + " in " + r.Namespace
 	}
 	names := make([]string, len(r.Packs))
 	for i, p := range r.Packs {
@@ -160,10 +160,10 @@ func (a *app) printCheck(r *policy.Report, allNamespaces bool) {
 		blocking := r.Blocking()
 		var parts []string
 		if blocking > 0 {
-			parts = append(parts, c.Red(plural(blocking, "blocking failure")))
+			parts = append(parts, c.Red(plural(blocking, "blocking failure", "blocking failures")))
 		}
 		if advisory := len(r.Findings) - blocking; advisory > 0 {
-			parts = append(parts, c.Yellow(plural(advisory, "advisory finding")))
+			parts = append(parts, c.Yellow(plural(advisory, "advisory finding", "advisory findings")))
 		}
 		verdict = joinAnd(parts)
 	}
@@ -188,14 +188,6 @@ func (a *app) printCheck(r *policy.Report, allNamespaces bool) {
 		fmt.Fprintln(w)
 		printFinding(w, c, width, shown)
 	}
-}
-
-// plural writes a count of things, adding an s when there are not one.
-func plural(n int, thing string) string {
-	if n == 1 {
-		return "1 " + thing
-	}
-	return fmt.Sprintf("%d %ss", n, thing)
 }
 
 // packView is a pack as check --list shows it.
