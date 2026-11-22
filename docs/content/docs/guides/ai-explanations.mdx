@@ -10,7 +10,7 @@ model to read the same evidence, with the end of the failing containers' logs,
 and explain it: what the evidence shows, what most likely causes it, and what
 to look at next.
 
-It is off until you turn it on. Each time, it shows you exactly what it will
+It is off until you turn it on with `tug intelligence enable`. Each time, it shows you exactly what it will
 send and what it may cost, and asks before sending it. tug never runs anything
 the answer suggests.
 
@@ -31,38 +31,49 @@ tug assumes.
 
 ## Turning it on
 
-Add an `intelligence` section to [config.yaml](/docs/reference/configuration#intelligence):
-
-```yaml title="~/.config/tug/config.yaml"
-intelligence:
-  enabled: true
-  provider: anthropic        # anthropic, openai, mistral or custom
-  model: claude-opus-5-5     # any id; each provider but custom has a default
-  monthlySpendCapUSD: 20     # optional: refuse a call that could pass it
-```
-
-Then store the provider's API key, which tug asks for on the terminal and
-keeps in your [keychain](/docs/concepts/credentials):
+One command turns it on with the provider you choose. On a terminal it also
+asks for the provider's API key and keeps it in your
+[keychain](/docs/concepts/credentials); leave it empty to add it later.
 
 ```bash
-tug intelligence key set anthropic
+tug intelligence enable                    # Claude, with its default model
+tug intelligence enable openai --model gpt-6.2-sol
+tug intelligence enable custom --base-url http://localhost:11434/v1 --model llama4:70b
 ```
 
-In scripts and CI, set `TUG_SECRET_<PROVIDER>_API_KEY` instead, such as
+Choosing another provider goes back to its own model and address unless
+`--model` and `--base-url` say otherwise. `tug intelligence disable` turns
+`--deep` off again and keeps everything else, keys included.
+
+Change any other setting with [`tug settings`](/docs/reference/commands/other#tug-settings),
+which edits config.yaml for you, keeps your comments, and refuses a value tug
+could not use:
+
+```bash
+tug settings set intelligence.monthlySpendCapUSD 20   # refuse a call that could pass it
+tug settings set intelligence.model claude-sonnet-5-5
+tug settings unset intelligence.model                 # back to the provider's default
+tug settings list                                     # every setting, its value and where it comes from
+```
+
+To store or replace a key later, run `tug intelligence key set <provider>`. In
+scripts and CI, set `TUG_SECRET_<PROVIDER>_API_KEY` instead, such as
 `TUG_SECRET_ANTHROPIC_API_KEY` or `TUG_SECRET_OPENAI_API_KEY`; it wins over a
 stored key. A key never goes in config.yaml, a flag or an argument, and tug
 never prints it, logs it or puts it in an error. `tug intelligence key rm
 <provider>` removes a stored key. A `custom` endpoint, such as Ollama on your
 own machine, may need no key at all.
 
-For a local model:
+You can also write the settings into [config.yaml](/docs/reference/configuration#intelligence)
+yourself, which is the only way to add prices:
 
-```yaml
+```yaml title="~/.config/tug/config.yaml"
 intelligence:
   enabled: true
   provider: custom
   baseURL: http://localhost:11434/v1   # https, unless it is on this machine
   model: llama4:70b
+  monthlySpendCapUSD: 20
   prices:                              # optional: what it costs you, if anything
     - {model: llama4, input: 0, output: 0}
 ```

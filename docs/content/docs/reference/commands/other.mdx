@@ -1,6 +1,6 @@
 ---
 title: Other commands
-description: auth, daemon, intelligence, version and completion.
+description: auth, daemon, intelligence, settings, version and completion.
 ---
 
 ## tug auth
@@ -85,11 +85,39 @@ and see what they cost.
 
 | Command | Meaning |
 | --- | --- |
+| `tug intelligence enable [provider] [--model <id>] [--base-url <url>]` | Turn `--deep` on with anthropic, openai, mistral or custom, and, on a terminal, ask for and store its API key when none is stored. Another provider goes back to its own model and address unless the flags say otherwise. |
+| `tug intelligence disable` | Turn `--deep` off, keeping the other settings, the ledger and stored keys. |
 | `tug intelligence status [-o table\|json\|yaml]` | The provider, model and address `--deep` uses, where its key comes from (never the key), the price that applies, and this month's spend. |
 | `tug intelligence usage [--limit <n>] [-o table\|json\|yaml]` | The latest calls, and their tokens and cost by day and month (UTC). |
 | `tug intelligence key set <provider>` | Ask for a provider's API key on the terminal and keep it in the keychain. |
 | `tug intelligence key rm <provider>` | Remove a provider's stored key. |
 | `tug intelligence models [-o table\|json\|yaml\|name]` | Each provider's default model, and the prices tug assumes, with their sources. |
+
+## tug settings
+
+Read and change the settings in [config.yaml](/docs/reference/configuration)
+that hold one value, such as `intelligence.enabled` or `sessions.maxAge`,
+without editing the file. tug changes only the setting you name, so the rest
+of the file, comments included, stays as you wrote it, and it refuses a value
+it could not use: a provider it does not know, an `http` address that is not on
+this machine, a word where a number belongs. Lists, such as `plugins.indexes`,
+are edited in the file or by the commands that own them. Secrets are never
+settings.
+
+| Command | Meaning |
+| --- | --- |
+| `tug settings list [-o table\|json\|yaml\|name]` | Every setting, the value tug uses, and where it comes from: config.yaml, a variable such as `TUG_KUBECTL`, or tug's default. |
+| `tug settings get <setting>` | Print the value tug uses for a setting. |
+| `tug settings set <setting> <value>` | Change a setting in config.yaml. Booleans take `true` or `false`, durations take `30s` or `5m`. |
+| `tug settings unset <setting>` | Remove a setting from config.yaml, so tug uses its default. |
+| `tug settings path` | Print where config.yaml is. |
+
+```bash
+tug settings set intelligence.monthlySpendCapUSD 20
+tug settings set sessions.maxAge 72h
+tug settings get intelligence.model
+tug settings unset intelligence.model
+```
 
 ## tug version
 
