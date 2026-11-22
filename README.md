@@ -60,6 +60,7 @@ tug crd schema certificate --field spec.issuerRef  # a CRD's fields; tug crd exp
 tug api deprecations            # API versions a later release removes, what replaces them, objects still written at them
 tug api diff staging prod       # resource types and CRD versions two clusters serve differently
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
+tug why api --deep              # opt-in: a model you choose explains the evidence, after showing it and the cost
 tug gitops status               # Flux and Argo CD: ready, synced, suspended, revision offered vs applied
 tug gitops explain apps         # where delivery fails: dependsOn, source, admission, apply, or what it manages
 tug pf api 8080                 # port-forward by short name
@@ -404,6 +405,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
 | Logs, exec, debug containers, port-forward, rollouts, why, tree and reconcile (shared by CLI and TUI) | [internal/ops](internal/ops) |
 | Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
+| Model providers behind `tug why --deep`: evidence, redaction, prompts, prices, usage | [internal/intelligence](internal/intelligence) |
 | Flux and Argo CD status, explain, drift and dependencies | [internal/gitops](internal/gitops) |
 | Tables, JSON/YAML, colour | [internal/render](internal/render) |
 | First-party plugins (Akamai, CoreWeave, Crusoe, DigitalOcean, Nebius, Rancher, Tailscale, Teleport, Vultr) | [plugins](plugins) |
