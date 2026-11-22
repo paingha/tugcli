@@ -255,10 +255,18 @@ func takeLock(path string, create func(string) error, isTransient func(error) bo
 // retry runs op until it succeeds, fails with an error isTransient does not
 // accept, or wait has passed, and returns its last error.
 func retry(op func() error, isTransient func(error) bool, wait time.Duration) error {
-	deadline := time.Now().Add(wait)
+	return retryClock(op, isTransient, wait, time.Now)
+}
+
+// retryClock is retry with the clock passed in. It stops once the clock
+// reaches the deadline, not only once it is past it: Windows' clock ticks
+// coarsely enough that straight after a short wait it can still read the
+// deadline exactly.
+func retryClock(op func() error, isTransient func(error) bool, wait time.Duration, now func() time.Time) error {
+	deadline := now().Add(wait)
 	for {
 		err := op()
-		if err == nil || !isTransient(err) || time.Now().After(deadline) {
+		if err == nil || !isTransient(err) || !now().Before(deadline) {
 			return err
 		}
 		time.Sleep(10 * time.Millisecond)

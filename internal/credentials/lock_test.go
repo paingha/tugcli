@@ -41,6 +41,21 @@ func TestRetry(t *testing.T) {
 			}
 		})
 	}
+
+	// A clock that has not moved since the wait began, as Windows' coarse
+	// clock may not have, ends a wait of zero after one call.
+	start := time.Now()
+	calls := 0
+	err := retryClock(func() error { calls++; return busy }, isBusy, 0, func() time.Time {
+		if calls > 3 {
+			return start.Add(time.Nanosecond) // so a loop that waits for the clock to move ends
+		}
+		return start
+	})
+	if !errors.Is(err, busy) || calls != 1 {
+		t.Errorf("retry with a still clock = %v after %d calls, want busy after 1", err, calls)
+	}
+
 	if transient(nil) || transient(os.ErrNotExist) || transient(os.ErrExist) {
 		t.Error("transient accepts an error that is not a busy file")
 	}
