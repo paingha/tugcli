@@ -255,6 +255,55 @@ status:
     status: "False"
     type: Ready
 ---
+# kustomize-controller fetched the source but found no spec.path in it,
+# which Flux 2.10 reports as ArtifactFailed, before it has ever applied the
+# Kustomization.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: web, namespace: flux-system, uid: ks-web, generation: 1}
+spec:
+  interval: 10m0s
+  path: ./apps/web
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: -1
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:58:30Z"
+    message: "Fetching manifests for revision main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b with a timeout of 9m30s"
+    observedGeneration: 1
+    reason: ProgressingWithRetry
+    status: "True"
+    type: Reconciling
+  - lastTransitionTime: "2026-11-21T11:58:30Z"
+    message: "kustomization path not found: stat /tmp/kustomization-2817364513/apps/web: no such file or directory"
+    observedGeneration: 1
+    reason: ArtifactFailed
+    status: "False"
+    type: Ready
+---
+# kustomize-controller cannot download the artifact of a source that is
+# ready.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata: {name: cache, namespace: flux-system, uid: ks-cache, generation: 1}
+spec:
+  interval: 10m0s
+  path: ./apps/cache
+  prune: true
+  sourceRef: {kind: GitRepository, name: flux-system}
+status:
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e
+  lastAttemptedRevision: main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:58:30Z"
+    message: "failed to download archive, error: GET http://source-controller.flux-system.svc.cluster.local./gitrepository/flux-system/flux-system/1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b.tar.gz giving up after 10 attempt(s): dial tcp 10.96.120.7:80: connect: connection refused"
+    observedGeneration: 1
+    reason: ArtifactFailed
+    status: "False"
+    type: Ready
+---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata: {name: storefront, namespace: flux-system, uid: ks-storefront, generation: 2}
