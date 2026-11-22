@@ -61,6 +61,13 @@ func (p *procInstance) terminate() error { return terminate(p.cmd.Process) }
 func (p *procInstance) kill() error      { return p.cmd.Process.Kill() }
 
 func (r *Runner) callServe(ctx context.Context, op string, request []byte) ([]byte, error) {
+	if r.WASM != nil {
+		// Compile first, as callWASM does: it does not count against op's
+		// timeout, and a caller that gives up stops waiting for it.
+		if _, err := r.wasmHost(ctx); err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout(op))
 	defer cancel()
 	r.srvMu.Lock()
@@ -92,7 +99,7 @@ func (r *Runner) callServe(ctx context.Context, op string, request []byte) ([]by
 		if errors.As(err, &mle) {
 			return nil, e.WithHint(memoryHint)
 		}
-		return nil, r.withSandboxHint(e)
+		return nil, r.withLimitHint(r.withSandboxHint(e))
 	case <-ctx.Done():
 		_ = s.send(provider.ServeRequest{ID: id, Cancel: true}) // best effort
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -198,7 +205,14 @@ func (s *server) read(inst instance, stdout io.ReadCloser, stderr *lineLogger, d
 		ch, ok := s.pending[resp.ID]
 		s.mu.Unlock()
 		if ok {
-			ch <- resp.Response // buffered; each ID gets one answer
+			// Each call takes one answer. A plugin that answers a call
+			// twice must not stop the reader: a call that has given up,
+			// as one that timed out has, never takes a second.
+			select {
+			case ch <- resp.Response:
+			default:
+				s.r.logger().Warn("plugin answered a serve request more than once", "plugin", s.r.Name, "id", resp.ID)
+			}
 		} else if resp.ID == "" {
 			s.r.logger().Warn("plugin refused a serve request", "plugin", s.r.Name, "response", string(resp.Response))
 		}
@@ -309,6 +323,10 @@ func (r *Runner) Close() error {
 	r.wasmMu.Lock()
 	h := r.wasm
 	r.wasm = nil
+	if job := r.compiling; job != nil {
+		job.abandoned = true
+		r.compiling = nil
+	}
 	r.wasmMu.Unlock()
 	if h != nil {
 		err = errors.Join(err, h.close())

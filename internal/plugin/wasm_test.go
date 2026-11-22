@@ -33,6 +33,9 @@ import (
 const (
 	wasmHostEnv  = "TUG_TEST_WASM_HOST"  // the plugin directory
 	wasmCacheEnv = "TUG_TEST_WASM_CACHE" // the compilation cache
+	// wasmSlowStartEnv holds start-up back by a duration before compiling,
+	// as a loaded machine or a cold cache does.
+	wasmSlowStartEnv = "TUG_TEST_WASM_SLOW_START"
 )
 
 // wasmShared holds what the tests share: the modules, built once, and a
@@ -53,6 +56,9 @@ func TestMain(m *testing.M) {
 	}
 	if dir := os.Getenv(wasmHostEnv); dir != "" {
 		os.Exit(wasmHostMain(dir))
+	}
+	if os.Getenv(memoryHogEnv) != "" {
+		os.Exit(memoryHog())
 	}
 	dir, err := os.MkdirTemp("", "tug-wasm-test-")
 	if err != nil {
@@ -77,6 +83,9 @@ func wasmHostMain(dir string) int {
 		Network:  p.Manifest.Spec.Network,
 		CacheDir: os.Getenv(wasmCacheEnv),
 	}}
+	if d, err := time.ParseDuration(os.Getenv(wasmSlowStartEnv)); err == nil {
+		r.WASM.beforeCompile = func() { time.Sleep(d) }
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	code, err := r.Exec(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
@@ -423,7 +432,7 @@ func TestWASMTimeoutStopsBusyModule(t *testing.T) {
 				r := probeRunner(t, WASMOptions{})
 				r.Serve = serve
 				r.Timeouts = map[string]time.Duration{provider.OpList: 500 * time.Millisecond}
-				if _, err := r.wasmHost(); err != nil { // compile before timing
+				if _, err := r.wasmHost(context.Background()); err != nil { // compile before timing
 					t.Fatal(err)
 				}
 				start := time.Now()

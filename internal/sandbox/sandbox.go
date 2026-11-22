@@ -14,6 +14,10 @@
 // Where the sandbox is missing (Windows, a Linux kernel without Landlock, a
 // Mac without sandbox-exec), plugins run without it and the logger says so
 // at debug level.
+//
+// The same command also sets a plugin's CPU and memory limits (Limits) as
+// rlimits just before it becomes the plugin, on Linux and macOS, sandboxed
+// or not; on macOS it then runs sandbox-exec, which inherits them.
 package sandbox
 
 import (
@@ -28,8 +32,9 @@ import (
 	"github.com/paingha/tugcli/internal/config"
 )
 
-// ExecCommand is the hidden tug command that confines its own process and
-// then runs a plugin in its place. tug starts plugins through it on Linux.
+// ExecCommand is the hidden tug command that confines and limits its own
+// process and then runs a plugin in its place. tug starts plugins through
+// it on Linux, and on macOS when they have limits.
 const ExecCommand = "plugin-sandbox-exec"
 
 // defaultPorts are the TCP ports every plugin may connect to: HTTPS, and DNS

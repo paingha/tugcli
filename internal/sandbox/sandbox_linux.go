@@ -102,37 +102,47 @@ func (s *Sandbox) wrap(c *Command, bin string, args []string, r rules) error {
 	return nil
 }
 
-// Exec confines this process with the rules tug passed in the environment
-// and then executes the plugin named by args[0] with args, which inherits
-// the restrictions. It is ExecCommand's whole job, and returns only when it
-// fails.
+// Exec confines this process with the rules and limits tug passed in the
+// environment and then executes the plugin named by args[0] with args,
+// which inherits the restrictions. It is ExecCommand's whole job, and
+// returns only when it fails.
 func Exec(args []string) error {
 	if len(args) == 0 {
 		return errors.New("no plugin to run; tug runs this command itself when it starts a plugin")
 	}
-	raw, ok := os.LookupEnv(policyEnv)
-	if !ok {
+	limits, limited, err := takeLimits()
+	if err != nil {
+		return err
+	}
+	raw, sandboxed := os.LookupEnv(policyEnv)
+	if !sandboxed && !limited {
 		return fmt.Errorf("%s is not set; tug sets it when it starts a plugin in the sandbox", policyEnv)
 	}
-	var r rules
-	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		return fmt.Errorf("reading the sandbox policy: %w", err)
-	}
-	env := withoutEnv(os.Environ(), policyEnv)
+	env := withoutEnv(withoutEnv(os.Environ(), policyEnv), limitsEnv)
 
 	// Landlock and seccomp restrict the thread that asks, and this thread
 	// becomes the plugin when it executes it.
 	runtime.LockOSThread()
-	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
-		return fmt.Errorf("setting no_new_privs: %w", err)
+	if sandboxed {
+		var r rules
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			return fmt.Errorf("reading the sandbox policy: %w", err)
+		}
+		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
+			return fmt.Errorf("setting no_new_privs: %w", err)
+		}
+		if err := applyLandlock(r); err != nil {
+			return fmt.Errorf("restricting files and network with Landlock: %w", err)
+		}
+		if err := applySeccomp(len(r.Sockets) > 0); err != nil {
+			return fmt.Errorf("installing the seccomp filter: %w", err)
+		}
 	}
-	if err := applyLandlock(r); err != nil {
-		return fmt.Errorf("restricting files and network with Landlock: %w", err)
+	// Last, so that nothing above runs short of memory.
+	if err := applyLimits(limits); err != nil {
+		return err
 	}
-	if err := applySeccomp(len(r.Sockets) > 0); err != nil {
-		return fmt.Errorf("installing the seccomp filter: %w", err)
-	}
-	err := unix.Exec(args[0], args, env)
+	err = unix.Exec(args[0], args, env)
 	if errors.Is(err, unix.EACCES) {
 		return fmt.Errorf("running %s: %w; the sandbox allows only the plugin, its interpreter and its tools", args[0], err)
 	}

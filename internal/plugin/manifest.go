@@ -75,6 +75,9 @@ type Spec struct {
 	// Sandbox says what the plugin needs beyond its own directory when tug
 	// runs it in the operating system's sandbox.
 	Sandbox Sandbox `json:"sandbox,omitzero"`
+	// Limits says how much processor time, memory and time the plugin
+	// needs, within what config.yaml allows.
+	Limits Limits `json:"limits,omitzero"`
 	// AccountConfig is a JSON Schema for per-account settings.
 	AccountConfig map[string]any `json:"accountConfig,omitempty"`
 }
@@ -118,6 +121,11 @@ var (
 	validName    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	validEnv     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	validVersion = regexp.MustCompile(`^v?\d+(\.\d+){0,2}$`)
+	// validPluginVersion is what a plugin's own version may be. tug
+	// installs each version in a directory of that name, so it must be
+	// one path element on every system: no separators, not . or .., and
+	// no trailing dot, which Windows drops.
+	validPluginVersion = regexp.MustCompile(`^[0-9A-Za-z]([0-9A-Za-z.+_-]{0,62}[0-9A-Za-z])?$`)
 )
 
 // LoadManifest reads plugin.yaml from dir.
@@ -204,8 +212,10 @@ func (m *Manifest) Validate() error {
 	if !validName.MatchString(m.Metadata.Name) {
 		errs = append(errs, fmt.Errorf("metadata.name %q must be lower-case letters, digits and dashes", m.Metadata.Name))
 	}
-	if m.Metadata.Version == "" {
+	if v := m.Metadata.Version; v == "" {
 		errs = append(errs, errors.New("metadata.version is required"))
+	} else if !validPluginVersion.MatchString(v) {
+		errs = append(errs, fmt.Errorf("metadata.version %q must be letters, digits, dots, dashes, underscores and pluses, such as 0.1.0 or 1.2.0-rc.1", v))
 	}
 	if v := m.Spec.MinTugVersion; v != "" && !validVersion.MatchString(v) {
 		errs = append(errs, fmt.Errorf("spec.minTugVersion %q must be a version such as 0.4.0", v))
@@ -254,6 +264,7 @@ func (m *Manifest) Validate() error {
 		}
 	}
 	errs = append(errs, m.Spec.Sandbox.validate()...)
+	errs = append(errs, m.Spec.Limits.validate()...)
 	return errors.Join(errs...)
 }
 

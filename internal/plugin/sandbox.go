@@ -32,12 +32,20 @@ func (r *Runner) Command(args ...string) (*sandbox.Command, error) {
 		return nil, provider.Errorf(provider.Internal, "plugin %s is a WebAssembly module, which runs in tug rather than as a process", r.Name)
 	}
 	env := r.Environ()
-	if r.Sandbox == nil {
-		return &sandbox.Command{Path: r.Bin, Args: args, Env: env}, nil
+	c := &sandbox.Command{Path: r.Bin, Args: args, Env: env}
+	if r.Sandbox != nil {
+		var err error
+		if c, err = r.Sandbox.Command(r.Bin, args, env); err != nil {
+			return nil, provider.Errorf(provider.Internal, "plugin %s: %v", r.Name, err).WithHint(r.sandboxHint())
+		}
 	}
-	c, err := r.Sandbox.Command(r.Bin, args, env)
-	if err != nil {
-		return nil, provider.Errorf(provider.Internal, "plugin %s: %v", r.Name, err).WithHint(r.sandboxHint())
+	self := r.Self
+	if self == "" && r.Sandbox != nil {
+		self = r.Sandbox.Self
+	}
+	if err := c.Limit(self, r.Limits); err != nil {
+		c.Cleanup()
+		return nil, provider.Errorf(provider.Internal, "plugin %s: %v", r.Name, err)
 	}
 	return c, nil
 }

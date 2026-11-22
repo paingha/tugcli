@@ -49,9 +49,11 @@ type serveSession struct {
 	p              Provider
 	stdout, stderr io.Writer
 
-	outMu   sync.Mutex
-	cMu     sync.Mutex
-	cancels map[string]context.CancelFunc
+	// outMu and errMu keep the answers of concurrent requests from
+	// writing to stdout, or stderr, at the same time.
+	outMu, errMu sync.Mutex
+	cMu          sync.Mutex
+	cancels      map[string]context.CancelFunc
 }
 
 // concurrent reads lines in a goroutine of its own and answers each request
@@ -193,5 +195,7 @@ func (s *serveSession) writeErr(id, op string, e *Error) {
 		e.Code = Internal
 	}
 	s.write(id, errorResponseMsg{typeMeta: meta(kindError), Error: *e})
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
 	fmt.Fprintf(s.stderr, "%s %s: %v\n", progName(), op, e)
 }

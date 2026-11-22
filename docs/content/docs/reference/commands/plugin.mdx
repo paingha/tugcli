@@ -1,13 +1,16 @@
 ---
 title: Plugin commands
-description: tug plugin ls, describe, install, link, unlink, remove, new, package and test.
+description: tug plugin ls, describe, inspect, install, link, unlink, remove, new, package and test.
 ---
 
 `tug plugin` (alias `tug plugins`) manages [provider plugins](/docs/plugins).
 
 ## tug plugin ls
 
-List providers, built in and plugins. Alias: `list`.
+List providers, built in and plugins, with each plugin's pinned version
+(`PINNED`). Alias: `list`. Warns on stderr about installed plugins that a
+configured index has [revoked](/docs/plugins/indexes#revoking-a-release),
+and about pins to versions that are not installed.
 
 ```bash
 tug plugin ls
@@ -20,6 +23,28 @@ Run a plugin's `describe` operation and show its manifest.
 ```bash
 tug plugin describe <name>
 ```
+
+## tug plugin inspect
+
+Explain what a plugin may access, without installing or running it: the
+secrets it would receive, its environment variables, network hosts, files,
+sockets and programs, whether it would run in the sandbox, its CPU, memory
+and time limits after `plugins.limits`, who signed it, whether an index has
+revoked it, and whether it is pinned.
+
+```bash
+tug plugin inspect <archive|url|name[@version]> [-o table|json|yaml] [--sha256 <hash>]
+```
+
+```bash
+tug plugin inspect ./tug-provider-acme_0.1.0.tar.gz   # an archive, matched to its index entry by sha256
+tug plugin inspect acme@0.2.0                         # downloaded from an index and checked, not installed
+tug plugin inspect acme -o json                       # an installed or linked plugin, from its install receipt
+```
+
+A name without a version is the installed or linked plugin when there is
+one, and otherwise the pinned version, or the newest, in the indexes. `--sha256` checks an
+archive from a URL. The JSON and YAML are stable for review scripts.
 
 ## tug plugin search
 
@@ -34,7 +59,10 @@ tug plugin search [query] [-o table|json|yaml|name]
 
 Install a plugin by name from a signed index, or from a `.tar.gz` or `.zip`
 archive, after checking its checksums. Shows the publisher, secrets,
-environment and network hosts first, and asks to confirm.
+environment, network hosts, sandbox and limits first, and asks to confirm.
+Refuses an archive that a configured index has revoked, and a version other
+than the plugin's pin in `plugins.pins`; a pinned plugin named without a
+version installs at its pin.
 
 ```bash
 tug plugin install <name[@version]|file|url> [flags]
@@ -45,6 +73,7 @@ tug plugin install acme                 # newest version from the first index th
 tug plugin install acme@0.1.0
 tug plugin install ./tug-provider-acme_0.1.0.tar.gz
 tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz --sha256 9f2c…
+tug plugin install acme@0.1.0 --pin           # and pin acme to 0.1.0 in config.yaml
 ```
 
 | Flag | Meaning |
@@ -52,6 +81,7 @@ tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz --sha256 9
 | `--sha256 <hash>` | Expected SHA-256 of the archive. Required for URLs; an index supplies it for names. |
 | `-y`, `--yes` | Install without asking. |
 | `--force` | Replace the same version if it's installed. |
+| `--pin` | Pin the plugin to the version installed, in `plugins.pins` in `config.yaml`, replacing any pin it has. |
 
 ## tug plugin link
 
@@ -127,5 +157,7 @@ Build and sign a plugin index, for those who publish one. See
 | --- | --- |
 | `tug plugin index keygen [--name <key>] [--force]` | Make an ed25519 signing key, kept in the credential store, and print its public key. |
 | `tug plugin index add <index.yaml> <archive> --url <https URL> [--description <text>]` | Record a packaged archive in an index file, creating the file if needed. |
+| `tug plugin index revoke <index.yaml> <archive\|sha256> [--reason <text>]` | Withdraw an archive: install refuses it and `tug plugin ls` warns those who have it. `--plugin` and `--version` name an archive the index never listed. |
+| `tug plugin index rotate <index.yaml> --to <key> [--from <key>]` | Hand the index over from its signing key (`--from`, default `default`, or `TUG_INDEX_KEY`) to a new one from `keygen --name`; then sign with the new key. |
 | `tug plugin index sign <index.yaml> [--name <key>]` | Sign the index, writing `<index.yaml>.sig`. `TUG_INDEX_KEY` supplies the key in CI. |
 | `tug plugin index verify <index.yaml> --public-key <key>` | Check an index against its signature and public key. |
