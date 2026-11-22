@@ -98,6 +98,7 @@ type Config struct {
 	Plugins  PluginsConfig  `json:"plugins,omitempty"`
 	Sessions SessionsConfig `json:"sessions,omitempty"`
 	OIDC     OIDCConfig     `json:"oidc,omitempty"`
+	Policy   PolicyConfig   `json:"policy,omitzero"`
 	// Teams are the team catalogs tug follows, besides those added with
 	// tug team add.
 	Teams []TeamCatalog `json:"teams,omitempty"`
