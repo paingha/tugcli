@@ -24,7 +24,7 @@ import (
 const IndexKeyEnv = "TUG_INDEX_KEY"
 
 // errNoIndex is returned when a plugin is named but no index is set up.
-var errNoIndex = errors.New("no plugin index is set up; add one under plugins.indexes in config.yaml (name, url, publicKey), or install from a file or URL")
+var errNoIndex = errors.New("no plugin index is set up; add one with `tug settings add plugins.indexes name=<name> url=<url> publicKey=<key>`, or install from a file or URL")
 
 func (a *app) indexSources() ([]plugin.IndexSource, error) {
 	srcs := make([]plugin.IndexSource, 0, len(a.cfg.Plugins.Indexes))
@@ -191,8 +191,9 @@ func newPluginIndexCmd(a *app) *cobra.Command {
 		Short: "Build and sign a plugin index, for those who publish one",
 		Long: `A plugin index lists reviewed plugins with the URL and sha256 of each archive,
 and is signed with ed25519 as a whole. An archive may also have a Sigstore
-signature from its publisher's release workflow. Users add the index to
-plugins.indexes in config.yaml with its public key; tug plugin install <name>
+signature from its publisher's release workflow. Users add the index with its
+public key, using tug settings add plugins.indexes name=<name> url=<url>
+publicKey=<key>; tug plugin install <name>
 then checks the index's signature, the archive's Sigstore signature when the
 index names one, the archive's sha256 and every binary's sha256.
 

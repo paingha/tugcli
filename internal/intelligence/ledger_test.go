@@ -107,7 +107,7 @@ func TestCheckCap(t *testing.T) {
 		},
 		{
 			name: "no price under a cap", capUSD: 10, high: 0, priced: false,
-			want: "over the monthly spend cap: intelligence.monthlySpendCapUSD is $10.00 and this model has no price, so tug cannot tell what the call would cost; add its price under intelligence.prices in config.yaml",
+			want: "over the monthly spend cap: intelligence.monthlySpendCapUSD is $10.00 and this model has no price, so tug cannot tell what the call would cost; add its price with `tug settings add intelligence.prices model=<id> input=<$ per million> output=<$ per million>`",
 		},
 	}
 	for _, tt := range tests {

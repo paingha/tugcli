@@ -11,8 +11,15 @@ signature, the archive's SHA-256, and the SHA-256 of every binary inside it.
 
 ## Using an index
 
-Add the index to [`config.yaml`](/docs/reference/configuration#plugins) with
-the public key its publisher gives you:
+Add the index with the public key its publisher gives you. tug shows what it
+will trust and asks first (`--yes` in scripts):
+
+```bash
+tug settings add plugins.indexes name=acme url=https://plugins.acme.example/index.yaml publicKey=<the base64 key the publisher printed>
+```
+
+That writes it to [`config.yaml`](/docs/reference/configuration#plugins), which
+you can also edit by hand:
 
 ```yaml title="~/.config/tug/config.yaml"
 plugins:
@@ -21,6 +28,8 @@ plugins:
     url: https://plugins.acme.example/index.yaml
     publicKey: <the base64 key the publisher printed>
 ```
+
+`tug settings remove plugins.indexes acme` stops trusting it.
 
 Then:
 

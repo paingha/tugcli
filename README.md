@@ -67,6 +67,7 @@ tug support bundle api          # a redacted archive of its YAML, why, events, l
 tug why api --deep              # opt-in: a model you choose explains the evidence, after showing it and the cost
 tug intelligence enable openai  # turn --deep on with a provider, and store its API key
 tug settings set sessions.maxAge 72h  # change config.yaml without editing it; tug settings list shows them all
+tug settings add guard.readOnlyLabels team=payments  # lists too; asks before a change that protects less
 tug gitops status               # Flux and Argo CD: ready, synced, suspended, revision offered vs applied
 tug gitops explain apps         # where delivery fails: dependsOn, source, admission, apply, or what it manages
 tug pf api 8080                 # port-forward by short name

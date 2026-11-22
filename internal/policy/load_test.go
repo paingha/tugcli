@@ -203,3 +203,25 @@ func TestSelect(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckSource(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	for _, tt := range []struct {
+		src  config.PolicyPackSource
+		want string
+	}{
+		{config.PolicyPackSource{Path: "packs/acme.yaml"}, ""},
+		{config.PolicyPackSource{URL: "https://policy.example/p.yaml", SHA256: sha}, ""},
+		{config.PolicyPackSource{URL: "http://127.0.0.1:8080/p.yaml", SHA256: sha}, ""},
+		{config.PolicyPackSource{}, "give the pack's path, or its url and sha256"},
+		{config.PolicyPackSource{Path: "a.yaml", URL: "https://x/a.yaml", SHA256: sha}, "give a path or a url, not both"},
+		{config.PolicyPackSource{URL: "https://policy.example/p.yaml"}, "https://policy.example/p.yaml needs a sha256, which pins the pack so that a change to it is never run unseen"},
+		{config.PolicyPackSource{URL: "http://policy.example/p.yaml", SHA256: sha}, "refusing http://policy.example/p.yaml: packs are downloaded over https only"},
+		{config.PolicyPackSource{Path: "a.yaml", SHA256: "abc"}, `sha256 "abc" must be 64 hexadecimal digits`},
+	} {
+		err := CheckSource(tt.src)
+		if (tt.want == "" && err != nil) || (tt.want != "" && (err == nil || err.Error() != tt.want)) {
+			t.Errorf("CheckSource(%+v) = %v, want %q", tt.src, err, tt.want)
+		}
+	}
+}

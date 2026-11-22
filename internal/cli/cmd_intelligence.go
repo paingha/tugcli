@@ -122,7 +122,7 @@ func (a *app) printIntelligenceStatus(st intelligenceStatus) error {
 	case key != "none needed":
 		key = "stored in " + key
 	}
-	price := c.Yellow("unknown; add one under intelligence.prices in config.yaml")
+	price := c.Yellow("unknown; add one with `tug settings add intelligence.prices model=" + st.Model + " input=<$ per million> output=<$ per million>`")
 	if p := st.Price; p != nil {
 		price = priceText(*p)
 	}
@@ -514,7 +514,7 @@ could cost, and asks before sending anything.`,
 					changes = append(changes, config.Change{Setting: c.setting, Value: c.value})
 				case switching:
 					// The configured one was for the other provider.
-					changes = append(changes, config.Change{Setting: c.setting, Unset: true})
+					changes = append(changes, config.Change{Setting: c.setting, Op: config.OpUnset})
 				}
 			}
 			var s intelligence.Settings
