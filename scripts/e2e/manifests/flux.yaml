@@ -1,0 +1,69 @@
+# What Flux delivers in the flux suite: podinfo from its Git repository, a
+# Kustomization that depends on it and names a path the repository does not
+# have, and podinfo's Helm chart in a namespace of its own. Both sources are
+# pinned to podinfo 6.17.0.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: podinfo
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: https://github.com/stefanprodan/podinfo
+  ref:
+    tag: 6.17.0
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo
+  namespace: flux-system
+spec:
+  interval: 10m
+  sourceRef: {kind: GitRepository, name: podinfo}
+  path: ./kustomize
+  prune: true
+  wait: true
+  timeout: 3m
+  targetNamespace: e2e-flux
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo-broken
+  namespace: flux-system
+spec:
+  dependsOn:
+    - name: podinfo
+  interval: 10m
+  sourceRef: {kind: GitRepository, name: podinfo}
+  path: ./does-not-exist
+  prune: true
+  targetNamespace: e2e-flux
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: podinfo
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: https://stefanprodan.github.io/podinfo
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: podinfo-helm
+  namespace: flux-system
+spec:
+  interval: 10m
+  targetNamespace: e2e-helm
+  install:
+    createNamespace: true
+  chart:
+    spec:
+      chart: podinfo
+      version: 6.17.0
+      sourceRef: {kind: HelmRepository, name: podinfo}
+  values:
+    replicaCount: 1

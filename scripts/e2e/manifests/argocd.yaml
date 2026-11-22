@@ -1,0 +1,65 @@
+# What Argo CD delivers in the argocd suite, from argocd-example-apps pinned
+# to one commit. apps is an app of apps: the repository's apps chart, cut
+# down to one Application, example.guestbook, which deploys the guestbook
+# into e2e-argo. broken names a path the repository does not have.
+#
+# Argo CD's core install leaves out argocd-server, which is what creates the
+# default project, so it is created here.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: default
+  namespace: argocd
+spec:
+  sourceRepos: ["*"]
+  destinations:
+    - {server: "*", namespace: "*"}
+  clusterResourceWhitelist:
+    - {group: "*", kind: "*"}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: apps
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: 8088f4c0d970abb09e250248cc97e35623447cb5
+    path: apps
+    helm:
+      valuesObject:
+        config:
+          spec:
+            destination:
+              server: https://kubernetes.default.svc
+            source:
+              repoURL: https://github.com/argoproj/argocd-example-apps
+              targetRevision: 8088f4c0d970abb09e250248cc97e35623447cb5
+        applications:
+          - name: guestbook
+            destination:
+              namespace: e2e-argo
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated: {}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: broken
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: 8088f4c0d970abb09e250248cc97e35623447cb5
+    path: does-not-exist
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-argo
+  syncPolicy:
+    automated: {}

@@ -48,8 +48,8 @@ You need:
 - [Go](https://go.dev/dl/), at the version in [go.mod](go.mod) or newer;
 - `make`;
 - [golangci-lint](https://golangci-lint.run/) v2, for `make lint`;
-- optionally [kind](https://kind.sigs.k8s.io/) and Docker, for
-  `make e2e-kind`;
+- optionally [kind](https://kind.sigs.k8s.io/), Docker, kubectl, git, curl
+  and Python 3, for `make e2e-kind`;
 - optionally Node.js 20.9 or newer (22 recommended), for the docs site.
 
 ```bash
@@ -69,8 +69,17 @@ make test         # all tests, with the race detector
 | Format | `make fmt` |
 | Build the first-party plugins | `make plugins` |
 | Python SDK tests | `make python-sdk-test` |
-| End to end against a kind cluster | `make e2e-kind` |
+| End to end against kind clusters | `make e2e-kind` |
 | Run the docs site | `cd docs && npm install && npm run dev` |
+
+`make e2e-kind` creates two kind clusters, `tug-e2e` and `tug-e2e-b`, unless
+they exist, and runs the suites of [scripts/e2e-kind.sh](scripts/e2e-kind.sh)
+against them: `core`, `commands` (which compares the two clusters), `flux`
+and `argocd`. Name the ones you want with `E2E_SUITES`, as in
+`make e2e-kind E2E_SUITES="core flux"`. The suites expect new clusters, so
+run `make e2e-kind-clean` before running them again. `flux` and `argocd`
+download Flux, Argo CD and what they deliver from GitHub. CI runs each suite
+as a job of its own, on new clusters.
 
 Tests never touch your real keychain or home directory: they set `TUG_HOME`
 to a temporary folder and use the encrypted file store. When you try a

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/util/duration"
+	"k8s.io/client-go/discovery"
 
 	"github.com/paingha/tugcli/internal/gitops"
 	"github.com/paingha/tugcli/internal/ops"
@@ -111,6 +112,12 @@ func (a *app) gitopsSnapshot(ctx context.Context, namespace string) (*opsEnv, gi
 	oc, mapper, err := a.objectClients(env)
 	if err != nil {
 		return nil, gitops.Clients{}, nil, err
+	}
+	// Whether the cluster serves Flux or Argo CD comes from discovery, read
+	// afresh as tug api resources reads it: the cache stays fresh for hours,
+	// and would hide a tool installed since it was filled.
+	if cached, ok := oc.Discovery.(discovery.CachedDiscoveryInterface); ok {
+		cached.Invalidate()
 	}
 	c := gitops.Clients{Clients: oc, Mapper: mapper}
 	s, err := gitops.Load(ctx, c, env.namespace)
