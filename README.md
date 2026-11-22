@@ -50,6 +50,7 @@ tug bookmark add api deploy/api-server -n shop   # later, from any terminal: tug
 tug open deploy/api             # the file in this repository that defines it, in $EDITOR (and as path:line)
 tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's commands, or a write
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug check -n payments           # policy packs: requests, probes, non-root, budgets, registries
 tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
 tug api resources cert          # search the resource types the cluster serves; tug api versions for group-versions
 tug crd schema certificate --field spec.issuerRef  # a CRD's fields; tug crd explain for versions and conversion
@@ -228,12 +229,45 @@ in tug's config directory.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `watch`, `logs`, `top`, `gitops`, `crd` and
-every `api` command but `diff`. Each line is prefixed with the cluster's name,
-failures are listed at the end, and tug exits 1 if any cluster failed.
+reads, and `tug why`, `tree`, `check`, `watch`, `logs`, `top`, `gitops`, `crd`
+and every `api` command but `diff`. Each line is prefixed with the cluster's
+name, failures are listed at the end, and tug exits 1 if any cluster failed.
 `--parallel` (default 8) caps how many run together. Writes, and commands that
 bind a local port or the terminal, are refused before anything runs.
 Tunnelled clusters go through their tunnels.
+
+## Policy packs
+
+`tug check [target] [-n ns | -A] [--pack name]` checks workloads and other
+objects against policy packs and prints each failure as `tug why` prints a
+finding, with the check's remediation as its next step. A pack is a
+versioned YAML file of checks, data only: required labels and annotations,
+image registries, resource requests and limits, probes, PodDisruptionBudget
+coverage, securityContext, topology spread, storage classes, and conditions a
+custom resource must have, each with a severity, a match on kinds, labels and
+namespaces, and `enforcement: advisory` (the default) or `blocking`.
+
+```yaml
+apiVersion: tug.policy/v1alpha1
+kind: PolicyPack
+name: platform
+version: 2.1.0
+checks:
+  - id: registries
+    severity: error
+    enforcement: blocking
+    description: Images come from our registry.
+    remediation: push the image to registry.example.com and run it from there
+    imageRegistries:
+      allow: [registry.example.com]
+```
+
+A `baseline` pack of advisory checks is built in. Others load from
+`policy.packs` in `config.yaml`: files, or https URLs pinned by their
+`sha256`, which are refused if they change. `policy.default` names the packs
+that run without `--pack`; `tug check --list` shows them. check exits 1 only
+when a blocking check fails, and `-o json` or `-o yaml` gives the report.
+[Policy packs](docs/content/docs/guides/policy.mdx) has every check type.
 
 ## Audit log
 
@@ -356,6 +390,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
 | API discovery, CRDs and schemas, upstream API removals and support windows | [internal/apiinfo](internal/apiinfo) |
 | Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
+| Policy packs behind `tug check` | [internal/policy](internal/policy) |
 | tugd: local API proxy, named port-forwards, control socket | [internal/daemon](internal/daemon) |
 | Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
