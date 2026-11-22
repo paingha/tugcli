@@ -7,7 +7,7 @@ expert to make a difference.
 This guide covers how to report problems, set up a development copy, and get
 a change merged. The code standards themselves live in
 [AGENTS.md](AGENTS.md), which is written for people and AI coding agents
-alike.
+alike. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Ways to help
 

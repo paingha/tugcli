@@ -526,7 +526,8 @@ please don't open a public issue for one.
 
 Bug reports, docs fixes, plugins and pull requests are welcome.
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how to report a problem, set up a
-development copy and get a change merged.
+development copy and get a change merged. Everyone taking part follows the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 
