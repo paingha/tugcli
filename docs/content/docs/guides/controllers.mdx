@@ -1,0 +1,143 @@
+---
+title: Controllers and reconciling
+description: Which controller is meant to fix an object, whether it runs, and what it has done.
+icon: Workflow
+---
+
+`tug why` tells you what's wrong with an object. When the object belongs to an
+operator, such as a Flux Kustomization, a cert-manager Certificate or a
+database custom resource, the next question is who is meant to fix it: which
+controller reconciles it, whether that controller runs and leads, and what it
+has done lately. `tug reconcile` answers those questions, and only ever reads.
+
+## What tug can know, and what it infers
+
+Kubernetes doesn't record which controller acted on which object, or when. So
+tug gathers the evidence that exists and labels each conclusion:
+
+- **observed**: read from the API as it is, such as a status condition, a
+  timestamp, an event, the name a field manager wrote the status under, or a
+  Lease held by one of the controller's pods;
+- **inferred**: tug's reading of evidence that could mislead, such as a field
+  manager that happens to share a deployment's name, a service account whose
+  role lets it update the object's status, or a log line with the object's
+  name but not its UID.
+
+Kubernetes keeps no history of reconciles either. The timeline tug shows is
+pieced together from the timestamps objects carry now and from events, which
+the API server keeps for an hour by default. Older changes, and objects deleted
+since, leave no trace.
+
+## Who reconciles it?
+
+```console
+$ tug reconcile explain db/orders
+database/orders in shop is not ready: BackupFailing: the latest backup failed (owns 2, 1 not ready)
+generation 2, last reconciled at 1: its controller has not caught up
+
+CONDITION   STATUS   REASON          SINCE
+Ready       False    BackupFailing   10m
+
+Controllers that may reconcile it, likeliest first:
+  deploy/db-operator in db-system is healthy: 1/1 ready, leader db-operator-5d4f-x2x4z (inferred)
+    observed field manager db-operator has written its status, last at 2026-11-21T10:31:58Z
+    inferred deploy/db-operator in db-system has the same name
+    inferred it runs as db-system/db-operator, which may update databases/status through ClusterRole db-operator
+
+FIELD MANAGER               OPERATION   WROTE    LAST WRITE
+db-operator                 Update      status   3m ago
+kubectl-client-side-apply   Update      spec     60m ago
+
+error    database/orders: BackupFailing (observed)
+         Ready is False: the latest backup failed
+         next: see its status and events:
+               tug describe databases.db.example.com/orders -n shop
+
+warning  database/orders: NotPickedUp (inferred)
+         deploy/db-operator in db-system runs, but it has not reconciled generation 2 (it last reconciled 1); it may be failing on it, backed up, or not watching it
+         next: see what it logged about it:
+               tug reconcile trace databases.db.example.com/orders --logs -n shop
+```
+
+explain starts from `tug why`'s findings and adds the controller. It looks at
+the field managers in `metadata.managedFields` that wrote the object's status,
+who reported events about it, the service accounts whose roles let them update
+its status by name, and the operators that usually serve its API group. Then
+it checks the likeliest controller's workload: no ready pod, no leader, or a
+controller that runs but hasn't reconciled the latest generation each get a
+finding. Built-in kinds are named as the control plane's: a Deployment's
+status is written by kube-controller-manager.
+
+When nothing points to a controller, explain says so rather than guess.
+
+## Is the controller running?
+
+```console
+$ tug reconcile status db-operator
+deploy/db-operator in db-system is healthy: 1/1 ready, leader db-operator-5d4f-x2x4z
+service account db-system/db-operator
+
+POD                               STATUS    READY   RESTARTS   NODE     AGE
+db-operator-5d4f-x2x4z (leader)   Running   1/1     0          node-1   60m
+
+LEASE                    HOLDER                          RENEWED   DURATION   CHANGES   BASIS
+lease/db-operator-lock   db-operator-5d4f-x2x4z_8f2c1e   2s ago    15s        1         observed
+
+Reconciles, as its permissions tell (inferred):
+KIND       RESOURCE                   EVIDENCE
+Backup     backups.db.example.com     its service account may update backups/status through ClusterRole db-operator
+Database   databases.db.example.com   its service account may update databases/status through ClusterRole db-operator
+
+Nothing wrong found.
+```
+
+Most controllers run more than one replica and elect a leader with a
+coordination.k8s.io Lease, so only one reconciles at a time. status shows the
+Leases its pods hold, how long ago the leader renewed, and whether that is
+longer than the Lease allows, which means the leader may be stuck. A Lease
+named after the controller but held by something that isn't one of its pods
+is flagged too: another copy of the controller may be leading.
+
+You don't need `-n`: a controller that isn't in your session's namespace is
+looked for in every namespace. A static pod works as well:
+`tug reconcile status pod/kube-controller-manager-cp-1 -n kube-system`.
+
+## What happened to it?
+
+```console
+$ tug reconcile trace db/orders --logs
+database/orders in shop: generation 2, last reconciled at 1: its controller has not caught up
+logs from deploy/db-operator in db-system, the likeliest controller (inferred)
+
+AGE   SOURCE          OBJECT                       WHAT
+2d    metadata        database/orders              created
+60m   managedFields   database/orders              kubectl-client-side-apply last wrote spec (Update)
+10m   condition       database/orders              Ready became False: BackupFailing: the latest backup failed
+4m    log             pod/db-operator-5d4f-x2x4z   (inferred) {"level":"error","msg":"Reconciler error","Database":{"name":"orders","namespace":"shop"},"error":"bucket not found"}
+3m    managedFields   database/orders              db-operator last wrote status (Update)
+2m    event           database/orders              Warning BackupFailed: backup orders-nightly failed (x3)
+2m    log             pod/db-operator-5d4f-x2x4z   patched status of database-orders
+note: Kubernetes keeps no history of reconciles. ...
+```
+
+The timeline merges what the object and everything it owns carry: creation and
+deletion times, each field manager's last write, each condition's last change,
+when owned objects were created and when their pods' containers started and
+exited, and the events about all of them. With `--logs`, it adds the
+controller's log lines that mention the object: by UID (observed) or by name
+(inferred). Name the controller with `--controller deploy/db-operator` when tug
+can't tell, and read further back with `--since 2h`.
+
+## Watch it
+
+```bash
+tug reconcile events db/orders -f
+```
+
+lists the events about the object and everything it owns, then follows new
+ones, including those about objects it comes to own, such as the pods of a new
+rollout, until you press <kbd>Ctrl</kbd>+<kbd>C</kbd>.
+
+Every command takes `-o json` or `-o yaml`, where each finding and piece of
+evidence has a `basis` of `observed` or `inferred`. See the
+[reference](/docs/reference/commands/reconcile) for every flag.

@@ -391,6 +391,8 @@ type graph struct {
 	// unlisted names the resources that could not be listed, whose objects
 	// may be missing.
 	unlisted []string
+	// resources maps each kind that was listed to its resource.
+	resources map[schema.GroupKind]apiResource
 }
 
 // member is an object found while listing, with what the graph keeps of it.
@@ -398,6 +400,35 @@ type member struct {
 	obj     resolve.Object
 	uid     types.UID
 	created time.Time
+	// deleting is the object's deletionTimestamp: zero unless it is being
+	// deleted.
+	deleting time.Time
+}
+
+// descendant is an object found beneath another, with its owner.
+type descendant struct {
+	member
+	owner resolve.Object
+}
+
+// descendants returns everything beneath an object, each once, depth first
+// in the order ownedBy gives.
+func (g *graph) descendants(root resolve.Object, uid types.UID) []descendant {
+	seen := map[types.UID]bool{uid: true}
+	var out []descendant
+	var walk func(owner resolve.Object, uid types.UID)
+	walk = func(owner resolve.Object, uid types.UID) {
+		for _, m := range g.ownedBy(owner, uid, false) {
+			if seen[m.uid] {
+				continue
+			}
+			seen[m.uid] = true
+			out = append(out, descendant{member: m, owner: owner})
+			walk(m.obj, m.uid)
+		}
+	}
+	walk(root, uid)
+	return out
 }
 
 var (
@@ -446,47 +477,74 @@ var (
 // listConcurrency bounds how many resources loadGraph lists at once.
 const listConcurrency = 8
 
+// apiResource is a resource the cluster serves and lets tug list.
+type apiResource struct {
+	resource   schema.GroupVersionResource
+	kind       string
+	namespaced bool
+}
+
+// listableResources returns the resources the cluster serves in their
+// preferred versions that can be listed, apart from subresources, with the
+// group versions whose discovery failed.
+func listableResources(ctx context.Context, c Clients) ([]apiResource, []string, error) {
+	var failedGroups []string
+	lists, err := discovery.ServerPreferredResourcesWithContext(ctx, discovery.ToDiscoveryInterfaceWithContext(c.Discovery))
+	if err != nil {
+		var failed *discovery.ErrGroupDiscoveryFailed
+		if !errors.As(err, &failed) {
+			return nil, nil, fmt.Errorf("discovering the cluster's resources: %w", err)
+		}
+		for gv := range failed.Groups {
+			failedGroups = append(failedGroups, gv.String())
+		}
+	}
+	var out []apiResource
+	for _, l := range lists {
+		gv, err := schema.ParseGroupVersion(l.GroupVersion)
+		if err != nil {
+			continue
+		}
+		for _, r := range l.APIResources {
+			if strings.Contains(r.Name, "/") || !slices.Contains(r.Verbs, "list") {
+				continue
+			}
+			out = append(out, apiResource{resource: gv.WithResource(r.Name), kind: r.Kind, namespaced: r.Namespaced})
+		}
+	}
+	return out, failedGroups, nil
+}
+
 // loadGraph lists the metadata of everything an object could own: every
 // resource in its namespace or, for a cluster-scoped object, in the whole
 // cluster. A resource that cannot be listed, for want of permission or
 // because its API is down, is noted rather than failing the whole.
 func loadGraph(ctx context.Context, c Clients, root resolve.Object) (*graph, error) {
-	g := &graph{owned: map[types.UID][]member{}}
-	lists, err := discovery.ServerPreferredResourcesWithContext(ctx, discovery.ToDiscoveryInterfaceWithContext(c.Discovery))
+	resources, failed, err := listableResources(ctx, c)
 	if err != nil {
-		var failed *discovery.ErrGroupDiscoveryFailed
-		if !errors.As(err, &failed) {
-			return nil, fmt.Errorf("discovering the cluster's resources: %w", err)
-		}
-		for gv := range failed.Groups {
-			g.unlisted = append(g.unlisted, gv.String())
-		}
+		return nil, err
 	}
+	g := &graph{owned: map[types.UID][]member{}, unlisted: failed, resources: map[schema.GroupKind]apiResource{}}
 	type source struct {
 		resource schema.GroupVersionResource
 		kind     string
 		ns       string
 	}
 	var sources []source
-	for _, l := range lists {
-		gv, err := schema.ParseGroupVersion(l.GroupVersion)
-		if err != nil || slices.Contains(skippedGroups, gv.Group) {
+	for _, r := range resources {
+		gr := r.resource.GroupResource()
+		if slices.Contains(skippedGroups, gr.Group) || slices.Contains(skippedResources, gr) {
 			continue
 		}
-		for _, r := range l.APIResources {
-			gr := schema.GroupResource{Group: gv.Group, Resource: r.Name}
-			if strings.Contains(r.Name, "/") || !slices.Contains(r.Verbs, "list") || slices.Contains(skippedResources, gr) {
-				continue
-			}
-			if root.Namespace != "" && !r.Namespaced {
-				continue // a namespaced object owns only objects in its own namespace
-			}
-			ns := ""
-			if r.Namespaced {
-				ns = root.Namespace // every namespace for a cluster-scoped owner
-			}
-			sources = append(sources, source{gv.WithResource(r.Name), r.Kind, ns})
+		if root.Namespace != "" && !r.namespaced {
+			continue // a namespaced object owns only objects in its own namespace
 		}
+		ns := ""
+		if r.namespaced {
+			ns = root.Namespace // every namespace for a cluster-scoped owner
+		}
+		g.resources[schema.GroupKind{Group: gr.Group, Kind: r.kind}] = r
+		sources = append(sources, source{r.resource, r.kind, ns})
 	}
 
 	var (
@@ -519,6 +577,9 @@ func loadGraph(ctx context.Context, c Clients, root resolve.Object) (*graph, err
 					obj:     resolve.Object{Resource: s.resource, Kind: s.kind, Name: it.Name, Namespace: it.Namespace},
 					uid:     it.UID,
 					created: it.CreationTimestamp.Time,
+				}
+				if it.DeletionTimestamp != nil {
+					m.deleting = it.DeletionTimestamp.Time
 				}
 				for _, ref := range it.OwnerReferences {
 					g.owned[ref.UID] = append(g.owned[ref.UID], m)
