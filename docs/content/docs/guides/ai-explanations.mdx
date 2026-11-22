@@ -64,8 +64,16 @@ never prints it, logs it or puts it in an error. `tug intelligence key rm
 <provider>` removes a stored key. A `custom` endpoint, such as Ollama on your
 own machine, may need no key at all.
 
-You can also write the settings into [config.yaml](/docs/reference/configuration#intelligence)
-yourself, which is the only way to add prices:
+Prices you pay that differ from the built-in table, or a local model's, go in
+`intelligence.prices`:
+
+```bash
+tug settings add intelligence.prices model=llama4 input=0 output=0
+tug settings remove intelligence.prices llama4
+```
+
+Everything above lands in [config.yaml](/docs/reference/configuration#intelligence),
+which you can also edit by hand:
 
 ```yaml title="~/.config/tug/config.yaml"
 intelligence:
@@ -74,7 +82,7 @@ intelligence:
   baseURL: http://localhost:11434/v1   # https, unless it is on this machine
   model: llama4:70b
   monthlySpendCapUSD: 20
-  prices:                              # optional: what it costs you, if anything
+  prices:
     - {model: llama4, input: 0, output: 0}
 ```
 
@@ -439,8 +447,8 @@ tug prices every call from a built-in table of each provider's list prices per
 million tokens (input, output and cache reads), with where and when each was
 read; `tug intelligence models` shows it. A model id takes the price of the
 longest entry that starts it, so a dated id takes its family's price, and a
-model with no entry has an unknown cost, never zero. Add or override prices in
-config.yaml:
+model with no entry has an unknown cost, never zero. Add or override prices with
+`tug settings add intelligence.prices`, or in config.yaml:
 
 ```yaml
 intelligence:

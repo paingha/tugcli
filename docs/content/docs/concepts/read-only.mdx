@@ -30,8 +30,17 @@ tug connect staging --read-only    # be careful on this one today
 tug connect prod --read-write      # no guard at all (think twice)
 ```
 
-To change which labels mean "read-only", set
-[`guard.readOnlyLabels`](/docs/reference/configuration#guard) in `config.yaml`.
+To change which labels mean "read-only", change
+[`guard.readOnlyLabels`](/docs/reference/configuration#guard):
+
+```bash
+tug settings add guard.readOnlyLabels team=payments tier=critical   # also read-only
+tug settings remove guard.readOnlyLabels team=payments tier=critical
+```
+
+The first label set you add keeps `env=prod` with it, since tug's default
+applies only while the list is empty. Removing a label set, which makes those
+clusters writable, is shown and asked about first.
 A [team catalog](/docs/guides/teams#safety-policies) you follow can add
 policies of its own, such as production-read-only. Where both apply, the
 stricter wins: a cluster opens read-only when either says so.

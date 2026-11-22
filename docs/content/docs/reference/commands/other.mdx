@@ -95,29 +95,64 @@ and see what they cost.
 
 ## tug settings
 
-Read and change the settings in [config.yaml](/docs/reference/configuration)
-that hold one value, such as `intelligence.enabled` or `sessions.maxAge`,
-without editing the file. tug changes only the setting you name, so the rest
-of the file, comments included, stays as you wrote it, and it refuses a value
-it could not use: a provider it does not know, an `http` address that is not on
-this machine, a word where a number belongs. Lists, such as `plugins.indexes`,
-are edited in the file or by the commands that own them. Secrets are never
-settings.
+Read and change [config.yaml](/docs/reference/configuration) without editing
+it. tug changes only what you name, so the rest of the file, comments included,
+stays as you wrote it (blank lines between settings do not survive), and it
+refuses a value it could not use: a provider it does not know, a plugin index
+key that is not ed25519, an `http` address that is not on this machine, a word
+where a number belongs. Secrets are never settings.
+
+A setting is one of:
+
+- **one value**, such as `intelligence.enabled` or `sessions.maxAge`, changed
+  with `set` and `unset`;
+- **an entry of a map**, named after it: `plugins.timeouts.<operation>` or
+  `plugins.pins.<plugin>`, changed with `set` and `unset`;
+- **a list**, changed one item at a time with `add` and `remove`: a list of
+  names (`plugins.sandbox.exclude`, `plugins.allowOverride`,
+  `oidc.listenAddresses`, `policy.default`), of label sets
+  (`guard.readOnlyLabels`), or of entries with named fields (`plugins.indexes`,
+  `intelligence.prices`, `policy.packs`). Give a label set or an entry as
+  `key=value` arguments. Adding an entry with the name, model, path or url of
+  one already there replaces it; `remove` takes the entry's name, model, path
+  or url alone. `unset` removes a whole list, and a list left empty goes, so
+  tug uses its default again.
 
 | Command | Meaning |
 | --- | --- |
 | `tug settings list [-o table\|json\|yaml\|name]` | Every setting, the value tug uses, and where it comes from: config.yaml, a variable such as `TUG_KUBECTL`, or tug's default. |
-| `tug settings get <setting>` | Print the value tug uses for a setting. |
-| `tug settings set <setting> <value>` | Change a setting in config.yaml. Booleans take `true` or `false`, durations take `30s` or `5m`. |
-| `tug settings unset <setting>` | Remove a setting from config.yaml, so tug uses its default. |
+| `tug settings get <setting>` | Print the value tug uses; a list's items one a line, as `add` takes them. |
+| `tug settings set <setting> <value> [-y]` | Change a setting, or an entry of a map. Booleans take `true` or `false`, durations take `30s` or `5m`. |
+| `tug settings unset <setting> [-y]` | Remove a setting, an entry of a map or a whole list, so tug uses its default. |
+| `tug settings add <setting> <item...> [-y]` | Add an item to a list. |
+| `tug settings remove <setting> <item...> [-y]` | Remove an item from a list. |
 | `tug settings path` | Print where config.yaml is. |
+
+A change that makes tug trust something or protect less is shown, and asked
+about, before it is made: trusting a plugin index, running a plugin without
+the sandbox or turning the sandbox off, letting a plugin replace a built-in
+provider, no longer requiring Sigstore signatures, raising a plugin limit, or
+a cluster no longer opening read-only. Without a terminal it is refused unless
+`-y`/`--yes` is given.
+
+The first label set added to `guard.readOnlyLabels` keeps `env=prod` with it,
+because tug's default of `env=prod` applies only while the list is empty: a
+list of your own would otherwise stop production clusters opening read-only.
 
 ```bash
 tug settings set intelligence.monthlySpendCapUSD 20
-tug settings set sessions.maxAge 72h
-tug settings get intelligence.model
-tug settings unset intelligence.model
+tug settings add guard.readOnlyLabels team=payments tier=critical
+tug settings add plugins.indexes name=acme url=https://plugins.acme.example/index.yaml publicKey=<key>
+tug settings add policy.packs url=https://policy.acme.example/pack.yaml sha256=<sha256>
+tug settings add policy.default acme
+tug settings add intelligence.prices model=llama4 input=0 output=0
+tug settings set plugins.timeouts.list 60s
+tug settings unset plugins.pins.digitalocean      # unpin a plugin
+tug settings remove plugins.indexes acme
 ```
+
+[Team catalogs](/docs/guides/teams) are followed with `tug team add` and
+`tug team remove`, not with `tug settings`.
 
 ## tug version
 

@@ -17,9 +17,10 @@ tug reads the file strictly: a misspelt key is an error, so you'll know
 straight away rather than wondering why a setting does nothing.
 
 You don't have to edit it by hand: [`tug settings`](/docs/reference/commands/other#tug-settings)
-lists, reads and changes the settings that hold one value, keeping the rest of
-the file and its comments, and `tug intelligence enable` turns on
-`tug why --deep` in one step.
+lists, reads and changes every setting below but `teams`, keeping the rest of
+the file and its comments, and asks before a change that makes tug trust
+something or protect less. `tug intelligence enable` turns on `tug why --deep`
+in one step.
 
 ## A complete example
 
