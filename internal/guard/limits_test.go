@@ -56,6 +56,28 @@ func TestLimitsUnlock(t *testing.T) {
 	if got := (Limits{}).Unlock(time.Hour); got != time.Hour {
 		t.Errorf("Unlock(1h) without a limit = %v, want 1h", got)
 	}
+	if got := (Limits{MaxUnlock: 10 * time.Minute}).SuggestedUnlock(); got != 10*time.Minute {
+		t.Errorf("SuggestedUnlock() under a 10m limit = %v, want 10m", got)
+	}
+	if got := l.SuggestedUnlock(); got != DefaultUnlock {
+		t.Errorf("SuggestedUnlock() under a 30m limit = %v, want %v", got, DefaultUnlock)
+	}
+}
+
+func TestDeniedErrorSuggestsAnUnlock(t *testing.T) {
+	tests := []struct {
+		unlock time.Duration
+		want   string
+	}{
+		{0, "refused DELETE pods/api-0: prod is read-only; run `tug unlock 15m` to allow writes"},
+		{10 * time.Minute, "refused DELETE pods/api-0: prod is read-only; run `tug unlock 10m` to allow writes"},
+	}
+	for _, tt := range tests {
+		err := &DeniedError{Cluster: "prod", Action: "DELETE pods/api-0", Unlock: tt.unlock}
+		if got := err.Error(); got != tt.want {
+			t.Errorf("DeniedError{Unlock: %v}.Error() = %q, want %q", tt.unlock, got, tt.want)
+		}
+	}
 }
 
 func TestShortDuration(t *testing.T) {

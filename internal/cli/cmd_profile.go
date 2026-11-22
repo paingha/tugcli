@@ -16,6 +16,7 @@ import (
 
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/daemon"
+	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/profile"
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/session"
@@ -136,7 +137,7 @@ func (a *app) useProfile(ctx context.Context, s *session.Session, p *profile.Pro
 	c := a.colors()
 	mode := c.Green("read-write")
 	if readOnly {
-		mode = c.Red("read-only") + c.Dim(" (tug unlock 15m to allow writes)")
+		mode = c.Red("read-only") + c.Dim(" (tug unlock "+guard.ShortDuration(a.limits(cl).SuggestedUnlock())+" to allow writes)")
 	}
 	fmt.Fprintf(a.stdout, "Profile %s: connected to %s, namespace %s, %s\n", c.Bold(p.Name), c.Bold(cl.Name), s.State.Namespace, mode)
 	if auth.ProxyURL != "" {

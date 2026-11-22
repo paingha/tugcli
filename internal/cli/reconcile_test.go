@@ -16,9 +16,12 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/paingha/tugcli/internal/ops"
 )
@@ -82,16 +85,55 @@ func operatorLogs() string {
 		at(2*time.Minute) + " patched status of database-orders\n"
 }
 
+// controlPlanePod is kube-controller-manager's static pod on a
+// control-plane node, labelled as kubeadm and kind label it.
+func controlPlanePod(node string) *corev1.Pod {
+	started := metav1.NewTime(time.Now().Add(-time.Hour))
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "kube-controller-manager-" + node, Namespace: "kube-system", UID: types.UID("pod-kcm-" + node),
+			Labels:            map[string]string{"component": "kube-controller-manager", "tier": "control-plane"},
+			Annotations:       map[string]string{corev1.MirrorPodAnnotationKey: "4f9c"},
+			OwnerReferences:   []metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: node, UID: types.UID("node-" + node), Controller: new(true)}},
+			CreationTimestamp: started,
+		},
+		Spec: corev1.PodSpec{NodeName: node, HostNetwork: true, Containers: []corev1.Container{{Name: "kube-controller-manager"}}},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "kube-controller-manager", Ready: true,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: started}}}},
+		},
+	}
+}
+
 // reconcileAPIServer serves a cluster with the shop namespace of
 // reconcileShopObjects and a database operator in db-system that holds its
 // leader Lease, may update databases' status, and has logged about orders.
 // A watch of the events in shop sends one more BackupFailed about orders,
-// then stays open until the client goes.
-func reconcileAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
+// then stays open until the client goes. kube-system has kubeSystem, and a
+// kube-controller-manager Lease that the first of them, a static pod on the
+// host's network, holds in its node's name.
+func reconcileAPIServer(t *testing.T, kubeSystem ...*corev1.Pod) (*httptest.Server, *atomic.Int32) {
 	t.Helper()
 	var writes atomic.Int32
 	shop := newFakeNamespace(t, reconcileShopObjects()...)
 	dbSystem := newFakeNamespace(t, dbSystemObjects()...)
+	var kubeSystemObjects []runtime.Object
+	var kubeSystemLeases []coordinationv1.Lease
+	for i, p := range kubeSystem {
+		kubeSystemObjects = append(kubeSystemObjects, p)
+		if i == 0 {
+			kubeSystemLeases = append(kubeSystemLeases, coordinationv1.Lease{
+				ObjectMeta: metav1.ObjectMeta{Name: "kube-controller-manager", Namespace: "kube-system"},
+				Spec: coordinationv1.LeaseSpec{
+					HolderIdentity: new(p.Spec.NodeName + "_0f3e"), LeaseDurationSeconds: new(int32(15)),
+					AcquireTime: &metav1.MicroTime{Time: time.Now().Add(-time.Hour)}, RenewTime: &metav1.MicroTime{Time: time.Now().Add(-2 * time.Second)},
+				},
+			})
+		}
+	}
+	kubeSystemNS := newFakeNamespace(t, kubeSystemObjects...)
 	empty := newFakeNamespace(t)
 	lease := coordinationv1.Lease{
 		ObjectMeta: metav1.ObjectMeta{Name: "db-operator-lock", Namespace: "db-system"},
@@ -147,10 +189,16 @@ func reconcileAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 			writeJSON(t, w, rbac[strings.TrimPrefix(p, rbacPrefix)])
 			return
 		case p == "/apis/apps/v1/deployments" || p == "/apis/apps/v1/statefulsets" || p == "/apis/apps/v1/daemonsets":
-			listEverywhere(t, w, strings.TrimPrefix(p, "/apis/apps/v1/"), shop, dbSystem)
+			listEverywhere(t, w, r, strings.TrimPrefix(p, "/apis/apps/v1/"), shop, dbSystem, kubeSystemNS)
+			return
+		case p == "/api/v1/pods":
+			listEverywhere(t, w, r, "pods", shop, dbSystem, kubeSystemNS)
 			return
 		case p == "/apis/coordination.k8s.io/v1/namespaces/db-system/leases":
 			writeJSON(t, w, coordinationv1.LeaseList{Items: []coordinationv1.Lease{lease}})
+			return
+		case p == "/apis/coordination.k8s.io/v1/namespaces/kube-system/leases":
+			writeJSON(t, w, coordinationv1.LeaseList{Items: kubeSystemLeases})
 			return
 		case p == "/api/v1/namespaces/db-system/pods/"+operatorPod+"/log":
 			w.Header().Set("Content-Type", "text/plain")
@@ -166,6 +214,8 @@ func reconcileAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 				shop.serve(w, r, parts)
 			case "db-system":
 				dbSystem.serve(w, r, parts)
+			case "kube-system":
+				kubeSystemNS.serve(w, r, parts)
 			default:
 				empty.serve(w, r, parts)
 			}
@@ -177,12 +227,22 @@ func reconcileAPIServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 	return srv, &writes
 }
 
-// listEverywhere lists a resource in every namespace the fake serves.
-func listEverywhere(t *testing.T, w http.ResponseWriter, resource string, namespaces ...*fakeNamespace) {
+// listEverywhere lists a resource in every namespace the fake serves,
+// honouring the request's label selector.
+func listEverywhere(t *testing.T, w http.ResponseWriter, r *http.Request, resource string, namespaces ...*fakeNamespace) {
+	sel, err := labels.Parse(r.URL.Query().Get("labelSelector"))
+	if err != nil {
+		writeStatus(w, http.StatusBadRequest, "BadRequest", err.Error())
+		return
+	}
 	items := []runtime.Object{}
 	for _, ns := range namespaces {
 		ns.mu.Lock()
-		items = append(items, ns.objects[resource]...)
+		for _, o := range ns.objects[resource] {
+			if m, err := meta.Accessor(o); err == nil && sel.Matches(labels.Set(m.GetLabels())) {
+				items = append(items, o)
+			}
+		}
 		ns.mu.Unlock()
 	}
 	res := fakeResources[resource]
@@ -223,11 +283,12 @@ func steady(s string) string {
 // hasSteady reports whether out has want, once both are steady.
 func hasSteady(out, want string) bool { return strings.Contains(steady(out), steady(want)) }
 
-// connectToReconcileCluster imports and connects to reconcileAPIServer.
-func connectToReconcileCluster(t *testing.T) *atomic.Int32 {
+// connectToReconcileCluster imports and connects to reconcileAPIServer,
+// with kubeSystem in kube-system.
+func connectToReconcileCluster(t *testing.T, kubeSystem ...*corev1.Pod) *atomic.Int32 {
 	t.Helper()
 	isolate(t)
-	srv, writes := reconcileAPIServer(t)
+	srv, writes := reconcileAPIServer(t, kubeSystem...)
 	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, srv))
 	newSession(t)
 	mustTug(t, "connect", "payments-prod")
@@ -270,6 +331,35 @@ func TestReconcileStatus(t *testing.T) {
 	}
 	if writes.Load() != 0 {
 		t.Fatalf("reconcile status wrote to the cluster %d times", writes.Load())
+	}
+}
+
+func TestReconcileStatusOfAStaticPod(t *testing.T) {
+	// On kind and kubeadm clusters kube-controller-manager is the static pod
+	// kube-controller-manager-<node>, found by its own name through its
+	// component label.
+	connectToReconcileCluster(t, controlPlanePod("kind-control-plane"))
+	out := mustTug(t, "reconcile", "status", "kube-controller-manager")
+	if want := "pod/kube-controller-manager-kind-control-plane in kube-system is healthy"; !strings.Contains(out, want) ||
+		!strings.Contains(out, "leader kube-controller-manager-kind-control-plane\n") {
+		t.Errorf("tug reconcile status kube-controller-manager lacks %q and its leader:\n%s", want, out)
+	}
+	if out := mustTug(t, "reconcile", "status", "kube-controller-manager", "-n", "kube-system"); !strings.Contains(out, "pod/kube-controller-manager-kind-control-plane in kube-system") {
+		t.Errorf("tug reconcile status kube-controller-manager -n kube-system:\n%s", out)
+	}
+	if r := tug(t, "reconcile", "status", "kube-controller-manager", "-n", "shop"); r.code == 0 || !strings.Contains(r.stderr, `nothing in namespace shop matches "kube-controller-manager"`) {
+		t.Errorf("tug reconcile status kube-controller-manager -n shop = %+v", r)
+	}
+
+	// Each control-plane node of a highly available cluster runs one; as for
+	// other ties, tug asks which, and needs a terminal to.
+	connectToReconcileCluster(t, controlPlanePod("cp-1"), controlPlanePod("cp-2"))
+	r := tug(t, "reconcile", "status", "kube-controller-manager")
+	if r.code == 0 || !strings.Contains(r.stderr, "pod/kube-controller-manager-cp-1 in kube-system") || !strings.Contains(r.stderr, "pod/kube-controller-manager-cp-2 in kube-system") {
+		t.Errorf("tug reconcile status kube-controller-manager with two control-plane nodes = %+v, want both offered", r)
+	}
+	if out := mustTug(t, "reconcile", "status", "pod/kube-controller-manager-cp-1", "-n", "kube-system"); !strings.Contains(out, "leader kube-controller-manager-cp-1\n") {
+		t.Errorf("tug reconcile status pod/kube-controller-manager-cp-1 -n kube-system:\n%s", out)
 	}
 }
 

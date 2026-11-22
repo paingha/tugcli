@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// DefaultUnlock is how long tug unlock allows writes when no duration is
+// given and no limit says less.
+const DefaultUnlock = 15 * time.Minute
+
 // Limits are what a cluster's safety rules say about a session on it:
 // whether it opens read-only, and how long an unlock may last. They come
 // from guard.readOnlyLabels in config.yaml and from team policies.
@@ -39,6 +43,11 @@ func (l Limits) Unlock(d time.Duration) time.Duration {
 	}
 	return d
 }
+
+// SuggestedUnlock is how long a hint to run tug unlock suggests: the
+// default, shortened to the limit, so that the suggested unlock is not
+// refused.
+func (l Limits) SuggestedUnlock() time.Duration { return l.Unlock(DefaultUnlock) }
 
 // CheckUnlock returns an *UnlockLimitError when an unlock of d on cluster
 // would last longer than the limit.

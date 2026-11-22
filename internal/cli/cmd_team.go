@@ -16,6 +16,7 @@ import (
 	"github.com/paingha/tugcli/internal/credentials"
 	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/render"
+	"github.com/paingha/tugcli/internal/session"
 	"github.com/paingha/tugcli/internal/team"
 )
 
@@ -105,6 +106,21 @@ func (a *app) limits(cl *catalog.Cluster) guard.Limits {
 		rules = append(rules, team.Policies(t.src.Name, t.acc.Document)...)
 	}
 	return team.Limits(cl, a.cfg.Guard.ReadOnlyLabels, rules)
+}
+
+// suggestedUnlock is how long a hint to run tug unlock on session st
+// suggests, as tug connect works it out, so that a policy that limits
+// unlocks on its cluster does not refuse the unlock the hint suggests.
+func (a *app) suggestedUnlock(st session.State) time.Duration {
+	cat, err := a.loadCatalog()
+	if err != nil {
+		return guard.DefaultUnlock
+	}
+	cl, err := cat.Get(st.ClusterID)
+	if err != nil {
+		return guard.DefaultUnlock
+	}
+	return a.limits(cl).SuggestedUnlock()
 }
 
 // teamIndexes returns the plugin indexes the teams approve.

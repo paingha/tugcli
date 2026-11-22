@@ -306,6 +306,45 @@ func mustSign(t *testing.T, doc, priv string) []byte {
 	return sig
 }
 
+// TestUnlockHintsFollowTheTeamLimit checks that every hint to run tug
+// unlock on a cluster whose team limits unlocks suggests one the limit
+// allows, as tug connect's does.
+func TestUnlockHintsFollowTheTeamLimit(t *testing.T) {
+	isolate(t)
+	api, writes := fakeAPIServer(t)
+	mustTug(t, "import", "kubeconfig", writeKubeconfig(t, api))
+	newSession(t)
+	priv, pub, err := team.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, indexKey, _ := team.NewKey()
+	srv := newTeamServer(t)
+	srv.publish(t, teamCatalogDoc(1, "10m", writeGPUKubeconfig(t, api), srv.URL+"/index.yaml", indexKey), priv, nil)
+	mustTug(t, "team", "add", "platform", srv.catalogURL(), "--public-key", pub, "--yes")
+
+	const hint = "tug unlock 10m"
+	if out := mustTug(t, "connect", "pay-prod"); !strings.Contains(out, "read-only ("+hint+" to allow writes)") {
+		t.Fatalf("connect: %s, want it to suggest %q", out, hint)
+	}
+	// Writes the guard refuses, from tug and through kubectl.
+	for _, args := range [][]string{{"scale", "api", "3"}, {"delete", "pod", "api-0"}} {
+		r := tug(t, args...)
+		if r.code == 0 || !strings.Contains(r.stderr, "is read-only") || !strings.Contains(r.stderr, "run `"+hint+"` to allow writes") {
+			t.Errorf("tug %s = %+v, want a refusal that suggests %q", strings.Join(args, " "), r, hint)
+		}
+	}
+	mustTugIn(t, "cluster: pay-prod\n", "profile", "edit", "prod")
+	if out := mustTug(t, "profile", "up", "prod"); !strings.Contains(out, "read-only ("+hint+" to allow writes)") {
+		t.Errorf("profile up: %s, want it to suggest %q", out, hint)
+	}
+	if writes.Load() != 0 {
+		t.Fatalf("%d writes reached the API server", writes.Load())
+	}
+	// The unlock the hints suggest is one the policy allows.
+	mustTug(t, "unlock", "10m")
+}
+
 func TestTeamFromConfigYAML(t *testing.T) {
 	home := isolate(t)
 	api, _ := fakeAPIServer(t)

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/paingha/tugcli/internal/audit"
+	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/passthrough"
 	"github.com/paingha/tugcli/internal/render"
 	"github.com/paingha/tugcli/internal/session"
@@ -178,8 +179,8 @@ func (a *app) allowKubectlWrite(s *session.Session, args []string) (string, erro
 	}
 	question := fmt.Sprintf("%s is read-only. Run `kubectl %s` anyway?", s.State.ClusterName, strings.Join(args, " "))
 	if !a.confirm(question, false) {
-		return "", fmt.Errorf("refused: %s is read-only and `kubectl %s` may write; run `tug unlock 15m` to allow writes",
-			s.State.ClusterName, strings.Join(args, " "))
+		return "", fmt.Errorf("refused: %s is read-only and `kubectl %s` may write; run `tug unlock %s` to allow writes",
+			s.State.ClusterName, strings.Join(args, " "), guard.ShortDuration(a.suggestedUnlock(s.State)))
 	}
 	return audit.AllowedConfirmed, nil
 }

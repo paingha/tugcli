@@ -9,6 +9,7 @@ import (
 
 	"github.com/paingha/tugcli/internal/catalog"
 	"github.com/paingha/tugcli/internal/credentials"
+	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/importer"
 	"github.com/paingha/tugcli/internal/oidc"
 	"github.com/paingha/tugcli/internal/plugin"
@@ -70,13 +71,14 @@ func (a *app) rotateCredential(ctx context.Context, args []string, yes bool) err
 		return fmt.Errorf("the %s provider cannot rotate credentials; `tug plugin ls` shows which providers can", cl.Provider)
 	}
 
-	readOnly := a.limits(cl).ReadOnly
+	limits := a.limits(cl)
 	unlocked := connected && s.State.ClusterID == cl.ID && s.State.Writable(a.now())
 	question := fmt.Sprintf("Rotate the credential for %s? Anything still using the old one loses access.", cl.Name)
 	switch {
-	case readOnly && !unlocked:
+	case limits.ReadOnly && !unlocked:
 		if !a.interactive() {
-			return fmt.Errorf("%s is read-only, so rotating its credential needs a terminal to confirm; or run `tug connect %s` and `tug unlock 15m` first", cl.Name, cl.Name)
+			return fmt.Errorf("%s is read-only, so rotating its credential needs a terminal to confirm; or run `tug connect %s` and `tug unlock %s` first",
+				cl.Name, cl.Name, guard.ShortDuration(limits.SuggestedUnlock()))
 		}
 		if !a.confirm(cl.Name+" is read-only. "+question, false) {
 			return errors.New("not rotated")

@@ -99,7 +99,10 @@ named after the controller but held by something that isn't one of its pods
 is flagged too: another copy of the controller may be leading.
 
 You don't need `-n`: a controller that isn't in your session's namespace is
-looked for in every namespace. A static pod works as well:
+looked for in every namespace. A static pod works as well. On kind and kubeadm
+clusters `tug reconcile status kube-controller-manager` finds the pod
+`kube-controller-manager-<node>` by its `component` label, and asks which one
+when every control-plane node runs one. Any static pod can be named in full:
 `tug reconcile status pod/kube-controller-manager-cp-1 -n kube-system`.
 
 ## What happened to it?

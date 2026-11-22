@@ -11,6 +11,7 @@ import (
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 
@@ -515,6 +516,32 @@ func ControllerTargets(ctx context.Context, cs kubernetes.Interface) ([]resolve.
 	for i, w := range ws {
 		out[i] = w.target
 	}
+	return out, nil
+}
+
+// StaticPodTargets returns the static pods labelled component=<name>, in
+// namespace ns or, when ns is "", in every namespace, sorted by namespace
+// and name. kubeadm and kind label the control plane's static pods so,
+// which is how a controller such as kube-controller-manager, running as
+// the pod kube-controller-manager-<node>, is found by its own name.
+func StaticPodTargets(ctx context.Context, cs kubernetes.Interface, ns, name string) ([]resolve.Target, error) {
+	sel, err := labels.ValidatedSelectorFromSet(labels.Set{"component": name})
+	if err != nil {
+		return nil, nil // no pod has a label with that value
+	}
+	list, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
+	if err != nil {
+		return nil, fmt.Errorf("listing the pods labelled %s: %w", sel, err)
+	}
+	var out []resolve.Target
+	for i := range list.Items {
+		if p := &list.Items[i]; static(p) {
+			out = append(out, resolve.Target{Kind: resolve.KindPod, Name: p.Name, Namespace: p.Namespace})
+		}
+	}
+	slices.SortFunc(out, func(a, b resolve.Target) int {
+		return cmp.Or(strings.Compare(a.Namespace, b.Namespace), strings.Compare(a.Name, b.Name))
+	})
 	return out, nil
 }
 
