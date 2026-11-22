@@ -201,9 +201,21 @@ func (a *app) fanoutRunner(root *cobra.Command, args []string) (fanoutFunc, bool
 	}
 	how := cmd.Annotations[annotationAcrossClusters]
 	if how == "" {
+		// A group such as tug gitops runs across clusters through its
+		// commands.
+		var subs []string
+		for _, c := range cmd.Commands() {
+			if runsAcrossClusters(c) {
+				subs = append(subs, c.Name())
+			}
+		}
+		if len(subs) > 0 {
+			return nil, false, fmt.Errorf("%s does not run across clusters, but its commands %s do",
+				cmd.CommandPath(), joinAnd(subs))
+		}
 		var can []string
 		for _, c := range root.Commands() {
-			if c.Annotations[annotationAcrossClusters] != "" {
+			if runsAcrossClusters(c) {
 				can = append(can, "tug "+c.Name())
 			}
 		}
@@ -213,6 +225,15 @@ func (a *app) fanoutRunner(root *cobra.Command, args []string) (fanoutFunc, bool
 	return func(ctx context.Context, s *session.Session, stdout, stderr io.Writer) error {
 		return a.fanoutTug(ctx, s, args, stdout, stderr)
 	}, how == acrossKubectl, nil
+}
+
+// runsAcrossClusters reports whether a command, or any command beneath
+// it, is marked with annotationAcrossClusters.
+func runsAcrossClusters(cmd *cobra.Command) bool {
+	if cmd.Annotations[annotationAcrossClusters] != "" {
+		return true
+	}
+	return slices.ContainsFunc(cmd.Commands(), runsAcrossClusters)
 }
 
 // joinAnd lists items as "a, b and c".
