@@ -38,8 +38,12 @@ echo "--- tug gitops explain and dependencies"
 expect_exit 0 tug gitops explain podinfo
 has "$out" '^kustomization/podinfo in flux-system is healthy' '^source gitrepository/podinfo at 6\.17\.0@sha1:' \
   '^Manages [0-9]+ objects, none of them unhealthy'
+# Flux reports the missing path as ArtifactFailed, as it does a source it
+# cannot fetch, but the source is ready: explain blames the path.
 expect_exit 1 tug gitops explain ks/podinfo-broken
-has "$out" '^kustomization/podinfo-broken in flux-system is not ready' 'kustomization path not found: .*does-not-exist'
+has "$out" '^kustomization/podinfo-broken in flux-system is not ready: building it fails because its path \./does-not-exist is not in its source$' \
+  '^error +kustomization/podinfo-broken: PathNotFound$' 'kustomization path not found: .*does-not-exist' 'next: set spec\.path '
+lacks "$out" 'tug why gitrepositories'
 expect_exit 0 tug gitops explain hr/podinfo-helm
 has "$out" '^helmrelease/podinfo-helm in flux-system is healthy' '^Manages [0-9]+ objects, none of them unhealthy'
 expect_exit 0 tug gitops dependencies podinfo-broken

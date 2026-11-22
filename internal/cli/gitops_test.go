@@ -60,9 +60,9 @@ const (
 
 // gitopsObjects are what Flux in flux-system and Argo CD in argocd report:
 // a Kustomization rejected by a webhook, one that waits on it, one whose
-// inventory holds the shop namespace's pricing deployment, which lacks a
-// Secret, and its failing Database, and an Application that is out of sync
-// and degraded. They are keyed by group, version and resource.
+// path is not in its source, one whose inventory holds the shop namespace's
+// pricing deployment, which lacks a Secret, and its failing Database, and an
+// Application that is out of sync and degraded. They are keyed by group, version and resource.
 func gitopsObjects() map[string][]*unstructured.Unstructured {
 	source := map[string]any{"kind": "GitRepository", "name": "fleet"}
 	ks := func(name string, spec map[string]any, status map[string]any) *unstructured.Unstructured {
@@ -93,6 +93,11 @@ func gitopsObjects() map[string][]*unstructured.Unstructured {
 			}),
 			ks("tenants", map[string]any{"dependsOn": []any{map[string]any{"name": "apps"}, map[string]any{"name": "crds", "namespace": "platform"}}},
 				map[string]any{"conditions": fluxReady("False", "DependencyNotReady", "dependency 'flux-system/apps' is not ready")}),
+			ks("web", map[string]any{}, map[string]any{
+				"lastAttemptedRevision": fleetRevision,
+				"conditions": fluxReady("False", "ArtifactFailed",
+					"kustomization path not found: stat /tmp/kustomization-2817364513/web: no such file or directory"),
+			}),
 			ks("storefront", map[string]any{}, map[string]any{
 				"lastAppliedRevision": fleetRevision, "lastAttemptedRevision": fleetRevision,
 				"conditions": fluxReady("True", "ReconciliationSucceeded", "Applied revision: "+fleetRevision),
@@ -297,8 +302,8 @@ func TestGitOps(t *testing.T) {
 		if err := json.Unmarshal([]byte(mustTug(t, "gitops", "status", "-A", "-o", "json")), &r); err != nil {
 			t.Fatal(err)
 		}
-		if !slices.Equal(r.Tools, []gitops.Tool{gitops.Flux, gitops.ArgoCD}) || len(r.Objects) != 6 || r.Namespace != "" {
-			t.Errorf("tug gitops status -A -o json = tools %v, %d objects, namespace %q; want flux and argocd, 6, every namespace", r.Tools, len(r.Objects), r.Namespace)
+		if !slices.Equal(r.Tools, []gitops.Tool{gitops.Flux, gitops.ArgoCD}) || len(r.Objects) != 7 || r.Namespace != "" {
+			t.Errorf("tug gitops status -A -o json = tools %v, %d objects, namespace %q; want flux and argocd, 7, every namespace", r.Tools, len(r.Objects), r.Namespace)
 		}
 		names := mustTug(t, "gitops", "status", "-A", "-o", "name")
 		contains(t, "tug gitops status -o name", names, "kustomizations.kustomize.toolkit.fluxcd.io/infra\n", "applications.argoproj.io/guestbook\n")
@@ -319,7 +324,19 @@ func TestGitOps(t *testing.T) {
 			"label team is required.",
 			"change the manifest so that the policy named above allows it")
 
-		out := failing(t, "explain", "storefront", "-n", "flux-system")
+		// Its source is ready, so explain blames its path, not the source,
+		// though Flux reports ArtifactFailed.
+		out := failing(t, "explain", "ks/web")
+		contains(t, "tug gitops explain ks/web", out,
+			"kustomization/web in flux-system is not ready: building it fails because its path ./web is not in its source\n",
+			"error    kustomization/web: PathNotFound\n",
+			"its path ./web is not in revision main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b of its source gitrepository/fleet: kustomization path not found: ",
+			"next: set spec.path where it is defined to a directory that is in its source")
+		if strings.Contains(out, "tug why gitrepositories") {
+			t.Errorf("tug gitops explain ks/web sends to its source, which is ready:\n%s", out)
+		}
+
+		out = failing(t, "explain", "storefront", "-n", "flux-system")
 		contains(t, "tug gitops explain storefront", out,
 			"kustomization/storefront in flux-system is not ready: what it manages is not healthy\n",
 			"error    pod/pricing-9f2a-m4k7p, container main: CreateContainerConfigError\n",

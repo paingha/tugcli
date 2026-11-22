@@ -156,6 +156,7 @@ func (e *explainer) flux(ctx context.Context) error {
 	}
 	e.dependencies()
 	e.fluxSources()
+	e.fluxPath()
 	e.fluxRevision()
 	e.fluxConditions()
 	return e.fluxManaged(ctx)
@@ -283,6 +284,45 @@ func (e *explainer) fluxSources() {
 	}
 }
 
+// reasonPathNotFound is the reason of the finding that a Kustomization's
+// path is not in its source.
+const reasonPathNotFound = "PathNotFound"
+
+// fluxPath checks that the source of a Kustomization has its spec.path.
+// kustomize-controller reports a missing path as ArtifactFailed, the reason
+// it also gives when it cannot fetch the source's artifact, so only its
+// message tells the two apart.
+func (e *explainer) fluxPath() {
+	o := e.o
+	ready := o.condition("Ready")
+	if o.Kind != KindKustomization || ready == nil || ready.Status != string(metav1.ConditionFalse) || !pathNotFound(ready.Message) {
+		return
+	}
+	in := "its source"
+	if o.Source != nil {
+		in += " " + e.name(*o.Source)
+	}
+	if o.Revision != "" {
+		in = "revision " + o.Revision + " of " + in
+	}
+	e.add(StageApply, ops.SeverityError, reasonPathNotFound,
+		fmt.Sprintf("its path %s is not in %s: %s", kustomizationPath(o), in, compact(ready.Message)),
+		"set spec.path where it is defined to a directory that is in its source, relative to the source's root")
+}
+
+// pathNotFound reports whether a message is kustomize-controller's for a
+// spec.path that is not in the source: "kustomization path not found: stat
+// /tmp/kustomization-2817364513/apps/web: no such file or directory".
+func pathNotFound(msg string) bool {
+	return strings.Contains(strings.ToLower(msg), "path not found")
+}
+
+// kustomizationPath returns the spec.path of a Kustomization, which is the
+// root of its source when it is not set.
+func kustomizationPath(o *Object) string {
+	return cmp.Or(text(o.u.Object, "spec", "path"), ".")
+}
+
 // sourceCLIKind is what the flux CLI calls a source kind.
 func sourceCLIKind(k string) string {
 	switch k {
@@ -309,10 +349,7 @@ func (e *explainer) fluxRevision() {
 		if reconciling {
 			sev = ops.SeverityInfo
 		}
-		controller := "kustomize-controller"
-		if o.Kind == KindHelmRelease {
-			controller = "helm-controller"
-		}
+		controller := fluxController(o)
 		e.add(StageReconcile, sev, "NotReconciled",
 			fmt.Sprintf("Flux has not reconciled its latest change: it is at generation %d, but was last reconciled at %d", o.Generation, o.ObservedGeneration),
 			fmt.Sprintf("if this lasts, check that %s is running: `tug why deploy/%s -n flux-system`", controller, controller))
@@ -338,6 +375,15 @@ func (e *explainer) fluxRevision() {
 		msg += "; Flux applies it at its next reconcile, every " + o.Interval
 	}
 	e.add(StageReconcile, sev, "RevisionNotApplied", msg, "")
+}
+
+// fluxController names the Flux controller that reconciles a Kustomization
+// or HelmRelease.
+func fluxController(o *Object) string {
+	if o.Kind == KindHelmRelease {
+		return "helm-controller"
+	}
+	return "kustomize-controller"
 }
 
 // revisionApplied reports whether what a source offers is what was
@@ -394,6 +440,9 @@ func fluxStage(reason, msg string) Stage {
 	case "DependencyNotReady":
 		return StageDependency
 	case "ArtifactFailed", "SourceNotReady", "HelmChartNotReady":
+		if pathNotFound(msg) {
+			return StageApply // the source was fetched, but lacks the path
+		}
 		return StageSource
 	case "HealthCheckFailed":
 		return StageHealth
@@ -425,6 +474,9 @@ func (e *explainer) next(stage Stage, reason string) string {
 	case StageSource:
 		if o.Source != nil {
 			if src := e.s.get(*o.Source); src != nil {
+				if src.Ready == ops.HealthReady {
+					return fmt.Sprintf("its source is ready, so check that %s can download the source's artifact from source-controller: `tug why deploy/source-controller -n flux-system`", fluxController(o))
+				}
 				return "see the source's conditions and events: " + why(src)
 			}
 		}
@@ -437,8 +489,7 @@ func (e *explainer) next(stage Stage, reason string) string {
 	switch o.Kind {
 	case KindKustomization:
 		if reason == "BuildFailed" {
-			path := cmp.Or(text(o.u.Object, "spec", "path"), ".")
-			return fmt.Sprintf("build it as Flux does, in a checkout of its source: `flux build kustomization %s -n %s --path %s`", o.Name, o.Namespace, path)
+			return fmt.Sprintf("build it as Flux does, in a checkout of its source: `flux build kustomization %s -n %s --path %s`", o.Name, o.Namespace, kustomizationPath(o))
 		}
 	case KindHelmRelease:
 		name, ns := helmRelease(o)
@@ -761,9 +812,10 @@ func (e *explainer) finish() {
 	rank := func(s Stage) int { return slices.Index(stageOrder, s) }
 	slices.SortStableFunc(out.Findings, func(a, b Finding) int { return cmp.Compare(rank(a.Stage), rank(b.Stage)) })
 	out.Stage = StageNone
+	reason := ""
 	for _, sev := range []ops.Severity{ops.SeverityError, ops.SeverityWarning, ops.SeverityInfo} {
 		if i := slices.IndexFunc(out.Findings, func(f Finding) bool { return f.Severity == sev }); i >= 0 {
-			out.Stage = out.Findings[i].Stage
+			out.Stage, reason = out.Findings[i].Stage, out.Findings[i].Reason
 			break
 		}
 	}
@@ -774,11 +826,12 @@ func (e *explainer) finish() {
 		out.Summary = statusText(e.o)
 		return
 	}
-	out.Summary = e.stageSummary(out.Stage)
+	out.Summary = e.stageSummary(out.Stage, reason)
 }
 
-// stageSummary says in a few words where a failure sits.
-func (e *explainer) stageSummary(s Stage) string {
+// stageSummary says in a few words where a failure sits, given the reason
+// of the finding that decided it.
+func (e *explainer) stageSummary(s Stage, reason string) string {
 	switch s {
 	case StageSuspended:
 		return "it is suspended"
@@ -796,9 +849,11 @@ func (e *explainer) stageSummary(s Stage) string {
 			return "its Helm chart fails to install or upgrade"
 		case KindApplication:
 			return "rendering or applying its manifests fails"
-		default:
-			return "building or applying it fails"
 		}
+		if reason == reasonPathNotFound {
+			return "building it fails because its path " + kustomizationPath(e.o) + " is not in its source"
+		}
+		return "building or applying it fails"
 	case StageHealth:
 		return "what it manages is not healthy"
 	default:

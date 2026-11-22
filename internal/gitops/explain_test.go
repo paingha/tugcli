@@ -61,6 +61,15 @@ func TestExplainSaysWhereTheFailureSits(t *testing.T) {
 		{KindKustomization, "flux-system", "team", StageSource, false, "its source cannot be fetched", []string{
 			"source error kustomization/team,gitrepository/team: GitOperationFailed",
 		}},
+		// Flux reports a path its source lacks as ArtifactFailed, as it does
+		// a source it cannot fetch, but the source is ready.
+		{KindKustomization, "flux-system", "web", StageApply, false, "building it fails because its path ./apps/web is not in its source", []string{
+			"reconcile info kustomization/web: RevisionNotApplied",
+			"apply error kustomization/web: PathNotFound",
+		}},
+		{KindKustomization, "flux-system", "cache", StageSource, false, "its source cannot be fetched", []string{
+			"source error kustomization/cache: ArtifactFailed",
+		}},
 		{KindKustomization, "flux-system", "storefront", StageHealth, false, "what it manages is not healthy", []string{
 			"health error pod/pricing-7d9f-a: CreateContainerConfigError",
 			"health error database/orders: BackupFailing",
@@ -132,6 +141,26 @@ func TestExplainSaysWhereTheFailureSits(t *testing.T) {
 	}
 }
 
+func TestFluxStage(t *testing.T) {
+	for _, tt := range []struct {
+		reason, msg string
+		want        Stage
+	}{
+		{"DependencyNotReady", "dependency 'flux-system/infra' is not ready", StageDependency},
+		{"ArtifactFailed", "Source artifact not found, retrying in 30s", StageSource},
+		{"ArtifactFailed", "failed to download archive, error: GET http://source-controller.flux-system.svc.cluster.local./x.tar.gz: connection refused", StageSource},
+		{"ArtifactFailed", "kustomization path not found: stat /tmp/kustomization-2817364513/does-not-exist: no such file or directory", StageApply},
+		{"ArtifactFailed", "HelmChart 'flux-system/shop-redis' is not ready: invalid chart reference", StageSource},
+		{"HealthCheckFailed", "health check failed after 30s: timeout waiting for: [Deployment/shop/checkout status: 'InProgress']", StageHealth},
+		{"ReconciliationFailed", `ClusterIssuer/letsencrypt dry-run failed: admission webhook "validate.kyverno.svc-fail" denied the request`, StageAdmission},
+		{"BuildFailed", "kustomize build failed: accumulating resources", StageApply},
+	} {
+		if got := fluxStage(tt.reason, tt.msg); got != tt.want {
+			t.Errorf("fluxStage(%q, %q) = %s, want %s", tt.reason, tt.msg, got, tt.want)
+		}
+	}
+}
+
 // finding returns the finding with a reason about an object.
 func finding(t *testing.T, x *Explanation, object, reason string) Finding {
 	t.Helper()
@@ -164,6 +193,13 @@ func TestExplainEvidenceAndNextSteps(t *testing.T) {
 		{KindKustomization, "flux-system", "team", "gitrepository/team", "GitOperationFailed",
 			"its source gitrepository/team cannot be fetched: building artifact: failed to checkout and determine revision: unable to clone 'https://github.com/example/team': authentication required",
 			"see the source's conditions and events: `tug why gitrepositories.source.toolkit.fluxcd.io/team -n flux-system`"},
+		{KindKustomization, "flux-system", "web", "kustomization/web", "PathNotFound",
+			"its path ./apps/web is not in revision main@sha1:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b of its source gitrepository/flux-system: " +
+				"kustomization path not found: stat /tmp/kustomization-2817364513/apps/web: no such file or directory",
+			"set spec.path where it is defined to a directory that is in its source, relative to the source's root"},
+		{KindKustomization, "flux-system", "cache", "kustomization/cache", "ArtifactFailed",
+			"Ready is False: failed to download archive",
+			"its source is ready, so check that kustomize-controller can download the source's artifact from source-controller: `tug why deploy/source-controller -n flux-system`"},
 		{KindKustomization, "flux-system", "storefront", "configmap/gone", "Missing",
 			"is not in the cluster, though kustomization/storefront manages it; Flux creates it again at its next reconcile, every 10m0s", ""},
 		{KindKustomization, "flux-system", "flux-system", "gitrepository/team", "GitOperationFailed",
