@@ -15,6 +15,9 @@ const config = {
   reactStrictMode: true,
   basePath: basePath || undefined,
   trailingSlash: true,
+  // A static export has no server to resize images, so pages link to the
+  // files themselves.
+  images: { unoptimized: true },
   env: {
     NEXT_PUBLIC_BASE_PATH: basePath,
     NEXT_PUBLIC_SITE_URL: process.env.DOCS_SITE_URL ?? '',
