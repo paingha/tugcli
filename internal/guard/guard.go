@@ -5,6 +5,7 @@
 package guard
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -75,10 +76,14 @@ func ReadOnlyFor(labels map[string]string, selectors []map[string]string) bool {
 type DeniedError struct {
 	Cluster string
 	Action  string
+	// Unlock is how long the error suggests unlocking for, such as a
+	// policy's limit; zero suggests DefaultUnlock.
+	Unlock time.Duration
 }
 
 func (e *DeniedError) Error() string {
-	return fmt.Sprintf("refused %s: %s is read-only; run `tug unlock 15m` to allow writes", e.Action, e.Cluster)
+	return fmt.Sprintf("refused %s: %s is read-only; run `tug unlock %s` to allow writes",
+		e.Action, e.Cluster, ShortDuration(cmp.Or(e.Unlock, DefaultUnlock)))
 }
 
 // Writable reports whether writes are allowed now without asking.

@@ -85,7 +85,7 @@ func (a *app) connect(ctx context.Context, s *session.Session, args []string, o 
 	c := a.colors()
 	mode := c.Green("read-write")
 	if readOnly {
-		mode = c.Red("read-only") + c.Dim(" (tug unlock "+guard.ShortDuration(limits.Unlock(defaultUnlock))+" to allow writes)")
+		mode = c.Red("read-only") + c.Dim(" (tug unlock "+guard.ShortDuration(limits.SuggestedUnlock())+" to allow writes)")
 	}
 	fmt.Fprintf(a.stdout, "Connected to %s, namespace %s, %s\n", c.Bold(cl.Name), s.State.Namespace, mode)
 	if auth.ProxyURL != "" {
@@ -454,10 +454,6 @@ func (a *app) namespaces(ctx context.Context, s *session.Session) ([]string, err
 	return names, nil
 }
 
-// defaultUnlock is how long tug unlock allows writes when no duration is
-// given and no policy says less.
-const defaultUnlock = 15 * time.Minute
-
 func newUnlockCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "unlock [duration]",
@@ -467,7 +463,7 @@ team policy can limit how long an unlock lasts; tug unlock then refuses a
 longer one, and without a duration unlocks for the limit if it is shorter.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			d := defaultUnlock
+			d := guard.DefaultUnlock
 			if len(args) == 1 {
 				var err error
 				if d, err = time.ParseDuration(args[0]); err != nil || d <= 0 {
