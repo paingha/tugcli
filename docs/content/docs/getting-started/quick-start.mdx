@@ -90,8 +90,11 @@ kubectl, helm and k9s already follow the session:
 ```bash
 kubectl get pods
 helm list
-tug ui            # opens k9s on this cluster
+k9s
 ```
+
+For a full-screen view of the namespace's workloads, with logs and shells one
+key away, run [`tug ui`](/docs/guides/tui).
 
 Anything tug doesn't know runs as kubectl, so this works too:
 
