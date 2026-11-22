@@ -68,14 +68,34 @@ func (l *Loader) Load(ctx context.Context, srcs []config.PolicyPackSource) ([]*P
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-func (l *Loader) load(ctx context.Context, src config.PolicyPackSource) (*Pack, error) {
+// CheckSource checks a pack's source as config.yaml gives it, without
+// reading the pack: a path, or a url pinned by its sha256.
+func CheckSource(src config.PolicyPackSource) error {
 	want := strings.ToLower(strings.TrimSpace(src.SHA256))
-	if want != "" && !sha256Pattern.MatchString(want) {
-		return nil, fmt.Errorf("sha256 %q must be 64 hexadecimal digits", src.SHA256)
-	}
 	switch {
+	case want != "" && !sha256Pattern.MatchString(want):
+		return fmt.Errorf("sha256 %q must be 64 hexadecimal digits", src.SHA256)
 	case src.Path != "" && src.URL != "":
-		return nil, errors.New("give a path or a url, not both")
+		return errors.New("give a path or a url, not both")
+	case src.URL != "" && want == "":
+		return fmt.Errorf("%s needs a sha256, which pins the pack so that a change to it is never run unseen", src.URL)
+	case src.Path == "" && src.URL == "":
+		return errors.New("give the pack's path, or its url and sha256")
+	}
+	if src.URL != "" {
+		if u, err := url.Parse(src.URL); err != nil || (u.Scheme != "https" && (u.Scheme != "http" || !isLoopback(u.Hostname()))) {
+			return fmt.Errorf("refusing %s: packs are downloaded over https only", src.URL)
+		}
+	}
+	return nil
+}
+
+func (l *Loader) load(ctx context.Context, src config.PolicyPackSource) (*Pack, error) {
+	if err := CheckSource(src); err != nil {
+		return nil, err
+	}
+	want := strings.ToLower(strings.TrimSpace(src.SHA256))
+	switch {
 	case src.Path != "":
 		path := src.Path
 		if !filepath.IsAbs(path) {
@@ -89,17 +109,12 @@ func (l *Loader) load(ctx context.Context, src config.PolicyPackSource) (*Pack, 
 			return nil, err
 		}
 		return Parse(data, path)
-	case src.URL != "":
-		if want == "" {
-			return nil, fmt.Errorf("%s needs a sha256, which pins the pack so that a change to it is never run unseen", src.URL)
-		}
+	default:
 		data, err := l.fetch(ctx, src.URL, want)
 		if err != nil {
 			return nil, err
 		}
 		return Parse(data, src.URL)
-	default:
-		return nil, errors.New("give the pack's path, or its url and sha256")
 	}
 }
 
