@@ -144,22 +144,37 @@ type app struct {
 	problems   []plugin.Problem
 }
 
-// exitError carries a specific exit code without printing anything more.
-type exitError struct{ code int }
+// exitError carries a specific exit code. Without err it prints nothing
+// more; with one, err is printed as any other error is.
+type exitError struct {
+	code int
+	err  error
+}
 
-func (e *exitError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+func (e *exitError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return fmt.Sprintf("exit status %d", e.code)
+}
+
+func (e *exitError) Unwrap() error { return e.err }
 
 func (a *app) fail(err error) int {
+	code := 1
 	var ee *exitError
 	if errors.As(err, &ee) {
-		return ee.code
+		if ee.err == nil {
+			return ee.code
+		}
+		code = ee.code
 	}
 	fmt.Fprintf(a.stderr, "tug: %v\n", err)
 	var pe *provider.Error
 	if errors.As(err, &pe) && pe.Hint != "" {
 		fmt.Fprintf(a.stderr, "hint: %s\n", pe.Hint)
 	}
-	return 1
+	return code
 }
 
 // setup resolves paths, loads config and the logger.
