@@ -1,0 +1,41 @@
+name: New provider
+description: Ask for tug to find and connect to clusters on a platform it doesn't support yet.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        tug supports many platforms as built-in providers or plugins; the [providers page](https://paingha.github.io/tugcli/docs/providers) lists them. Anyone can write a plugin, in any language: see [Writing a plugin](https://paingha.github.io/tugcli/docs/plugins/writing).
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: The Kubernetes service or cluster manager, with a link to it.
+      placeholder: Example Cloud Kubernetes Service (https://example.com/kubernetes)
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: How clusters are listed
+      description: The API or CLI that lists clusters and their API servers, with links to its documentation.
+    validations:
+      required: true
+  - type: textarea
+    id: auth
+    attributes:
+      label: How people sign in
+      description: How a person authenticates to the platform (API token, OIDC, a CLI's sign-in, a cloud identity) and how a cluster credential is obtained (a kubeconfig download, short-lived tokens, an exec plugin).
+    validations:
+      required: true
+  - type: textarea
+    id: network
+    attributes:
+      label: Private clusters
+      description: Optional. Whether clusters can have private API servers, and how people usually reach them (a bastion, a VPN, the platform's own proxy).
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to write this plugin myself.

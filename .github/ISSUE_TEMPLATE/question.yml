@@ -1,0 +1,20 @@
+name: Question
+description: Ask how to do something with tug.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The [docs](https://paingha.github.io/tugcli/) and the [FAQ](https://paingha.github.io/tugcli/docs/faq) answer many questions. Remove cluster addresses, account IDs and names before you paste anything.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What you're trying to do, what you've tried, and where you got stuck.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: tug version
+      description: The output of `tug version`, if it might matter.

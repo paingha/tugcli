@@ -522,11 +522,22 @@ Code follows [Effective Go](https://go.dev/doc/effective_go),
 [AGENTS.md](AGENTS.md) holds the Go and CLI standards for this repository,
 for people and for AI coding agents.
 
+## Security
+
+tug keeps secrets only in the OS keychain, writes kubeconfigs that hold none,
+checks and sandboxes plugins, and treats its read-only guard as a safety rail
+rather than a security boundary. The
+[security guide](https://paingha.github.io/tugcli/docs/concepts/security)
+explains what tug trusts and where its protection stops.
+[SECURITY.md](SECURITY.md) says how to report a vulnerability privately;
+please don't open a public issue for one.
+
 ## Contributing
 
 Bug reports, docs fixes, plugins and pull requests are welcome.
 [CONTRIBUTING.md](CONTRIBUTING.md) explains how to report a problem, set up a
-development copy and get a change merged.
+development copy and get a change merged. Everyone taking part follows the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

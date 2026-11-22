@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/paingha/tugcli/security/advisories/new
+    about: Please report security problems privately, not in a public issue. SECURITY.md says what to include.
+  - name: Read the docs
+    url: https://paingha.github.io/tugcli/
+    about: Installing, every provider and command, and writing plugins.
+  - name: Questions and answers
+    url: https://paingha.github.io/tugcli/docs/faq
+    about: Common questions about tug, answered.
