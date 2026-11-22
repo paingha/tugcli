@@ -19,7 +19,26 @@ processors.
 
 ## Install
 
-<Tabs items={['go install', 'Download a release', 'Build from source']}>
+<Tabs items={['Homebrew', 'Scoop', 'go install', 'Download a release', 'Build from source']}>
+  <Tab value="Homebrew">
+    On macOS or Linux with [Homebrew](https://brew.sh):
+
+    ```bash
+    brew install --cask paingha/tap/tug
+    ```
+
+    `brew upgrade --cask tug` updates it.
+  </Tab>
+  <Tab value="Scoop">
+    On Windows with [Scoop](https://scoop.sh):
+
+    ```powershell
+    scoop bucket add paingha https://github.com/paingha/scoop-bucket
+    scoop install paingha/tug
+    ```
+
+    `scoop update tug` updates it.
+  </Tab>
   <Tab value="go install">
     If you have Go installed, this is the quickest way:
 
@@ -85,9 +104,10 @@ processors.
   </Tab>
 </Tabs>
 
-<Callout type="info" title="Homebrew, Scoop and krew">
-  Packages for Homebrew, Scoop and the kubectl plugin index (krew) are planned,
-  but not available yet.
+<Callout type="info" title="As a kubectl plugin">
+  tug is also in its own [krew](https://krew.sigs.k8s.io/) index. Add the
+  index with `kubectl krew index add tug https://github.com/paingha/krew-index`,
+  install with `kubectl krew install tug/tug`, and run it as `kubectl tug`.
 </Callout>
 
 ## Check it works

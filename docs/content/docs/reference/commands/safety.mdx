@@ -65,5 +65,6 @@ $ tug audit --session "$TUG_SESSION" -o json
 
 `-o json` and `-o yaml` give every field; a write's outcome is in `status`,
 `exit` or `reason`. The log never holds request bodies, query strings, tokens
-or command-line values that could be secrets. It is a local record, not
+or command-line values that could be secrets. A write that can't be recorded
+isn't sent, and an unlock that can't be recorded is taken back. It is a local record, not
 evidence: see [The audit log](/docs/concepts/proxy-limits#the-audit-log).

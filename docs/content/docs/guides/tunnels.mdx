@@ -29,9 +29,10 @@ From then on, tug's own commands go through the tunnel, and
 | --- | --- | --- |
 | `ssh://[user@]host[:port]` | You have a jump host (bastion) that can reach the cluster. | Your SSH key from ssh-agent or `~/.ssh`, or `?identity=<full path to a key file>`. The host key must already be in `~/.ssh/known_hosts`. |
 | `socks5://host:port`, `http://host:port`, `https://…` | Your network has a proxy that needs no password. | Nothing else. tug keeps no secrets in its catalog, so proxies with passwords aren't supported. |
-| `ssm://<instance id>[?region=&profile=]` | A managed EC2 instance in the cluster's VPC can reach the private endpoint. | AWS credentials only. tug speaks Session Manager itself, so you don't need the `session-manager-plugin`. |
+| `ssm://<instance id>[?region=&profile=&mux=true]` | A managed EC2 instance in the cluster's VPC can reach the private endpoint. | AWS credentials only. tug speaks Session Manager itself, so you don't need the `session-manager-plugin`. KMS-encrypted sessions work and a dropped session resumes. Each connection gets its own session, so one slow stream can't stall the rest; `mux=true` shares one session among connections on newer agents. |
 | `iap://<instance>?project=&zone=` | A Google Cloud VM can reach the cluster, and IAP TCP forwarding is allowed to it. | Google credentials only (Application Default Credentials), not gcloud. |
-| `iap://?project=&region=&network=&group=` | You reach a host through an IAP destination group, such as a private GKE endpoint. | Google credentials only. |
+| `iap://?project=&region=&network=&group=` | You reach a host through an IAP destination group, such as a private GKE endpoint. | Google credentials only. Add `cert=` and `key=` (PEM files) for certificate-based access through the mTLS relay, and `universe=` for another Google Cloud universe. |
+| `tsh://<proxy>/<Teleport cluster>/<Kubernetes cluster>` | kubectl can't reach a Teleport cluster directly: it's behind a load balancer that needs connection upgrades, or you use a hardware key. | `tsh`, signed in. tug runs `tsh proxy kube` and uses its local proxy's CA and client certificate, which change each time it starts. The [Teleport provider](/docs/providers/teleport) sets this tunnel for you when it's needed. |
 
 Some examples:
 
@@ -65,7 +66,7 @@ cluster.
 ## How it works
 
 Kubernetes clients can use a proxy for exec, attach and port-forward, but they
-can't use a custom connection method. So tug serves SSH, SSM and IAP tunnels as
-a SOCKS5 proxy on a loopback port, protected by a random username and password
-that only tug knows, and points the session's kubeconfig at it. You don't need
-to set anything up for this.
+can't use a custom connection method. So tug serves SSH, SSM, IAP and tsh
+tunnels as a SOCKS5 proxy on a loopback port, protected by a random username
+and password that only tug knows, and points the session's kubeconfig at it.
+You don't need to set anything up for this.

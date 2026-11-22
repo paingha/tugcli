@@ -81,6 +81,61 @@ export TUG_HOME="$(mktemp -d)" TUG_KEYRING_BACKEND=file TUG_KEYRING_PASSPHRASE=d
 ./bin/tug import kubeconfig ./some-test-kubeconfig.yaml
 ```
 
+## Where things live
+
+`cmd/tug` only calls `cli.Main`. Commands in `internal/cli` parse flags,
+prompt and print, then call the package that owns the work:
+
+| Piece | Where |
+| --- | --- |
+| Entry point (`os.Exit(cli.Main())` only) | [cmd/tug](cmd/tug/main.go) |
+| Public plugin SDK and wire protocol | [pkg/provider](pkg/provider) |
+| Cobra commands, no logic | [internal/cli](internal/cli) |
+| The full-screen terminal UI behind `tug ui` | [internal/tui](internal/tui) |
+| tug's directories, `config.yaml` and the editor behind `tug settings` | [internal/config](internal/config) |
+| Per-terminal sessions and shell hooks | [internal/session](internal/session) |
+| Cluster catalog, labels, stale marking | [internal/catalog](internal/catalog) |
+| Import and sync of provider accounts | [internal/importer](internal/importer) |
+| Keychain, encrypted file store, credential broker | [internal/credentials](internal/credentials) |
+| Advisory file locks, so tug processes take turns | [internal/filelock](internal/filelock) |
+| INI files cloud CLIs keep settings in (`~/.aws/config`, gcloud) | [internal/ini](internal/ini) |
+| Provider registry | [internal/registry](internal/registry) |
+| Built-in providers | [internal/builtin](internal/builtin) |
+| Plugin host: discovery, manifests, runner, install, scaffolding | [internal/plugin](internal/plugin) |
+| The OS sandbox plugins run in | [internal/sandbox](internal/sandbox) |
+| Sigstore signature checks on plugin archives | [internal/sigstore](internal/sigstore) |
+| Protocol conformance suite (public) | [pkg/conformance](pkg/conformance) |
+| Client factory and discovery cache | [internal/kube](internal/kube) |
+| Read-only guard as an `http.RoundTripper` | [internal/guard](internal/guard) |
+| The audit log behind `tug audit` | [internal/audit](internal/audit) |
+| kubectl passthrough | [internal/passthrough](internal/passthrough) |
+| Running one command on many clusters (`--cluster-selector`) | [internal/fanout](internal/fanout) |
+| Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
+| API discovery, CRDs and schemas, upstream API removals and support windows | [internal/apiinfo](internal/apiinfo) |
+| Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
+| Policy packs behind `tug check` | [internal/policy](internal/policy) |
+| tugd: local API proxy, named port-forwards, control socket | [internal/daemon](internal/daemon) |
+| Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
+| OpenID Connect sign-in | [internal/oidc](internal/oidc) |
+| Opening the web browser for sign-in | [internal/browser](internal/browser) |
+| `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
+| Team catalogs: signing, fetching, merging, policies | [internal/team](internal/team) |
+| Working-environment profiles | [internal/profile](internal/profile) |
+| Bookmarks and command aliases | [internal/bookmark](internal/bookmark), [internal/alias](internal/alias) |
+| Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
+| Logs, exec, debug containers, port-forward, rollouts, why, tree and reconcile (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Diffs, server-side dry runs, field ownership and drift across clusters | [internal/diff](internal/diff) |
+| Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
+| Model providers behind `tug why --deep`: evidence, redaction, prompts, prices, usage | [internal/intelligence](internal/intelligence) |
+| Flux and Argo CD status, explain, drift and dependencies | [internal/gitops](internal/gitops) |
+| Tables, JSON/YAML, colour | [internal/render](internal/render) |
+| The build's version, set at link time | [internal/version](internal/version) |
+| First-party plugins | [plugins](plugins) |
+| Python SDK for plugins | [sdk/python](sdk/python) |
+| Example plugin | [examples/tug-provider-example](examples/tug-provider-example) |
+| User guide (the docs site) | [docs/content/docs](docs/content/docs) |
+| Plugin authors' guide and protocol reference | [docs/plugins.md](docs/plugins.md) |
+
 ## Making a change
 
 1. **Branch** from `main`.
