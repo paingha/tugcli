@@ -128,3 +128,24 @@ jobs:
         with:
           version: "~> v2"
           args: check
+
+  # The one check the ruleset on main requires. A matrix job skipped for a
+  # documentation-only change reports under its bare name ("test") rather
+  # than one per OS or suite, so main cannot require those names directly.
+  # This job passes when every job it needs passed or was skipped.
+  ci-passed:
+    if: always()
+    needs: [lint, changes, test, e2e-kind, goreleaser-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the results of the other jobs
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success | skipped) ;;
+              *) exit 1 ;;
+            esac
+          done
