@@ -96,3 +96,20 @@ These work with every command:
 | --- | --- |
 | `--debug` | Log debugging detail to stderr. |
 | `-h`, `--help` | Help for any command. |
+| `--cluster-selector <label=value>` | Run a command that only reads on every catalog cluster with this label, each in its default namespace. Repeat it to match several labels; a cluster must match them all. |
+| `--parallel <n>` | With `--cluster-selector`, how many clusters to run on at once (default 8). |
+
+### Run on many clusters
+
+```bash
+tug get pods --cluster-selector env=staging
+tug why api --cluster-selector env=staging --cluster-selector region=eu
+```
+
+`--cluster-selector` works with any kubectl command that only reads, and with
+`tug why`, `tree`, `check`, `watch`, `reconcile`, `logs`, `top`, `gitops`,
+`crd` and every `api` command but `diff`. Each line of output starts with the
+cluster's name, failures are listed at the end, and tug exits 1 if any cluster
+failed. Writes, and commands that bind a local port or take over the terminal,
+are refused before anything runs. Clusters with a
+[tunnel](/docs/guides/tunnels) are reached through it.
