@@ -7,8 +7,9 @@ the standards in this file only.
 
 tug is a Go CLI that makes Kubernetes clusters easy to reach: a cluster catalog
 fed by providers, per-terminal sessions, credentials in the OS keychain, and a
-JSON-over-stdio plugin protocol. [README.md](README.md) says what it does and
-which package holds each piece.
+JSON-over-stdio plugin protocol. [README.md](README.md) says what it does, and
+[CONTRIBUTING.md](CONTRIBUTING.md#where-things-live) says which package holds
+each piece.
 
 ## Commands
 
@@ -35,7 +36,7 @@ all three.
 ```text
 cmd/tug/           main only: os.Exit(cli.Main())
 internal/cli/      cobra commands: flags, prompts, output; no business logic
-internal/<area>/   the logic, one package per concern (see the README table)
+internal/<area>/   the logic, one package per concern (see CONTRIBUTING.md)
 internal/ops/      logs, exec, port-forward, rollouts; no presentation
 pkg/provider/      public plugin SDK and wire protocol; standard library only
 pkg/conformance/   public protocol conformance suite
