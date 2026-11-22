@@ -53,6 +53,7 @@ tug why certificate/web-tls     # any kind: its conditions, whether its controll
 tug diff -f k8s/                # what an apply would change, by server-side dry run, with each field's owner
 tug diff api --against staging  # the same object on another cluster, minus what each cluster sets itself
 tug drift --against staging     # the objects, CRDs and API versions that differ between two clusters
+tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
@@ -223,7 +224,7 @@ in tug's config directory.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `logs` and `top`. Each line is prefixed with
+reads, and `tug why`, `tree`, `watch`, `logs` and `top`. Each line is prefixed with
 the cluster's name, failures are listed at the end, and tug exits 1 if any
 cluster failed. `--parallel` (default 8) caps how many run together. Writes,
 and commands that bind a local port or the terminal, are refused before
