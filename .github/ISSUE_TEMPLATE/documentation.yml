@@ -1,6 +1,6 @@
 name: Documentation
 description: Something in the README or the docs site is wrong, missing or unclear.
-labels: [documentation]
+labels: [documentation, needs triage]
 body:
   - type: input
     id: page

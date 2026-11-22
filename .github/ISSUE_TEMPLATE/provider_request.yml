@@ -1,6 +1,6 @@
 name: New provider
 description: Ask for tug to find and connect to clusters on a platform it doesn't support yet.
-labels: [enhancement]
+labels: [enhancement, new provider, needs triage]
 body:
   - type: markdown
     attributes:
