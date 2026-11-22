@@ -52,6 +52,10 @@ tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's co
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
 tug check -n payments           # policy packs: requests, probes, non-root, budgets, registries
 tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
+tug api resources cert          # search the resource types the cluster serves; tug api versions for group-versions
+tug crd schema certificate --field spec.issuerRef  # a CRD's fields; tug crd explain for versions and conversion
+tug api deprecations            # API versions a later release removes, what replaces them, objects still written at them
+tug api diff staging prod       # resource types and CRD versions two clusters serve differently
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug gitops status               # Flux and Argo CD: ready, synced, suspended, revision offered vs applied
 tug gitops explain apps         # where delivery fails: dependsOn, source, admission, apply, or what it manages
@@ -68,6 +72,7 @@ tug profile up payments         # a saved environment: cluster, namespace, safet
 tug plugin install digitalocean # from a signed plugin index
 tug ui                          # full-screen: clusters, workloads, logs, why, tree, shells, forwards
 tug get pods --cluster-selector env=staging   # any read, on every matching cluster at once
+tug api server-version --cluster-selector env=prod  # each cluster's Kubernetes version and upstream support window
 tug audit --since 24h           # what tug let through and refused, per cluster
 tug team add platform https://teams.example.com/platform/team.yaml --public-key <key>  # shared names, labels and policies
 ```
@@ -224,11 +229,12 @@ in tug's config directory.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `check`, `watch`, `logs`, `top` and `gitops`. Each line is prefixed with
-the cluster's name, failures are listed at the end, and tug exits 1 if any
-cluster failed. `--parallel` (default 8) caps how many run together. Writes,
-and commands that bind a local port or the terminal, are refused before
-anything runs. Tunnelled clusters go through their tunnels.
+reads, and `tug why`, `tree`, `check`, `watch`, `logs`, `top`, `gitops`, `crd`
+and every `api` command but `diff`. Each line is prefixed with the cluster's
+name, failures are listed at the end, and tug exits 1 if any cluster failed.
+`--parallel` (default 8) caps how many run together. Writes, and commands that
+bind a local port or the terminal, are refused before anything runs.
+Tunnelled clusters go through their tunnels.
 
 ## Policy packs
 
@@ -382,6 +388,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Read-only guard as an `http.RoundTripper` | [internal/guard](internal/guard) |
 | kubectl passthrough | [internal/passthrough](internal/passthrough) |
 | Fuzzy target and workload resolution | [internal/resolve](internal/resolve) |
+| API discovery, CRDs and schemas, upstream API removals and support windows | [internal/apiinfo](internal/apiinfo) |
 | Diagnostics behind `tug doctor` | [internal/doctor](internal/doctor) |
 | Policy packs behind `tug check` | [internal/policy](internal/policy) |
 | tugd: local API proxy, named port-forwards, control socket | [internal/daemon](internal/daemon) |

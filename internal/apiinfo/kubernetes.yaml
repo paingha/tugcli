@@ -1,0 +1,213 @@
+# Upstream Kubernetes API removals and release support windows, behind
+# `tug api deprecations`, `tug api versions` and `tug api server-version`.
+#
+# Sources, checked on the date below:
+#   removals:    https://kubernetes.io/docs/reference/using-api/deprecation-guide/
+#                (its source: content/en/docs/reference/using-api/deprecation-guide.md
+#                in github.com/kubernetes/website)
+#   end of life: https://kubernetes.io/releases/ and
+#                https://kubernetes.io/releases/patch-releases/
+#
+# Upstream supports the three newest minor releases, each for about fourteen
+# months: twelve of standard support, then two in maintenance mode, then end
+# of life. Managed services such as EKS, GKE and AKS may support a release for
+# longer.
+#
+# When a minor release ships or the migration guide lists a new removal,
+# update this file and set checked to the day you looked. Removals are listed
+# by group-version and kind, newest first; replacementSince is the release in
+# which the replacement became available, when the guide says.
+checked: "2026-11-21"
+sources:
+  - https://kubernetes.io/docs/reference/using-api/deprecation-guide/
+  - https://kubernetes.io/releases/
+  - https://kubernetes.io/releases/patch-releases/
+
+releases:
+  - {version: "1.37", endOfLife: "2027-10-28"}
+  - {version: "1.36", endOfLife: "2027-06-28"}
+  - {version: "1.35", endOfLife: "2027-02-28"}
+  - {version: "1.34", endOfLife: "2026-10-27"}
+  - {version: "1.33", endOfLife: "2026-06-28"}
+  - {version: "1.32", endOfLife: "2026-02-28"}
+  - {version: "1.31", endOfLife: "2025-11-11"}
+  - {version: "1.30", endOfLife: "2025-07-15"}
+  - {version: "1.29", endOfLife: "2025-02-28"}
+  - {version: "1.28", endOfLife: "2024-10-22"}
+  - {version: "1.27", endOfLife: "2024-07-16"}
+  - {version: "1.26", endOfLife: "2024-02-28"}
+  - {version: "1.25", endOfLife: "2023-10-28"}
+  - {version: "1.24", endOfLife: "2023-07-28"}
+
+removals:
+  # v1.32
+  - groupVersion: flowcontrol.apiserver.k8s.io/v1beta3
+    kinds: [FlowSchema, PriorityLevelConfiguration]
+    removedIn: "1.32"
+    replacement: flowcontrol.apiserver.k8s.io/v1
+    replacementSince: "1.29"
+
+  # v1.29
+  - groupVersion: flowcontrol.apiserver.k8s.io/v1beta2
+    kinds: [FlowSchema, PriorityLevelConfiguration]
+    removedIn: "1.29"
+    replacement: flowcontrol.apiserver.k8s.io/v1
+    replacementSince: "1.29"
+
+  # v1.27
+  - groupVersion: storage.k8s.io/v1beta1
+    kinds: [CSIStorageCapacity]
+    removedIn: "1.27"
+    replacement: storage.k8s.io/v1
+    replacementSince: "1.24"
+
+  # v1.26
+  - groupVersion: flowcontrol.apiserver.k8s.io/v1beta1
+    kinds: [FlowSchema, PriorityLevelConfiguration]
+    removedIn: "1.26"
+    replacement: flowcontrol.apiserver.k8s.io/v1beta2
+  - groupVersion: autoscaling/v2beta2
+    kinds: [HorizontalPodAutoscaler]
+    removedIn: "1.26"
+    replacement: autoscaling/v2
+    replacementSince: "1.23"
+
+  # v1.25
+  - groupVersion: batch/v1beta1
+    kinds: [CronJob]
+    removedIn: "1.25"
+    replacement: batch/v1
+    replacementSince: "1.21"
+  - groupVersion: discovery.k8s.io/v1beta1
+    kinds: [EndpointSlice]
+    removedIn: "1.25"
+    replacement: discovery.k8s.io/v1
+    replacementSince: "1.21"
+  - groupVersion: events.k8s.io/v1beta1
+    kinds: [Event]
+    removedIn: "1.25"
+    replacement: events.k8s.io/v1
+    replacementSince: "1.19"
+  - groupVersion: autoscaling/v2beta1
+    kinds: [HorizontalPodAutoscaler]
+    removedIn: "1.25"
+    replacement: autoscaling/v2
+    replacementSince: "1.23"
+  - groupVersion: policy/v1beta1
+    kinds: [PodDisruptionBudget]
+    removedIn: "1.25"
+    replacement: policy/v1
+    replacementSince: "1.21"
+  - groupVersion: policy/v1beta1
+    kinds: [PodSecurityPolicy]
+    removedIn: "1.25"
+    note: no replacement API; use Pod Security Admission or an admission webhook
+  - groupVersion: node.k8s.io/v1beta1
+    kinds: [RuntimeClass]
+    removedIn: "1.25"
+    replacement: node.k8s.io/v1
+    replacementSince: "1.20"
+
+  # v1.22
+  - groupVersion: admissionregistration.k8s.io/v1beta1
+    kinds: [MutatingWebhookConfiguration, ValidatingWebhookConfiguration]
+    removedIn: "1.22"
+    replacement: admissionregistration.k8s.io/v1
+    replacementSince: "1.16"
+  - groupVersion: apiextensions.k8s.io/v1beta1
+    kinds: [CustomResourceDefinition]
+    removedIn: "1.22"
+    replacement: apiextensions.k8s.io/v1
+    replacementSince: "1.16"
+  - groupVersion: apiregistration.k8s.io/v1beta1
+    kinds: [APIService]
+    removedIn: "1.22"
+    replacement: apiregistration.k8s.io/v1
+    replacementSince: "1.10"
+  - groupVersion: authentication.k8s.io/v1beta1
+    kinds: [TokenReview]
+    removedIn: "1.22"
+    replacement: authentication.k8s.io/v1
+    replacementSince: "1.6"
+  - groupVersion: authorization.k8s.io/v1beta1
+    kinds: [LocalSubjectAccessReview, SelfSubjectAccessReview, SubjectAccessReview, SelfSubjectRulesReview]
+    removedIn: "1.22"
+    replacement: authorization.k8s.io/v1
+    replacementSince: "1.6"
+  - groupVersion: certificates.k8s.io/v1beta1
+    kinds: [CertificateSigningRequest]
+    removedIn: "1.22"
+    replacement: certificates.k8s.io/v1
+    replacementSince: "1.19"
+  - groupVersion: coordination.k8s.io/v1beta1
+    kinds: [Lease]
+    removedIn: "1.22"
+    replacement: coordination.k8s.io/v1
+    replacementSince: "1.14"
+  - groupVersion: extensions/v1beta1
+    kinds: [Ingress]
+    removedIn: "1.22"
+    replacement: networking.k8s.io/v1
+    replacementSince: "1.19"
+  - groupVersion: networking.k8s.io/v1beta1
+    kinds: [Ingress, IngressClass]
+    removedIn: "1.22"
+    replacement: networking.k8s.io/v1
+    replacementSince: "1.19"
+  - groupVersion: rbac.authorization.k8s.io/v1beta1
+    kinds: [ClusterRole, ClusterRoleBinding, Role, RoleBinding]
+    removedIn: "1.22"
+    replacement: rbac.authorization.k8s.io/v1
+    replacementSince: "1.8"
+  - groupVersion: scheduling.k8s.io/v1beta1
+    kinds: [PriorityClass]
+    removedIn: "1.22"
+    replacement: scheduling.k8s.io/v1
+    replacementSince: "1.14"
+  - groupVersion: storage.k8s.io/v1beta1
+    kinds: [CSIDriver]
+    removedIn: "1.22"
+    replacement: storage.k8s.io/v1
+    replacementSince: "1.19"
+  - groupVersion: storage.k8s.io/v1beta1
+    kinds: [CSINode]
+    removedIn: "1.22"
+    replacement: storage.k8s.io/v1
+    replacementSince: "1.17"
+  - groupVersion: storage.k8s.io/v1beta1
+    kinds: [StorageClass]
+    removedIn: "1.22"
+    replacement: storage.k8s.io/v1
+    replacementSince: "1.6"
+  - groupVersion: storage.k8s.io/v1beta1
+    kinds: [VolumeAttachment]
+    removedIn: "1.22"
+    replacement: storage.k8s.io/v1
+    replacementSince: "1.13"
+
+  # v1.16
+  - groupVersion: extensions/v1beta1
+    kinds: [NetworkPolicy]
+    removedIn: "1.16"
+    replacement: networking.k8s.io/v1
+    replacementSince: "1.8"
+  - groupVersion: extensions/v1beta1
+    kinds: [DaemonSet, Deployment, ReplicaSet]
+    removedIn: "1.16"
+    replacement: apps/v1
+    replacementSince: "1.9"
+  - groupVersion: extensions/v1beta1
+    kinds: [PodSecurityPolicy]
+    removedIn: "1.16"
+    replacement: policy/v1beta1
+    replacementSince: "1.10"
+  - groupVersion: apps/v1beta1
+    kinds: [Deployment, ReplicaSet, StatefulSet]
+    removedIn: "1.16"
+    replacement: apps/v1
+    replacementSince: "1.9"
+  - groupVersion: apps/v1beta2
+    kinds: [DaemonSet, Deployment, ReplicaSet, StatefulSet]
+    removedIn: "1.16"
+    replacement: apps/v1
+    replacementSince: "1.9"
