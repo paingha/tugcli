@@ -140,11 +140,7 @@ func (f *fakeNamespace) serve(w http.ResponseWriter, r *http.Request, parts []st
 		if strings.Contains(r.Header.Get("Accept"), "as=PartialObjectMetadataList") {
 			partial := []metav1.PartialObjectMetadata{}
 			for _, o := range items {
-				m, _ := meta.Accessor(o)
-				p := metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "meta.k8s.io/v1", Kind: "PartialObjectMetadata"}}
-				p.Name, p.Namespace, p.UID, p.Labels = m.GetName(), m.GetNamespace(), m.GetUID(), m.GetLabels()
-				p.OwnerReferences, p.CreationTimestamp = m.GetOwnerReferences(), m.GetCreationTimestamp()
-				partial = append(partial, p)
+				partial = append(partial, partialMetadata(o))
 			}
 			writeJSON(f.t, w, map[string]any{"kind": "PartialObjectMetadataList", "apiVersion": "meta.k8s.io/v1", "metadata": map[string]any{}, "items": partial})
 			return
@@ -156,7 +152,13 @@ func (f *fakeNamespace) serve(w http.ResponseWriter, r *http.Request, parts []st
 			writeStatus(w, http.StatusNotFound, "NotFound", fmt.Sprintf("%s %q not found", resource, parts[1]))
 			return
 		}
+		if strings.Contains(r.Header.Get("Accept"), "as=PartialObjectMetadata") {
+			writeJSON(f.t, w, partialMetadata(o))
+			return
+		}
 		writeJSON(f.t, w, o)
+	case len(parts) == 2 && r.Method == http.MethodPatch && r.Header.Get("Content-Type") == string(types.ApplyPatchType):
+		f.apply(w, r, resource, parts[1])
 	case len(parts) == 3 && resource == "pods" && parts[2] == "log":
 		w.Header().Set("Content-Type", "text/plain")
 		container := r.URL.Query().Get("container")
@@ -170,6 +172,17 @@ func (f *fakeNamespace) serve(w http.ResponseWriter, r *http.Request, parts []st
 	default:
 		writeStatus(w, http.StatusMethodNotAllowed, "MethodNotAllowed", r.Method+" "+strings.Join(parts, "/"))
 	}
+}
+
+// partialMetadata is an object's metadata as the API server answers the
+// metadata client.
+func partialMetadata(o runtime.Object) metav1.PartialObjectMetadata {
+	m, _ := meta.Accessor(o)
+	p := metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{APIVersion: "meta.k8s.io/v1", Kind: "PartialObjectMetadata"}}
+	p.Name, p.Namespace, p.UID, p.Labels = m.GetName(), m.GetNamespace(), m.GetUID(), m.GetLabels()
+	p.OwnerReferences, p.CreationTimestamp = m.GetOwnerReferences(), m.GetCreationTimestamp()
+	p.Annotations, p.ManagedFields = m.GetAnnotations(), m.GetManagedFields()
+	return p
 }
 
 // noShell is what containerd says when a distroless image has no /bin/sh.

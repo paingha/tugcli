@@ -1,0 +1,26 @@
+# What a person applies to prod with kubectl apply --server-side.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: storefront
+  namespace: shop
+  labels:
+    app: storefront
+    team: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: storefront
+  template:
+    metadata:
+      labels:
+        app: storefront
+    spec:
+      containers:
+      - name: web
+        image: registry.example.com/storefront:1.5.0
+        args: ["--port=8080", "--cache=on"]
+        ports:
+        - containerPort: 8080
+          protocol: TCP

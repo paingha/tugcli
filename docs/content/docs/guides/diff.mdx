@@ -1,0 +1,179 @@
+---
+title: Diffs and drift
+description: See what an apply would change, who owns each field, and how two clusters differ.
+icon: GitCompare
+---
+
+`tug diff` compares one object with a manifest or with the same object on
+another cluster, and says which field manager owns every field that differs.
+`tug drift` compares whole namespaces, and the APIs two clusters serve. Both
+only read, so they work on [read-only sessions](/docs/concepts/read-only).
+
+## What would this apply change?
+
+```bash
+tug diff -f k8s/                 # every object in a directory of manifests
+tug diff api -f k8s/             # only deploy/api-server
+kustomize build overlays/prod | tug diff -f -
+```
+
+For each object, tug asks the API server what a server-side apply would make
+of it, with a **dry run** (`dryRun=All`, as field manager `tug`), and diffs
+that against the live object. Because the API server runs admission and
+defaulting for a dry run, you see what mutating webhooks add and what the
+server fills in, not just what the file says:
+
+```console
+$ tug diff -f storefront.yaml -n shop --field-manager kubectl
+deployment/storefront in shop
+--- prod-eu (live)
++++ storefront.yaml (server-side dry run as kubectl)
+@@ -5,10 +5,12 @@
+     deployment.kubernetes.io/revision: "7"
+   labels:
+     app: storefront
++    policy.example.com/scanned: "true"
+   name: storefront
+   namespace: shop
+ spec:
+-  replicas: 5
++  replicas: 3
++  revisionHistoryLimit: 10
+   selector:
+     matchLabels:
+       app: storefront
+@@ -21,6 +23,6 @@
+       - env:
+         - name: LOG_LEVEL
+           value: debug
+-        image: registry.example.com/storefront:1.4.2
++        image: registry.example.com/storefront:1.5.0
+         imagePullPolicy: IfNotPresent
+         name: web
+
+FIELD                                             LIVE OWNERS                       OWNERS AFTER   NOTE
+metadata.labels.policy.example.com/scanned        (not set)                         kubectl        set by admission
+spec.replicas                                     kube-controller-manager (scale)   kubectl        conflicts with kube-controller-manager
+spec.revisionHistoryLimit                         (not set)                         -              defaulted by the API server
+spec.template.spec.containers[name="web"].image   kubectl                           kubectl
+```
+
+The table under each diff lists the fields that differ, who owns them now and
+after the apply (from the object's `managedFields`), and what set the new
+value. A **conflict** is a field another manager owns that the apply would
+change: here an autoscaler owns `replicas`. A real apply would fail on it, so
+the dry run is repeated with `--force-conflicts` to show the result anyway.
+Leave such fields out of the manifest, or force the apply to take them over.
+
+Use `--field-manager` with the name you apply as (kubectl's is `kubectl`), so
+that fields you applied before aren't reported as conflicts with yourself.
+
+<Callout type="warn" title="What a dry run can't show">
+A dry run shows what admission and defaulting do to the apply. It can't show
+what controllers do once the apply is made, such as an autoscaler changing the
+replicas again or a rollout replacing the pods.
+</Callout>
+
+tug diff takes the place of `kubectl diff`, and exits as it does: **0** when
+nothing would change, **1** when something would, **2** on an error. Scripts
+and CI jobs that ran `kubectl diff -f` through tug keep working, and
+`--server-side` is accepted.
+
+## How does it differ on another cluster?
+
+```bash
+tug diff deploy/api --against prod-us
+tug diff certificate/web-tls --against prod-us -o json
+```
+
+`--against` compares the object with the object of the same kind, namespace
+and name on another cluster in the catalog. Some fields differ between
+clusters by design, and tug leaves them out:
+
+- fields **no manager owns**: allocated IPs and node ports, and defaults one
+  API server version sets and another doesn't;
+- fields owned only by **Kubernetes' own components**: the replicas an
+  autoscaler sets through the scale subresource, a Deployment's revision
+  annotation, the CA bundle in `kube-root-ca.crt`.
+
+`--all-fields` keeps them. Each field that's left is attributed to its owners
+on both clusters, so a hand edit (`kubectl-edit`) or a stray Helm release
+stands out, and a field marked as a conflict is one that applying the other
+cluster's value here would take from its manager.
+
+## Who owns each field?
+
+```console
+$ tug diff deploy/storefront --managed-fields
+deployment/storefront in shop has 4 field managers
+
+MANAGER                   OPERATION   SUBRESOURCE   UPDATED   FIELDS
+kubectl                   Apply       -             29h       5
+kube-controller-manager   Update      scale         7h35m     1
+kube-controller-manager   Update      -             7h35m     1
+kubectl-edit              Update      -             8h        2
+
+kubectl (Apply) owns:
+  metadata.labels.app
+  spec.selector
+  ...
+```
+
+## What normalising leaves out
+
+Whatever the comparison, tug leaves out what the API server generates:
+`uid`, `resourceVersion`, `generation`, `creationTimestamp`, `managedFields`,
+`selfLink` and the `kubectl.kubernetes.io/last-applied-configuration`
+annotation, and `status` unless you pass `--status`. Lists of named items,
+such as containers, env and volumes, are compared item by item by name.
+
+## Comparing two clusters
+
+```bash
+tug drift --against staging-eu
+tug drift --against staging-eu deploy cm -n checkout
+tug drift --against prod-us -A certificates.cert-manager.io
+```
+
+`tug drift` compares this terminal's cluster with another catalog cluster:
+
+- the **API versions** each serves;
+- the **CustomResourceDefinitions** on each, and the versions they serve;
+- the **objects** of the resources you name, in the session's namespace (or
+  `-n`, or every namespace with `-A`), matched by namespace and name and
+  compared as `tug diff --against` compares one. Without names, it compares
+  deployments, statefulsets, daemonsets, cronjobs, services, configmaps and
+  ingresses.
+
+```console
+$ tug drift --against staging-eu -n shop
+prod-eu (v1.35.1) against staging-eu (v1.34.2), namespace shop
+
+API versions only on prod-eu: db.example.com/v1
+
+CRD                        PROD-EU   STAGING-EU
+databases.db.example.com   v1        -
+
+KIND         NAME           STATE                FIELDS
+configmap    flags          differs              data.checkout
+configmap    staging-only   only on staging-eu   -
+deployment   storefront     differs              spec.template.spec.containers[name="web"].image
+
+Drift: 3 of 6 objects of deployments.apps, statefulsets.apps, daemonsets.apps, services, configmaps differ or are on one cluster only
+```
+
+It exits **0** when the clusters match, **1** when they differ and **2** on
+an error, so a CI job can fail on drift. `-o json` gives every difference with
+its owners:
+
+```bash
+tug drift --against staging-eu -o json | jq '.objects[] | select(.state == "differs") | .name'
+```
+
+## Secrets
+
+tug never reads a Secret's data. `tug diff --against`, `--managed-fields` and
+`tug drift` compare Secrets by their metadata alone, read through the
+metadata API, so the data never leaves the API server. `tug drift` compares
+Secrets only when you name them. `tug diff -f` skips Secrets with a warning,
+since a dry run's answer would carry their data.

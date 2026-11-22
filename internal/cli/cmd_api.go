@@ -421,10 +421,13 @@ const (
 )
 
 // diffFailed makes an error exit with diffTrouble, so that scripts can tell
-// it from a difference.
+// it from a difference. tug api diff, tug diff and tug drift all exit this
+// way. An error that already carries an exit code, such as a difference's,
+// keeps it.
 func diffFailed(err error) error {
-	if err == nil {
-		return nil
+	var ee *exitError
+	if err == nil || errors.As(err, &ee) {
+		return err
 	}
 	return &exitError{code: diffTrouble, err: err}
 }

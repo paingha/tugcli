@@ -50,6 +50,9 @@ tug bookmark add api deploy/api-server -n shop   # later, from any terminal: tug
 tug open deploy/api             # the file in this repository that defines it, in $EDITOR (and as path:line)
 tug alias set wide 'get -o wide'  # tug wide pods; an alias never hides tug's commands, or a write
 tug why certificate/web-tls     # any kind: its conditions, whether its controller caught up, what it owns
+tug diff -f k8s/                # what an apply would change, by server-side dry run, with each field's owner
+tug diff api --against staging  # the same object on another cluster, minus what each cluster sets itself
+tug drift --against staging     # the objects, CRDs and API versions that differ between two clusters
 tug reconcile explain db/orders # which controller reconciles it, on what evidence, and whether it runs
 tug reconcile status cert-manager  # a controller's health, leader Lease, restarts and the kinds it reconciles
 tug reconcile trace db/orders --logs  # a timeline: generations, conditions, events, owned objects, its controller's logs
@@ -240,6 +243,20 @@ cluster failed. `--parallel` (default 8) caps how many run together. Writes,
 and commands that bind a local port or the terminal, are refused before
 anything runs. Tunnelled clusters go through their tunnels.
 
+## Diffs and drift
+
+`tug diff -f <file>` shows what an apply would change: it asks the API server
+for a server-side dry run, so admission and defaulting show, and lists each
+differing field with the field managers that own it, from managedFields,
+marking the fields an apply would take from another manager. `tug diff
+<target> --against <cluster>` compares an object with the same one on another
+catalog cluster, leaving out what each cluster sets itself (allocated IPs,
+autoscaled replicas, defaults), and `--managed-fields` lists who owns what.
+`tug drift --against <cluster> [resource...]` compares a namespace's objects,
+the CRDs and the API versions of two clusters. Both exit as `kubectl diff`
+does, which `tug diff` takes the place of: 0 same, 1 different, 2 on an
+error. Neither reads a Secret's data.
+
 ## Policy packs
 
 `tug check [target] [-n ns | -A] [--pack name]` checks workloads and other
@@ -404,6 +421,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Bookmarks and command aliases | [internal/bookmark](internal/bookmark), [internal/alias](internal/alias) |
 | Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
 | Logs, exec, debug containers, port-forward, rollouts, why, tree and reconcile (shared by CLI and TUI) | [internal/ops](internal/ops) |
+| Diffs, server-side dry runs, field ownership and drift across clusters | [internal/diff](internal/diff) |
 | Support bundles: collection, redaction and the archive | [internal/bundle](internal/bundle) |
 | Model providers behind `tug why --deep`: evidence, redaction, prompts, prices, usage | [internal/intelligence](internal/intelligence) |
 | Flux and Argo CD status, explain, drift and dependencies | [internal/gitops](internal/gitops) |
