@@ -290,6 +290,45 @@ func TestControllerStatusOfAStaticPod(t *testing.T) {
 	}
 }
 
+func TestStaticPodTargets(t *testing.T) {
+	labelled := func(name, ns string, static bool) *corev1.Pod {
+		return whyPod(name, func(p *corev1.Pod) {
+			p.Namespace, p.Labels = ns, map[string]string{"component": "kube-controller-manager"}
+			if static {
+				p.Annotations = map[string]string{corev1.MirrorPodAnnotationKey: "4f9c"}
+			}
+		})
+	}
+	cs := fake.NewSimpleClientset(
+		labelled("kube-controller-manager-cp-2", "kube-system", true),
+		labelled("kube-controller-manager-cp-1", "kube-system", true),
+		labelled("kube-controller-manager-5d4f-x2x4z", "tools", false), // labelled alike, but not static
+		whyPod("kube-scheduler-cp-1"),
+	)
+	tests := []struct {
+		ns, name string
+		want     []string
+	}{
+		{"", "kube-controller-manager", []string{"kube-system/pod/kube-controller-manager-cp-1", "kube-system/pod/kube-controller-manager-cp-2"}},
+		{"tools", "kube-controller-manager", nil},
+		{"", "kube-scheduler", nil},
+		{"", strings.Repeat("x", 64), nil}, // longer than a label value may be
+	}
+	for _, tt := range tests {
+		got, err := StaticPodTargets(context.Background(), cs, tt.ns, tt.name)
+		if err != nil {
+			t.Fatalf("StaticPodTargets(%q, %q): %v", tt.ns, tt.name, err)
+		}
+		var names []string
+		for _, g := range got {
+			names = append(names, g.Namespace+"/"+g.String())
+		}
+		if !slices.Equal(names, tt.want) {
+			t.Errorf("StaticPodTargets(%q, %q) = %q, want %q", tt.ns, tt.name, names, tt.want)
+		}
+	}
+}
+
 // managed returns a managedFields entry for fields written by a manager.
 func managed(manager, subresource string, ago time.Duration, fields ...string) metav1.ManagedFieldsEntry {
 	var raw []string

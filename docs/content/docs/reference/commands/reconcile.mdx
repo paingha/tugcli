@@ -42,8 +42,10 @@ tug reconcile status <controller> [-n namespace] [-o table|json|yaml]
 
 Without `-n`, a controller that isn't in the session's namespace is looked for
 in every namespace, since controllers usually run in their own; a match in the
-session's namespace wins a tie. It exits 1 when the controller isn't healthy
-or has no leader.
+session's namespace wins a tie. When nothing has the name exactly, a static pod
+whose `component` label has it matches, as kubeadm and kind label the control
+plane's: `kube-controller-manager` finds `kube-controller-manager-<node>`. It
+exits 1 when the controller isn't healthy or has no leader.
 
 A Lease counts as the controller's when one of its pods holds it (observed;
 controllers built on client-go hold it as their pod's name, or their node's
@@ -54,6 +56,7 @@ after the controller counts instead, unless another running pod holds it
 ```bash
 tug reconcile status cert-manager
 tug reconcile status deploy/kustomize-controller -n flux-system
+tug reconcile status kube-controller-manager
 tug reconcile status pod/kube-controller-manager-cp-1 -n kube-system -o json
 ```
 

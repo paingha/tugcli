@@ -76,10 +76,13 @@ renewed it; its containers' restarts; and the kinds it reconciles, as far as its
 permissions tell: the kinds whose status its service account may update.
 
 Without -n, a controller that is not in the session's namespace is looked for
-in every namespace, since controllers usually run in their own. It exits 1 when
-the controller is not healthy or has no leader.`,
+in every namespace, since controllers usually run in their own. A static pod is
+found by its component label too, as kubeadm and kind set it, so
+kube-controller-manager finds the pod kube-controller-manager-<node>. It exits 1
+when the controller is not healthy or has no leader.`,
 		Example: `  tug reconcile status cert-manager                      # wherever it runs
   tug reconcile status deploy/kustomize-controller -n flux-system
+  tug reconcile status kube-controller-manager           # the static pod kube-controller-manager-<node>
   tug reconcile status pod/kube-controller-manager-cp-1 -n kube-system -o json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -124,7 +127,8 @@ the controller is not healthy or has no leader.`,
 // resolveController turns an argument into the workload or pod of a
 // controller. Without -n, controllers in every namespace are candidates
 // too, since controllers usually run in their own namespace; a match in
-// the session's namespace wins a tie.
+// the session's namespace wins a tie. When nothing has the name exactly,
+// static pods whose component label has it are the matches.
 func (a *app) resolveController(ctx context.Context, env *opsEnv, arg string, namespaced bool) (resolve.Target, error) {
 	q, err := resolve.ParseQuery(arg)
 	if err != nil {
@@ -155,6 +159,24 @@ func (a *app) resolveController(ctx context.Context, env *opsEnv, arg string, na
 		}
 	}
 	matches := resolve.MatchTargets(q, candidates)
+	// A controller that runs as a static pod, as kube-controller-manager
+	// does on kubeadm and kind clusters, has its node's name in its pod's.
+	// Its component label is its own name, which beats a match that is not
+	// exact.
+	exact := func(t resolve.Target) bool { return strings.EqualFold(t.Name, q.Name) }
+	if (q.Kind == "" || q.Kind == resolve.KindPod) && !slices.ContainsFunc(matches, exact) {
+		ns := ""
+		if namespaced {
+			ns = env.namespace
+		}
+		statics, err := ops.StaticPodTargets(ctx, env.cs, ns, q.Name)
+		if err != nil {
+			a.log.Debug("not looking for the controller among static pods", "err", err)
+		}
+		if len(statics) > 0 {
+			matches = statics
+		}
+	}
 	var local []resolve.Target
 	for _, m := range matches {
 		if m.Namespace == env.namespace {
