@@ -1,0 +1,9 @@
+apiVersion: tug.policy/v1alpha1
+kind: PolicyPack
+name: second
+version: "1"
+checks:
+  - id: owner
+    severity: info
+    description: Workloads have an owner.
+    requiredAnnotations: [owner]
