@@ -16,8 +16,9 @@
   `kubectl get`, `kubectl describe`, `kubectl logs` (with `--previous` for
   the run before a restart), `kubectl events`, `kubectl top`, `kubectl auth
   can-i`, `kubectl rollout status` or `history`, `tug why`, `tug tree`,
-  `tug logs` or `tug top`, written out in full with the names and namespace
-  from the evidence.
+  `tug logs`, `tug top`, `tug check`, `tug reconcile explain`, `trace` or
+  `events`, `tug gitops explain` or `drift`, or `tug crd explain`, written
+  out in full with the names and namespace from the evidence.
 - Never make a command that changes anything the default step. When a fix
   needs a change (apply, edit, patch, scale, delete, restart, rollout undo,
   cordon, drain, label, annotate), list it under changesNeedingApproval with
