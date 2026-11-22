@@ -93,3 +93,47 @@ environment variable instead of the credential store.
 
 Sign the index again every time you add a plugin: tug refuses an index whose
 signature doesn't match.
+
+## Revoking a release
+
+If a release turns out to be malicious, or to leak secrets, withdraw it and
+sign the index again:
+
+```bash
+tug plugin index revoke index.yaml dist/tug-provider-acme_0.3.0.tar.gz --reason "sends tokens to a third party"
+tug plugin index sign index.yaml
+```
+
+You can give the archive's SHA-256 instead of the file. The index then lists
+the archive under `revoked`, with its plugin, version and reason, and keeps
+the version listed so people can see why it went. tug refuses to install a
+revoked archive, by name, from a file or from a URL; installs the newest
+version that isn't revoked when no version is given; and warns everyone who
+has it installed when they run `tug plugin ls`.
+
+## Changing the signing key
+
+To replace your key, make a new one, hand over to it with the old one, and
+sign with the new one:
+
+```bash
+tug plugin index keygen --name 2027
+tug plugin index rotate index.yaml --to 2027   # the old key, "default", signs the new one
+tug plugin index sign index.yaml --name 2027
+```
+
+The index lists the old key under `supersededKeys`, with the new key and the
+old key's signature over it. Users whose `config.yaml` still names the old
+key keep working: tug follows the handover, checks the index against the new
+key, and tells them to update `publicKey`. From then on tug remembers the new
+key and refuses an index signed with the old one. Keep the old key's entry in
+the index, since it's how users who haven't updated reach the new key.
+
+<Callout type="warn" title="A stolen key needs more than a rotation">
+  Whoever has your old key can sign a handover to a key of their own. If the
+  key leaked, tell your users the new public key yourself, through a channel
+  they trust, and have them put it in `config.yaml`.
+</Callout>
+
+Older tug releases refuse an index that uses `revoked` or `supersededKeys`,
+rather than install a plugin they were told to refuse.

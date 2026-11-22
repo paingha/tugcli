@@ -184,3 +184,23 @@ func TestStatusError(t *testing.T) {
 		t.Fatalf("retry after = %s", got.RetryAfter())
 	}
 }
+
+func TestRetryAfterStaysInRange(t *testing.T) {
+	tests := []struct {
+		seconds int
+		want    time.Duration
+	}{
+		{0, 0},
+		{-30, 0},
+		{30, 30 * time.Second},
+		{86400, 24 * time.Hour},
+		{86401, 24 * time.Hour},
+		{int(^uint(0) >> 1), 24 * time.Hour},
+	}
+	for _, tt := range tests {
+		e := &Error{Code: RateLimited, RetryAfterSeconds: tt.seconds}
+		if got := e.RetryAfter(); got != tt.want {
+			t.Errorf("RetryAfter() with retryAfterSeconds %d = %s, want %s", tt.seconds, got, tt.want)
+		}
+	}
+}

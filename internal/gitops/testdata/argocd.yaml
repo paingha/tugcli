@@ -1,0 +1,211 @@
+# Argo CD v2 Applications as Argo CD 2.10 to 2.14 report them, for the
+# tests. The clock of the tests is 2026-11-21T12:00:00Z.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: guestbook, namespace: argocd, uid: app-guestbook, generation: 120}
+spec:
+  destination: {namespace: shop, server: https://kubernetes.default.svc}
+  project: default
+  source:
+    path: guestbook
+    repoURL: https://github.com/example/apps.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated: {prune: true}
+status:
+  controllerNamespace: argocd
+  health:
+    lastTransitionTime: "2026-11-21T11:50:00Z"
+    status: Degraded
+  history:
+  - deployStartedAt: "2026-11-20T09:00:00Z"
+    deployedAt: "2026-11-20T09:00:05Z"
+    id: 6
+    revision: 0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d
+    source: {path: guestbook, repoURL: https://github.com/example/apps.git, targetRevision: HEAD}
+  - deployStartedAt: "2026-11-21T11:00:00Z"
+    deployedAt: "2026-11-21T11:00:04Z"
+    id: 7
+    revision: 3f2c1a0b9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a
+    source: {path: guestbook, repoURL: https://github.com/example/apps.git, targetRevision: HEAD}
+  operationState:
+    finishedAt: "2026-11-21T11:00:04Z"
+    message: successfully synced (all tasks run)
+    operation:
+      initiatedBy: {automated: true}
+      sync: {revision: 3f2c1a0b9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a}
+    phase: Succeeded
+    startedAt: "2026-11-21T11:00:00Z"
+    syncResult:
+      resources:
+      - {group: apps, kind: Deployment, message: deployment.apps/pricing configured, name: pricing, namespace: shop, status: Synced, syncPhase: Sync, version: v1}
+      revision: 3f2c1a0b9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a
+  reconciledAt: "2026-11-21T11:58:00Z"
+  resources:
+  - group: apps
+    health: {message: Deployment "pricing" exceeded its progress deadline, status: Degraded}
+    kind: Deployment
+    name: pricing
+    namespace: shop
+    status: OutOfSync
+    version: v1
+  - group: apps
+    health: {status: Healthy}
+    kind: Deployment
+    name: checkout
+    namespace: shop
+    status: Synced
+    version: v1
+  - health: {status: Healthy}
+    kind: Service
+    name: pricing
+    namespace: shop
+    status: Synced
+    version: v1
+  - kind: ConfigMap
+    name: guestbook-ui
+    namespace: shop
+    requiresPruning: true
+    status: OutOfSync
+    version: v1
+  - group: batch
+    hook: true
+    kind: Job
+    name: guestbook-presync
+    namespace: shop
+    status: Synced
+    version: v1
+  sourceType: Directory
+  summary:
+    images: [registry.example.com/pricing:v2]
+  sync:
+    comparedTo:
+      destination: {namespace: shop, server: https://kubernetes.default.svc}
+      source: {path: guestbook, repoURL: https://github.com/example/apps.git, targetRevision: HEAD}
+    revision: 3f2c1a0b9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a
+    status: OutOfSync
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: payments, namespace: argocd, uid: app-payments, generation: 40}
+spec:
+  destination: {namespace: payments, server: https://kubernetes.default.svc}
+  project: default
+  source:
+    path: charts/payments
+    repoURL: https://github.com/example/private.git
+    targetRevision: main
+status:
+  conditions:
+  - lastTransitionTime: "2026-11-21T11:30:00Z"
+    message: "Failed to load target state: failed to generate manifest for source 1 of 1: rpc error: code = Unknown desc = failed to list refs: authentication required: Repository not found."
+    type: ComparisonError
+  health: {status: Healthy}
+  reconciledAt: "2026-11-21T11:59:00Z"
+  sync:
+    comparedTo:
+      destination: {namespace: payments, server: https://kubernetes.default.svc}
+      source: {path: charts/payments, repoURL: https://github.com/example/private.git, targetRevision: main}
+    status: Unknown
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: ledger, namespace: argocd, uid: app-ledger, generation: 15}
+spec:
+  destination: {namespace: shop, server: https://kubernetes.default.svc}
+  project: default
+  source:
+    path: ledger
+    repoURL: https://github.com/example/apps.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+status:
+  health: {status: Healthy}
+  operationState:
+    finishedAt: "2026-11-21T11:55:10Z"
+    message: "one or more objects failed to apply, reason: admission webhook \"validation.gatekeeper.sh\" denied the request: [psp-privileged-container] Privileged container is not allowed: ledger, securityContext: {\"privileged\": true}"
+    operation:
+      initiatedBy: {automated: true}
+      retry: {limit: 5}
+      sync: {revision: 7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d}
+    phase: Failed
+    retryCount: 5
+    startedAt: "2026-11-21T11:55:00Z"
+    syncResult:
+      resources:
+      - group: apps
+        kind: StatefulSet
+        message: "admission webhook \"validation.gatekeeper.sh\" denied the request: [psp-privileged-container] Privileged container is not allowed: ledger, securityContext: {\"privileged\": true}"
+        name: ledger
+        namespace: shop
+        status: SyncFailed
+        syncPhase: Sync
+        version: v1
+      revision: 7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d
+  reconciledAt: "2026-11-21T11:59:30Z"
+  resources:
+  - group: apps
+    health: {status: Healthy}
+    kind: StatefulSet
+    name: ledger
+    namespace: shop
+    status: OutOfSync
+    version: v1
+  sync:
+    revision: 7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d
+    status: OutOfSync
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: platform, namespace: argocd, uid: app-platform, generation: 9}
+spec:
+  destination: {namespace: argocd, server: https://kubernetes.default.svc}
+  project: default
+  source:
+    path: apps
+    repoURL: https://github.com/example/fleet.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+status:
+  health: {status: Healthy}
+  history:
+  - deployedAt: "2026-11-21T08:00:00Z"
+    id: 3
+    revision: 5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b
+  reconciledAt: "2026-11-21T11:59:40Z"
+  resources:
+  - {group: argoproj.io, kind: Application, name: guestbook, namespace: argocd, status: Synced, version: v1alpha1}
+  - {group: argoproj.io, kind: Application, name: payments, namespace: argocd, status: Synced, version: v1alpha1}
+  sync:
+    revision: 5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b
+    status: Synced
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: {name: edge-shop, namespace: argocd, uid: app-edge-shop, generation: 3}
+spec:
+  destination: {name: edge-eu, namespace: shop}
+  project: edge
+  source:
+    path: shop
+    repoURL: https://github.com/example/edge.git
+    targetRevision: HEAD
+  syncPolicy:
+    automated: {}
+status:
+  health:
+    status: Degraded
+  reconciledAt: "2026-11-21T11:00:00Z"
+  resources:
+  - group: apps
+    health: {message: "Deployment \"cart\" exceeded its progress deadline", status: Degraded}
+    kind: Deployment
+    name: cart
+    namespace: shop
+    status: Synced
+    version: v1
+  sync:
+    revision: 1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c
+    status: Synced
