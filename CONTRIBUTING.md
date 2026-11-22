@@ -37,7 +37,8 @@ names and addresses can still be sensitive.
 
 **Security problems** don't belong in public issues. Report them privately
 through GitHub's **Report a vulnerability** button on the repository's
-Security tab.
+Security tab; [SECURITY.md](SECURITY.md) says what to include and what's in
+scope.
 
 ## Setting up
 
