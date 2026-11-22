@@ -11,9 +11,49 @@ tug plugin ls                 # every provider: built in, installed and linked
 tug plugin describe akamai    # run the plugin's describe and show its manifest
 ```
 
-`tug plugin ls` shows each provider's version, kind (`built-in`, `plugin` or
-`dev plugin`), what it can do, and where it lives. Plugins that failed to load
-are listed on stderr as `skipped`, with the reason.
+`tug plugin ls` shows each provider's version, the version it's
+[pinned](#pin-a-version) to, its kind (`built-in`, `plugin` or `dev plugin`),
+what it can do, and where it lives. Plugins that failed to load are listed on
+stderr as `skipped`, with the reason, and installed plugins that an index has
+[revoked](#revoked-plugins) as `revoked`.
+
+## Look before you install
+
+`tug plugin inspect` explains what a plugin may reach, without installing or
+running it. Give it an archive, a URL, `name@version` from an index, or the
+name of a plugin you have:
+
+```bash
+tug plugin inspect ./tug-provider-acme_0.1.0.tar.gz
+tug plugin inspect acme@0.2.0     # downloaded and checked as install would, then thrown away
+tug plugin inspect acme -o json   # for a review script
+```
+
+```text
+acme 0.2.0
+  publisher:     Acme Platform Team
+  homepage:      https://github.com/acme/tug-provider-acme
+  source:        index acme, https://github.com/acme/tug-provider-acme/releases/download/v0.2.0/tug-provider-acme_0.2.0.tar.gz
+  sha256:        9f2c4e…
+  signed by:     https://github.com/acme/tug-provider-acme/.github/workflows/release.yml@refs/tags/v0.2.0 (issuer https://token.actions.githubusercontent.com) (checked now)
+  revoked:       no
+  pinned:        -
+  capabilities:  list, credential
+  secrets:       api_token
+  environment:   ACME_PROFILE
+  network hosts: api.acme.example
+  reads:         ~/.acme
+  writes:        -
+  sockets:       -
+  programs:      acmectl (/opt/homebrew/bin/acmectl)
+  runs as:       darwin/arm64: a process in the operating system's sandbox: TCP ports 443; runs acmectl; reads ~/.acme
+  limits:        30s of CPU time and 256 MiB of memory per process; calls time out after list 2m0s, credential 10s, …
+  platforms:     darwin/arm64, linux/amd64
+```
+
+An archive is matched to its index entry by its SHA-256, so its signature is
+checked even when you have the file. An installed plugin is described from
+the receipt tug kept when it installed it.
 
 ## Install by name from an index
 
@@ -28,7 +68,8 @@ tug plugin install acme@0.1.0    # a particular version
 ```
 
 tug checks the index's signature, the archive's SHA-256 and every binary's
-SHA-256 before installing.
+SHA-256 before installing. Without a version, it installs the newest version
+that no index has revoked.
 
 <Callout type="info" title="No index is set up by default">
   tug doesn't come with an index until one is published. Until then, install
@@ -58,6 +99,8 @@ acme 0.1.0
   environment:   -
   network hosts: api.acme.example
   platforms:     darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64
+  runs as:       a process in the operating system's sandbox: TCP ports 443
+  limits:        calls time out after list 30s, credential 10s, rotate 1m0s, accounts 30s, checkAccess 30s, describe 30s
   settings:      region: only list clusters in this region
 Install acme 0.1.0? [y/N] y
 Installed acme 0.1.0 in /Users/sam/.local/share/tug/plugins/acme/0.1.0
@@ -79,6 +122,7 @@ tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz \
 | `--sha256 <hash>` | The archive's expected SHA-256. Required for URLs. |
 | `-y`, `--yes` | Install without asking. Required without a terminal. |
 | `--force` | Replace the same version if it's already installed. |
+| `--pin` | Pin the plugin to the version installed. See [Pin a version](#pin-a-version). |
 
 ### What install checks
 
@@ -92,11 +136,67 @@ tug plugin install https://example.com/tug-provider-acme_0.1.0.tar.gz \
 4. Its `minTugVersion` must not be newer than your tug.
 5. Fields in `plugin.yaml` that tug doesn't know are ignored, with a warning,
    so a typo such as `platfroms` doesn't go unnoticed.
+6. No index you've set up has revoked the archive, and the plugin isn't
+   pinned to another version.
 
 Plugins are installed into `plugins/<name>/<version>/` in tug's
-[data folder](/docs/reference/files). tug checks the checksum again every time
+[data folder](/docs/reference/files), with a receipt beside each version that
+records the archive's SHA-256, where it came from and who signed it. tug checks the checksum again every time
 it loads a plugin, so a binary changed after installation is skipped, and
 `tug plugin ls` says why.
+
+## Pin a version
+
+To keep a plugin at a version you've reviewed, pin it in
+[`config.yaml`](/docs/reference/configuration):
+
+```yaml
+plugins:
+  pins:
+    acme: "0.3.1"
+```
+
+or let install write the pin for you:
+
+```bash
+tug plugin install acme@0.3.1 --pin
+```
+
+A pinned plugin named without a version installs at its pin, and any other
+version is refused, by name or from an archive. tug runs the pinned version
+even when a newer one is installed, and `tug plugin ls` warns when the pinned
+version isn't installed. `--pin` on another version moves the pin; `--pin`
+edits only that line of `config.yaml`, so your comments stay. Linked plugins
+aren't affected.
+
+## Revoked plugins
+
+An index can revoke an archive it listed, such as a release found to leak
+tokens. tug then refuses to install it, whichever way you name it, and
+`tug plugin ls` warns you if you have it:
+
+```text
+revoked: index acme has revoked acme 0.3.0: sends tokens to a third party; remove it with tug plugin remove acme, or install another version
+```
+
+## Limits
+
+A plugin's manifest can ask for CPU time, memory and longer timeouts, and
+[`plugins.limits`](/docs/reference/configuration) caps what any plugin gets,
+including plugins that ask for nothing:
+
+```yaml
+plugins:
+  limits:
+    cpuSeconds: 60     # processor time per plugin process
+    memoryMiB: 1024    # memory per plugin process (Linux) or WebAssembly build
+    timeout: 10m       # the longest any call may take
+```
+
+Linux enforces both CPU time and memory. macOS sends a CPU-limit signal,
+which stops plugins built on tug's SDK and most other programs, but has no
+memory limit. Windows has neither. Timeouts apply everywhere.
+`tug plugin inspect` shows each plugin's limits, and what isn't enforced here.
 
 ## Link a plugin you're developing
 
@@ -123,7 +223,7 @@ If the same plugin name is found in several places, tug uses the first of:
 
 1. folders in `TUG_PLUGIN_PATH`
 2. linked plugins
-3. installed plugins (the highest installed version)
+3. installed plugins (the highest installed version, or the pinned one)
 
 Built-in providers always win over a plugin with the same name, unless you
 list that name in [`plugins.allowOverride`](/docs/reference/configuration).

@@ -68,7 +68,9 @@ func (p *Provider) Describe(ctx context.Context) (provider.Description, error) {
 	if err != nil {
 		return provider.Description{}, err
 	}
-	return decode(p, out, provider.DecodeDescribe)
+	d, err := decode(p, out, provider.DecodeDescribe)
+	d.Description = cleanText(d.Description)
+	return d, err
 }
 
 // Accounts implements registry.Provider.
@@ -80,7 +82,11 @@ func (p *Provider) Accounts(ctx context.Context) ([]provider.Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decode(p, out, provider.DecodeAccounts)
+	accts, err := decode(p, out, provider.DecodeAccounts)
+	for i := range accts {
+		accts[i].Description = cleanText(accts[i].Description)
+	}
+	return accts, err
 }
 
 // List implements registry.Provider.
@@ -104,7 +110,11 @@ func (p *Provider) CheckAccess(ctx context.Context, req provider.AccessRequest) 
 	if err != nil {
 		return nil, err
 	}
-	return decode(p, out, provider.DecodeCheckAccess)
+	findings, err := decode(p, out, provider.DecodeCheckAccess)
+	for i := range findings {
+		findings[i].Message, findings[i].Fix = cleanText(findings[i].Message), cleanText(findings[i].Fix)
+	}
+	return findings, err
 }
 
 // Credential implements registry.Provider.
@@ -139,12 +149,12 @@ func (p *Provider) call(ctx context.Context, op string, payload any) ([]byte, er
 	return p.runner.Call(ctx, op, req)
 }
 
-// decode reads a plugin's response with dec. An error the plugin answered
-// with gets the sandbox hint when it reads like the sandbox refused
-// something.
+// decode reads a plugin's response with dec. The text of an error the
+// plugin answered with is cleaned for the terminal, and the error gets the
+// sandbox hint when it reads like the sandbox refused something.
 func decode[T any](p *Provider, out []byte, dec func([]byte) (T, error)) (T, error) {
 	v, err := dec(out)
-	return v, p.runner.explain(err)
+	return v, p.runner.explain(cleanError(err))
 }
 
 // declared drops any secret the manifest does not declare, so a plugin only

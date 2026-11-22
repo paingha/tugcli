@@ -498,6 +498,10 @@ if provider.CodeOf(err) == provider.PermissionDenied {
 ```
 
 Never put a secret in an error message or hint: tug prints and logs them.
+Write them as plain text on one line: tug turns tabs and line breaks into
+spaces, and drops other control characters, such as terminal escape
+sequences, from the message, the hint, access findings and descriptions
+before it shows them.
 
 ### Context, timeouts and output
 
@@ -771,9 +775,13 @@ plugin.
 | Other operations | 30 seconds |
 | After a timeout or Ctrl-C | SIGTERM, then SIGKILL after 2 seconds (Windows: killed at once); a WebAssembly plugin is stopped at once |
 | WebAssembly memory | 256 MiB (`plugins.wasm.memoryLimitMiB`); see [section 11](#the-sandbox) |
+| CPU time and memory of a native plugin | None, unless `spec.limits` asks for them or `plugins.limits` caps them; see [execution limits](#execution-limits) |
+| `retryAfterSeconds` | tug reads a negative value as none, and waits at most a day |
 
-A timed-out call fails as `Unavailable`. Users with slow APIs can change the
-timeout of any operation in tug's `config.yaml`:
+A timed-out call fails as `Unavailable`. A plugin whose API is slow can ask
+for longer in its manifest's `spec.limits.timeouts`, up to five minutes
+unless the user allows more, and users can change the timeout of any
+operation in tug's `config.yaml`:
 
 ```yaml
 plugins:
@@ -782,6 +790,63 @@ plugins:
     credential: 20s
     rotate: 2m
 ```
+
+### Execution limits
+
+A manifest's `spec.limits` says what the plugin needs, and `plugins.limits`
+in tug's `config.yaml` caps what any plugin may have:
+
+```yaml
+# plugin.yaml
+spec:
+  limits:
+    cpuSeconds: 30        # processor time per plugin process
+    memoryMiB: 256        # memory per plugin process, or for the WebAssembly build
+    timeouts: {list: 2m}  # in place of tug's timeout for an operation
+```
+
+```yaml
+# tug's config.yaml
+plugins:
+  limits:
+    cpuSeconds: 60        # also applies to plugins that ask for nothing
+    memoryMiB: 1024
+    timeout: 10m          # the longest any call may take, plugins.timeouts included
+```
+
+The limit is the manifest's value, or the cap when the manifest asks for
+more or for nothing; `tug plugin install` and `tug plugin inspect` show the
+result and say what was cut. Without `plugins.limits.timeout`, a manifest may
+ask for calls of up to five minutes. `plugins.timeouts` wins over the
+manifest's timeouts.
+
+tug sets the CPU and memory limits as resource limits (rlimits) on each
+plugin process, through its own launcher, just before it becomes the plugin;
+programs the plugin runs inherit their own copy. What each system enforces:
+
+| System | CPU time (`RLIMIT_CPU`) | Memory (`RLIMIT_DATA`) | Timeouts |
+| --- | --- | --- | --- |
+| Linux | the kernel kills the plugin when it is used up | the plugin's allocations fail past it | yes |
+| macOS | the kernel sends `SIGXCPU`, which ends a program that does not catch it; SDK plugins exit on it, but a shell script that has run another program catches it and runs on to its timeout | not enforced: macOS does not let a process lower it | yes |
+| Windows | not enforced | not enforced | yes |
+
+The memory limit counts the memory a process maps for its data, its heap in
+effect; leave room, since a Go program needs some tens of MiB to start. A
+WebAssembly build gets `memoryMiB` as its memory limit everywhere, within
+`plugins.wasm.memoryLimitMiB`, and has no CPU limit apart from its
+timeouts. In [serve mode](#serve-mode) one process answers many calls, so
+`cpuSeconds` is the time for all of them: when it is used up the call in
+progress fails and the next call starts a new process. A plugin that stops
+without answering while it has limits gets a hint naming them.
+
+### Fuzzing
+
+`pkg/provider` and `internal/plugin` have Go fuzz tests for both ends of the
+protocol, with seed corpora of real messages: `FuzzRun`, `FuzzServe` and
+`FuzzDecode` for the SDK, and `FuzzServeResponses`, `FuzzPluginResponses`,
+`FuzzManifest`, `FuzzIndex` and `FuzzSafePath` for the host. `go test` runs
+the seeds; run one for longer with
+`go test -run '^$' -fuzz '^FuzzServe$' -fuzztime 1m ./pkg/provider`.
 
 ### Versioning
 
@@ -822,6 +887,7 @@ spec:
     tools: [acme]
     read: ["~/.acme/config.yaml"]
     write: ["~/.acme/cache"]
+  limits: {cpuSeconds: 30, memoryMiB: 256}
   accountConfig:
     type: object
     properties:
@@ -833,7 +899,7 @@ spec:
 | `apiVersion` | yes | `tug.plugin/v1alpha1` |
 | `kind` | yes | `ProviderPlugin` |
 | `metadata.name` | yes | The provider name: lower-case letters, digits and dashes, up to 63 characters. Users type it in `tug import <name>`. `describe` must return the same name. |
-| `metadata.version` | yes | The plugin version. Installs go to `<name>/<version>/`, and the archive is named `tug-provider-<name>_<version>.tar.gz`. Keep it equal to `Info().Version`. |
+| `metadata.version` | yes | The plugin version: letters, digits, dots, dashes, underscores and pluses, starting and ending with a letter or digit, such as `0.1.0` or `1.2.0-rc.1`. Installs go to `<name>/<version>/`, and the archive is named `tug-provider-<name>_<version>.tar.gz`. Keep it equal to `Info().Version`. |
 | `metadata.publisher` | no | Who publishes the plugin. Shown before install. |
 | `metadata.homepage` | no | Where users can read about it. Shown before install. |
 | `spec.protocols` | yes | Protocol versions the plugin speaks; must include `provider/v1alpha1`. |
@@ -848,6 +914,9 @@ spec:
 | `spec.sandbox.write` | no | Files and directories they also write. Everything else is read-only or out of reach, apart from the plugin's private `TMPDIR`. |
 | `spec.sandbox.sockets` | no | Unix sockets they connect to, such as a daemon's. |
 | `spec.sandbox.ports` | no | TCP ports they connect to besides 443, for any host. |
+| `spec.limits.cpuSeconds` | no | Processor time each plugin process may use, within `plugins.limits.cpuSeconds` ([execution limits](#execution-limits)). |
+| `spec.limits.memoryMiB` | no | Memory each plugin process may map (enforced on Linux), and the WebAssembly build's memory limit, within `plugins.limits.memoryMiB`. |
+| `spec.limits.timeouts` | no | Timeouts for `describe`, `accounts`, `list`, `credential`, `rotate` and `checkAccess`, such as `{list: 2m}`, in place of tug's; at most five minutes unless `plugins.limits.timeout` allows more. |
 | `spec.accountConfig` | no | A JSON Schema for the account settings. `tug plugin describe` and `tug plugin install` list its `properties`, and `tug import` warns about `--set` keys that are not among them, unless `additionalProperties` allows others. tug does not check the values. |
 | `spec.minTugVersion` | no | The oldest tug the plugin works with, such as `0.4.0`. A released tug refuses a plugin that needs a newer one when it finds, links or installs it; development builds accept every plugin. |
 
@@ -1221,7 +1290,12 @@ tug plugin install https://github.com/acme/tug-provider-acme/releases/download/v
 6. installs into `plugins/<name>/<version>/` under tug's data directory
    (`$TUG_HOME/data` when `TUG_HOME` is set, otherwise
    `$XDG_DATA_HOME/tug`, `~/.local/share/tug`, or `%LOCALAPPDATA%\tug` on
-   Windows). Installing a version that is already there needs `--force`.
+   Windows), with a receipt beside it, `<version>.receipt.yaml`, that
+   records the archive's sha256, where it came from and who signed it.
+   Installing a version that is already there needs `--force`.
+
+Before step 5, tug also refuses an archive that a configured index has
+revoked, and a version other than the one the plugin is pinned to.
 
 An archive installed from a file or URL has no Sigstore signature for tug to
 check, so tug warns that it cannot tell who built it; the `--sha256` you pass
@@ -1231,9 +1305,31 @@ index can check a signature too (see [Publish to an index](#publish-to-an-index)
 tug checks the checksums again every time it loads an installed plugin, so a
 binary changed after installation is skipped, and `tug plugin ls` says why.
 
+To see all of that without installing anything, run `tug plugin inspect`
+on the archive, its URL or `name@version` from an index: it shows the
+secrets, environment, network hosts, files, sockets and programs the plugin
+may use, whether it would run in the sandbox, its limits, who signed it,
+and whether it is revoked or pinned. `-o json` gives the same for review
+scripts.
+
+**Pins.** `plugins.pins` in `config.yaml` holds a plugin at one version:
+
+```yaml
+plugins:
+  pins:
+    acme: "0.3.1"
+```
+
+`tug plugin install acme` then installs 0.3.1, any other version is
+refused, by name or from an archive, and tug runs 0.3.1 even when a newer
+version is installed; `tug plugin ls` shows the pin, and reports a pin to a
+version that is not installed. `tug plugin install acme@0.4.0 --pin` installs
+0.4.0 and moves the pin, editing only that line of `config.yaml`. Linked and
+`$TUG_PLUGIN_PATH` plugins are not affected.
+
 If the plugin is also linked, the linked copy wins: tug looks in
 `$TUG_PLUGIN_PATH` first, then linked plugins, then installed ones (the
-highest version of each). `TUG_PLUGIN_PATH` is a list of directories, each a
+highest version of each, or the pinned one). `TUG_PLUGIN_PATH` is a list of directories, each a
 plugin directory or a directory of them, separated like `PATH`. Run
 `tug plugin unlink acme` to use the installed copy. `tug plugin remove acme`
 removes every installed version.
@@ -1375,6 +1471,62 @@ reach TUF, point tug at a trust root file instead:
 plugins:
   sigstoreTrustedRoot: /etc/tug/trusted_root.json   # a relative path is taken from the config directory
 ```
+
+#### Revoking a release
+
+When a release turns out to be malicious, or to leak secrets, withdraw it
+from the index:
+
+```bash
+tug plugin index revoke index.yaml dist/tug-provider-acme_0.3.0.tar.gz --reason "sends tokens to a third party"
+tug plugin index revoke index.yaml <archive sha256> --reason "built from a compromised workflow"
+tug plugin index sign index.yaml
+```
+
+The index then lists the archive's sha256 under `revoked`, with the plugin,
+the version and the reason. The version stays listed so that people can see
+why it went. `tug plugin install` refuses a revoked archive whichever way it
+is named, by name, from a file or from a URL, as long as one of the user's
+indexes revokes it; installing by name without a version picks the newest
+version nobody has revoked. `tug plugin ls` warns everyone who has it
+installed:
+
+```text
+revoked: index acme has revoked acme 0.3.0: sends tokens to a third party; remove it with tug plugin remove acme, or install another version
+```
+
+`tug plugin search` leaves out a plugin with every version revoked.
+
+#### Rotating the signing key
+
+To replace the index's key, make a new one and hand over to it with the old
+one:
+
+```bash
+tug plugin index keygen --name 2027          # prints the new public key
+tug plugin index rotate index.yaml --to 2027 # the old key, default, signs the new one
+tug plugin index sign index.yaml --name 2027
+```
+
+`rotate` lists the old key under `supersededKeys` with its successor and the
+old key's signature over it; the old key comes from the credential store, or
+from `TUG_INDEX_KEY` when that is set. tug follows that handover for users
+whose `config.yaml` still names the old key, checks the index against the new
+one, and asks them to update `publicKey`. From then on it records the new key
+in `plugin-index-keys.yaml` in its data directory and refuses an index signed
+with the old key, which may have leaked. A key the index lists as superseded
+can never sign it again, so `tug plugin index sign` refuses one. Keep the old
+key's entry in the index: it is how users who have not updated
+`config.yaml` reach the new key. Handovers chain, so a key replaced twice
+still reaches the newest.
+
+Rotation does not help if the old key itself was stolen: whoever has it can
+sign a handover to a key of their own. Tell users to set the new key in
+`config.yaml` yourself, through a channel you trust.
+
+tug releases from before revocations and key rotation read indexes strictly
+and refuse one with `revoked` or `supersededKeys`, rather than install a
+plugin they were told to refuse.
 
 ## 11. WebAssembly plugins
 
