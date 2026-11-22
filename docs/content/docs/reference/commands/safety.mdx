@@ -15,7 +15,9 @@ tug unlock [duration]
 ```
 
 The duration defaults to `15m`. Use any Go duration such as `90s`, `30m` or
-`1h`.
+`1h`. When a [team policy](/docs/guides/teams#safety-policies) limits
+unlocks on the cluster, a longer duration is refused, and without one tug
+unlocks for the limit if it is shorter than `15m`.
 
 ```console
 $ tug unlock 30m

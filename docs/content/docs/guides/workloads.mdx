@@ -231,6 +231,44 @@ database/orders                ✗ BackupFailing: the latest backup failed
 └── secret/orders-credentials  ·
 ```
 
+## Watch it change
+
+`tug watch` follows a rollout, or any object's reconciliation, as it happens.
+It starts with the object's state and whatever it owns that isn't ready, then
+prints a line for each change that matters, marked as `tug tree` marks health:
+
+```console
+$ tug restart checkout
+$ tug watch checkout --until ready
+14:02:11 ✗ deploy/checkout  1/1 ready, 1 old (owns 4, 2 not ready)
+14:02:11 ✗ pod/checkout-7f9d-ccccc  ContainerCreating
+14:02:11 ✗ rs/checkout-7f9d  0/1 ready, revision 6
+14:02:15 ✓ pod/checkout-7f9d-ccccc  became ready: Running
+14:02:15 ✓ rs/checkout-7f9d  became ready: 1/1 ready, revision 6
+14:02:15 ✗ deploy/checkout  1/1 ready, 1 old → 2/1 ready, 1 old
+14:02:16 ✓ pod/checkout-6b8c-aaaaa  is terminating
+14:02:16 ✓ deploy/checkout  Progressing is True (ReplicaSetUpdated → NewReplicaSetAvailable)
+14:02:16 ✓ deploy/checkout  became ready: 1/1 ready
+```
+
+A container that restarts says how it last stopped (`container main restarted
+(3 restarts), last exit code 137 (OOMKilled)`), and a pod no node can take
+says why, as the scheduler does. For a custom resource, the lines are its
+conditions changing (`Ready False → True (Issued: certificate is up to date)`),
+its controller catching up with a new generation, and what it owns appearing
+and changing; tug looks again from time to time for things it owns of kinds it
+hasn't seen yet. Add `--events` for new warning events, marked `!`.
+
+`--until ready` makes it a wait for scripts and CI: it exits 0 once the
+rollout is done, and 1 if the job fails, the deployment passes its progress
+deadline, or `--timeout` passes first. `--until deleted` waits for something to
+be gone, and `-o json` writes one JSON object per change:
+
+```bash
+tug watch deploy/api --until ready --timeout 5m
+tug watch job/migrate --until ready -o json | jq -r .message
+```
+
 ## Send it to someone who can help
 
 `tug support bundle` collects what someone helping you needs to see into one

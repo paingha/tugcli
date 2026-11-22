@@ -8,12 +8,12 @@ points each terminal at one cluster without touching `~/.kube/config`.
 has the full user guide: installing, every provider and command, and writing
 plugins.
 
-> Status: early development, for individual developers. Phases 0 and 1 are in
-> place, and most of v1: tugd (the local API proxy, tunnels to private
-> clusters, named port-forwards), OIDC sign-in, credential rotation,
-> directory pins, signed plugin indexes, plugin serve mode, a Python SDK and
-> seventeen providers. Not built yet: the team catalog, and the "Later" items
-> (a TUI, commands across clusters, an audit log).
+> Status: early development. Phases 0 and 1 are in place, and most of v1:
+> tugd (the local API proxy, tunnels to private clusters, named
+> port-forwards), OIDC sign-in, credential rotation, directory pins, signed
+> plugin indexes, plugin serve mode, a Python SDK and seventeen providers,
+> as well as a TUI, commands across clusters, an audit log, and signed team
+> catalogs with safety policies.
 
 ## Quick start
 
@@ -53,6 +53,7 @@ tug why certificate/web-tls     # any kind: its conditions, whether its controll
 tug reconcile explain db/orders # which controller reconciles it, on what evidence, and whether it runs
 tug reconcile status cert-manager  # a controller's health, leader Lease, restarts and the kinds it reconciles
 tug reconcile trace db/orders --logs  # a timeline: generations, conditions, events, owned objects, its controller's logs
+tug watch api --until ready     # follow the rollout live: conditions, replicas, pods, restarts; exit 0 when done
 tug support bundle api          # a redacted archive of its YAML, why, events, logs and nodes, for a ticket
 tug pf api 8080                 # port-forward by short name
 tug pf db 5432 --name db        # in the background through tugd, reconnecting when the pod restarts
@@ -68,6 +69,7 @@ tug plugin install digitalocean # from a signed plugin index
 tug ui                          # full-screen: clusters, workloads, logs, why, tree, shells, forwards
 tug get pods --cluster-selector env=staging   # any read, on every matching cluster at once
 tug audit --since 24h           # what tug let through and refused, per cluster
+tug team add platform https://teams.example.com/platform/team.yaml --public-key <key>  # shared names, labels and policies
 ```
 
 Targets are fuzzy: exact beats prefix beats fuzzy, workloads beat bare pods,
@@ -222,7 +224,7 @@ in tug's config directory.
 
 `--cluster-selector label=value` (repeatable; a cluster must match all)
 runs a read on every matching cluster at once: any kubectl command that only
-reads, and `tug why`, `tree`, `reconcile`, `logs` and `top`. Each line is prefixed with
+reads, and `tug why`, `tree`, `watch`, `reconcile`, `logs` and `top`. Each line is prefixed with
 the cluster's name, failures are listed at the end, and tug exits 1 if any
 cluster failed. `--parallel` (default 8) caps how many run together. Writes,
 and commands that bind a local port or the terminal, are refused before
@@ -244,6 +246,47 @@ recorded is not sent, and an unlock that cannot be recorded is taken back.
 `tug audit [--cluster x] [--session id] [-n ns] [--event write|refused|...]
 [--since 24h] [-o json|yaml]` lists them, newest first. The log is a local
 record kept with your own permissions, not evidence that nobody changed it.
+
+## Team catalogs
+
+A team publishes a signed catalog with names, aliases and labels for its
+clusters, provider account settings, approved plugin indexes and safety
+policies. It never carries credentials: each person imports the team's
+accounts and reaches every cluster as themselves, through their own cloud or
+OIDC sign-in, and publishing a catalog grants nobody any Kubernetes
+permission.
+
+```bash
+tug team add platform https://teams.example.com/platform/team.yaml --public-key <key>
+tug team add infra --git git@github.com:acme/tug-team.git --path infra.yaml --public-key <key>
+tug team sync                   # fetch, check, show what changes, ask, apply
+tug team ls | show platform | remove platform
+tug team keygen | sign team.yaml | verify team.yaml --public-key <key>   # for publishers
+```
+
+The catalog is signed with ed25519, as plugin indexes are, and has a version
+that must go up: tug refuses a bad signature, a lower version and a changed
+catalog that kept its version, and keeps the last good version for offline
+use. A sync shows what a new version changes before it applies (`--yes` skips
+the question, and is needed without a terminal). Every entry records its team
+and version, your own labels, names and accounts win over the team's, and
+each conflict is listed. Teams can also be listed under `teams` in
+`config.yaml`.
+
+Policies map label selectors to read-only defaults and limits:
+
+```yaml
+policies:
+- {name: production-read-only, selector: {env: prod}, readOnly: true, maxUnlock: 30m}
+- {name: staging-write, selector: {env: staging}}
+```
+
+On a cluster under `production-read-only`, `tug unlock 2h` is refused,
+`tug unlock` lasts at most 30 minutes, and `tug connect --read-write` is
+refused. Policies combine with `guard.readOnlyLabels` so that the stricter
+always wins, and they see a cluster's labels with the team's winning, so a
+label set by hand cannot take a cluster out of one. Like the guard itself,
+they are a seatbelt, not access control.
 
 ## Directory pins
 
@@ -311,6 +354,7 @@ cluster whose labels make it read-only, writes still ask first or need
 | Tunnels: SSH, proxies, AWS SSM, Google IAP, Teleport's tsh | [internal/tunnel](internal/tunnel) |
 | OpenID Connect sign-in | [internal/oidc](internal/oidc) |
 | `.tug.yaml` pins and their trust | [internal/pin](internal/pin) |
+| Team catalogs: signing, fetching, merging, policies | [internal/team](internal/team) |
 | Working-environment profiles | [internal/profile](internal/profile) |
 | Bookmarks and command aliases | [internal/bookmark](internal/bookmark), [internal/alias](internal/alias) |
 | Finding the file that defines an object, and opening an editor | [internal/manifest](internal/manifest), [internal/editor](internal/editor) |
