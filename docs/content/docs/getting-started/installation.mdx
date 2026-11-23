@@ -114,11 +114,16 @@ processors.
 
 ```console
 $ tug version
-tug 0.1.0 (3f9a2c1d8e4b, go1.26.2, darwin/arm64)
+tug v0.3.0 (0f1caa0cf3f9, go1.26.0, darwin/arm64)
 ```
 
 You'll see your own version, commit and platform. If your shell says
 `command not found`, the folder holding `tug` isn't on your `PATH` yet.
+
+If the version is older than the one you just installed, another `tug` comes
+first on your `PATH`, often one from `go install` in `~/go/bin`.
+`which -a tug` lists them in the order your shell tries them; remove the old
+one or put the new one's folder first.
 
 ## Turn on tab completion (optional)
 
