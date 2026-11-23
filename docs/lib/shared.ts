@@ -12,6 +12,11 @@ export const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || `http://localhost:30
 // building a release's docs.
 export const docsVersion = process.env.NEXT_PUBLIC_DOCS_VERSION || 'main';
 
+// The latest tug release, such as v0.3.0, which the home page announces:
+// DOCS_RELEASE, or the highest vX.Y.Z tag in git when building. Empty when
+// neither is there.
+export const latestRelease = process.env.NEXT_PUBLIC_TUG_RELEASE ?? '';
+
 export const gitConfig = {
   user: 'paingha',
   repo: 'tugcli',

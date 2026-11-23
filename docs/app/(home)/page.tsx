@@ -19,10 +19,11 @@ import { CopyCommand } from '@/components/home/copy-command';
 import { FlowDiagram } from '@/components/home/flow-diagram';
 import { HeroStage } from '@/components/home/hero-stage';
 import { LogoMark } from '@/components/logo';
-import { repoUrl } from '@/lib/shared';
+import { latestRelease, repoUrl } from '@/lib/shared';
 
 const install = 'go install github.com/paingha/tugcli/cmd/tug@latest';
-const release = 'v0.1.0-alpha.1';
+// The release's page, or the latest release's when the build found none.
+const releaseUrl = latestRelease ? `${repoUrl}/releases/tag/${latestRelease}` : `${repoUrl}/releases/latest`;
 
 export default function HomePage() {
   return (
@@ -119,13 +120,13 @@ function Hero() {
     <section className="pt-12 sm:pt-20">
       <div className={`${container} flex flex-col items-center text-center`}>
         <a
-          href={`${repoUrl}/releases/tag/${release}`}
+          href={releaseUrl}
           className="group inline-flex animate-word-in items-center gap-2 rounded-full border bg-fd-background py-1 pr-3 pl-1 text-[13px] font-medium shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition-colors hover:bg-fd-foreground/[0.03]"
         >
           <span className="rounded-full bg-(--color-tug)/12 px-2 py-0.5 text-[11.5px] font-semibold text-(--color-tug)">
-            Alpha
+            New
           </span>
-          tug {release} is out
+          {latestRelease ? `tug ${latestRelease} is out` : 'The latest release'}
           <ArrowUpRight className="size-3.5 text-fd-muted-foreground transition-transform group-hover:-translate-y-px group-hover:translate-x-px" />
         </a>
 
@@ -689,8 +690,8 @@ function Footer() {
         <p>MIT licensed. © 2026 The tug authors.</p>
         <p>
           Latest release:{' '}
-          <a href={`${repoUrl}/releases/tag/${release}`} className="font-mono hover:text-fd-foreground">
-            {release}
+          <a href={releaseUrl} className="font-mono hover:text-fd-foreground">
+            {latestRelease || 'on GitHub'}
           </a>
         </p>
       </div>
