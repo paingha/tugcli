@@ -49,8 +49,13 @@ func Get() Info {
 			}
 		}
 	}
-	if info.Version == "" {
+	switch {
+	case info.Version == "":
 		info.Version = "dev"
+	case unprefixed.MatchString(info.Version):
+		// A build stamped "0.3.0" is still the release v0.3.0; without the
+		// "v", IsRelease would take it for a development build.
+		info.Version = "v" + info.Version
 	}
 	return info
 }
@@ -58,7 +63,10 @@ func Get() Info {
 // String returns the version alone.
 func String() string { return Get().Version }
 
-var release = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+var (
+	release    = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+	unprefixed = regexp.MustCompile(`^\d+\.\d+\.\d+`)
+)
 
 // IsRelease reports whether v is a tagged release such as "v0.4.0", rather
 // than "dev" or a pseudo-version from a local build.

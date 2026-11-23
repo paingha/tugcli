@@ -20,7 +20,8 @@ builds:
     flags: [-trimpath]
     ldflags:
       - -s -w
-      - -X github.com/paingha/tugcli/internal/version.version={{ .Version }}
+      # .Version drops the tag's "v"; tug's versions keep it, as Go's do.
+      - -X github.com/paingha/tugcli/internal/version.version=v{{ .Version }}
       - -X github.com/paingha/tugcli/internal/version.commit={{ .FullCommit }}
       - -X github.com/paingha/tugcli/internal/version.date={{ .CommitDate }}
     mod_timestamp: "{{ .CommitTimestamp }}"
