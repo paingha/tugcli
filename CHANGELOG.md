@@ -8,6 +8,85 @@ Every release is on [GitHub](https://github.com/paingha/tugcli/releases),
 with signed checksums and SBOMs. The
 [user guide](https://paingha.github.io/tugcli/) covers each command in full.
 
+## 0.3.0
+
+Released 22 November 2026.
+
+tug's settings without editing `config.yaml`, `tug why --deep` turned on in
+one step, and fixes for objects tug missed after their kinds were installed.
+
+### Upgrading from 0.2.0
+
+Install 0.3.0 the way you installed 0.2.0. Your `config.yaml`, catalog,
+sessions, pins, credentials and plugins work as they did, and the
+first-party plugins are unchanged, so there is nothing to reinstall. What to
+know:
+
+- **`tug settings` now belongs to tug.** tug runs any command it doesn't
+  have as kubectl, so a kubectl plugin named `settings` now needs
+  `kubectl settings`.
+- **Hints suggest the unlock your team allows.** Under a team policy that
+  limits unlocks to less than 15 minutes, `tug profile up`,
+  `tug auth rotate` and the refusal of a write run with `tug` now suggest an
+  unlock of that limit, as `tug connect` already did, instead of a
+  `tug unlock 15m` that would be refused.
+
+### Settings
+
+- **`tug settings list|get|set|unset|add|remove|path`** reads and changes
+  `config.yaml` for you, changing only what you name and keeping the rest of
+  the file and its comments. `list` shows every setting, the value tug uses
+  and where it comes from: the file, a variable such as
+  `TUG_KEYRING_BACKEND`, or a default. Lists and maps change an item at a
+  time: `tug settings add guard.readOnlyLabels team=payments`,
+  `tug settings add plugins.indexes name=acme url=... publicKey=...`,
+  `tug settings unset plugins.pins.digitalocean`. Every setting except
+  `teams`, which `tug team` owns, can be changed this way.
+  [Reference](https://paingha.github.io/tugcli/docs/reference/commands/other#tug-settings).
+- tug refuses a value it could not use, and shows a change that makes it
+  trust something or protect less before making it: a plugin index, a plugin
+  outside the sandbox, a cluster no longer read-only. Without a terminal
+  that needs `--yes`. Secrets are never settings; a key that looks like one
+  is answered with where secrets go.
+- The first label set you add to `guard.readOnlyLabels` keeps `env=prod`
+  beside it, so production still opens read-only.
+- Errors and help that told you to edit lists in `config.yaml` now give the
+  `tug settings add` command that does it.
+
+### AI explanations
+
+- **`tug intelligence enable [provider]`** turns `tug why --deep` on in one
+  step: it sets the provider, takes `--model` and `--base-url`, and asks for
+  the API key on a terminal when none is stored. A setup that cannot work is
+  refused before anything is written. **`tug intelligence disable`** turns
+  it off and keeps the other settings, the ledger and the keys.
+  [Guide](https://paingha.github.io/tugcli/docs/guides/ai-explanations#turning-it-on).
+- `--deep` counts tug's own read-only commands, such as
+  `tug reconcile explain` and `tug check`, as next steps that only read,
+  instead of moving them to the changes that need approval.
+
+### Fixes
+
+- `tug tree`, `why`, `watch`, `reconcile` and `tug support bundle` missed
+  objects whose CRD was installed after tug's discovery cache was filled,
+  for up to six hours. They now read discovery afresh once per command.
+- `tug gitops status` said Flux or Argo CD wasn't installed when it was
+  installed after the discovery cache was filled.
+- `tug reconcile status kube-controller-manager` and other static pods found
+  by their bare name failed with "nothing in any namespace matches" on kind
+  and kubeadm clusters.
+- In a colour terminal, a coloured cell, such as a red `prod` in `tug ls`,
+  pushed the columns after it out of line.
+- Indirect dependencies used to verify plugin signatures were updated for
+  security fixes: go-jose 4.1.9, gRPC 1.83.2 and OpenTelemetry 1.47.0.
+
+### Docs
+
+- The [user guide](https://paingha.github.io/tugcli/) shows real output for
+  tug's commands, and a new
+  [TUI guide](https://paingha.github.io/tugcli/docs/guides/tui) has
+  screenshots. The README is rewritten for people using tug.
+
 ## 0.2.0
 
 Released 21 November 2026.
