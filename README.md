@@ -26,11 +26,16 @@ keychain, and points each terminal at the cluster you choose. Your
 helm and k9s follow along without any setup.
 
 <p align="center">
+  <img src="docs/public/images/cli/read-only.png" alt="A terminal connected to prod-eu. The prompt starts with a red PROD badge and says read-only. tug restart cart asks first, and on no refuses, suggesting tug unlock 15m to allow writes.">
+</p>
+
+<p align="center">
   <a href="https://paingha.github.io/tugcli/"><strong>User guide</strong></a> ·
   <a href="#install">Install</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#everyday-commands">Commands</a> ·
   <a href="#providers">Providers</a> ·
+  <a href="https://paingha.github.io/tugcli/docs/compare">How tug compares</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
@@ -51,6 +56,10 @@ helm and k9s follow along without any setup.
   to do next.
 - **Works with what you have.** Anything tug doesn't know runs as kubectl,
   so `tug get pods` just works.
+
+Coming from kubectx, kubie or kubeswitch?
+[How tug compares](https://paingha.github.io/tugcli/docs/compare) says what
+tug adds and what those tools still do better.
 
 ## Install
 

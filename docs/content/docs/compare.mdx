@@ -1,0 +1,101 @@
+---
+title: How tug compares
+description: tug next to kubectx and kubens, kubie, kubeswitch and k9s, including what those tools do that tug doesn't.
+icon: Scale
+---
+
+Most people who try tug already use something to switch clusters. This page
+compares tug with the tools they mention most: what tug adds, and what each
+of those tools still does better. It was written in November 2026 from each
+project's own documentation and source. If something here is out of date,
+[open an issue](https://github.com/paingha/tugcli/issues) and it will be
+fixed.
+
+## At a glance
+
+| | tug | kubectx + kubens | kubie | kubeswitch |
+| --- | --- | --- | --- | --- |
+| **A different cluster in each terminal** | Yes, in the shell you're in | With `kubectx -s`, in a subshell. Plain `kubectx` switches every terminal | Yes, in a subshell | Yes |
+| **Finds clusters in cloud accounts** | EKS, GKE and AKS built in, 18 more platforms as plugins | No, reads kubeconfig | No, reads kubeconfig files you point it at | Yes: EKS, GKE, AKS, DigitalOcean, Rancher, Gardener, Vault and more |
+| **Tokens in kubeconfig files** | Moved to the OS keychain; the kubeconfigs tug writes hold none | Left where they are | Left where they are | Left where they are |
+| **Read-only for production** | Automatic for clusters labelled `env=prod`, with timed unlocks and an audit log | `kubectx -r` starts a read-only subshell | No | No |
+| **Cluster in your prompt** | Yes, red when read-only | Through a prompt theme | Yes | Through a separate tool such as kube-ps1 |
+| **Back to the previous cluster** | No | `kubectx -` | `kubie ctx -` | `switch -`, and a full history |
+| **One command on many clusters** | No | No | `kubie exec` | `switch exec` |
+| **Explains what's wrong** | `tug why`, `tug doctor` | No | `kubie lint` checks kubeconfig files | No |
+
+## kubectx and kubens
+
+kubectx is the switcher most people know: small, fast and in nearly every
+package manager. Plain `kubectx prod` sets the current context in your
+kubeconfig, so every terminal that uses that file moves with it. Newer
+releases add `kubectx -s`, which starts a subshell that sees only one
+context, and `kubectx -r`, which starts a read-only subshell whose requests
+go through a local proxy that lets only reads through.
+
+**What tug adds.** tug switches the shell you're already in, through a
+[shell hook](/docs/getting-started/shell-setup), instead of starting a new
+one. It finds clusters in your cloud accounts rather than only in kubeconfig,
+and moves tokens out of kubeconfig into your keychain. Read-only comes from
+the cluster's labels, so production is guarded without you remembering a
+flag, and `tug unlock 15m` gives a change window that ends by itself. See
+[Read-only sessions](/docs/concepts/read-only).
+
+**Choose kubectx** when you have a handful of contexts in one kubeconfig and
+want the smallest tool that switches between them.
+
+## kubie
+
+kubie gives each shell its own context by starting a subshell, shows the
+context in your prompt, and loads contexts from many kubeconfig files at
+once. `kubie exec` runs a command in every context that matches a wildcard,
+and `kubie lint` checks your kubeconfig files for problems.
+
+**What tug adds.** Clusters found in cloud accounts, credentials in the
+keychain, the read-only guard, `tug why` and `tug doctor`, and PowerShell on
+Windows. tug's hook changes the shell you're in, so there are no nested
+shells to exit.
+
+**Choose kubie** when you often run the same command across many clusters,
+or prefer a subshell per context that ends when you exit it.
+
+## kubeswitch
+
+kubeswitch is the closest to tug's [catalog](/docs/concepts/catalog). It
+searches for kubeconfigs across many stores: files, HashiCorp Vault, EKS, GKE,
+AKS, DigitalOcean, Rancher, Gardener, OVH, Scaleway, Exoscale, Akamai and
+Cluster API. Each terminal gets its own copy, so switching never changes your
+kubeconfig. It keeps a history of contexts and namespaces, lets you name
+aliases, runs commands across clusters with `switch exec`, and keeps a search
+index for very large collections.
+
+**What tug adds.** Credentials live in the keychain rather than in kubeconfig
+copies. tug adds the read-only guard, a prompt that shows the cluster, and
+commands for the work after connecting: `logs`, `sh`, `pf`, `why`, `doctor`.
+Providers can be [plugins](/docs/plugins) written in any language that reads
+and writes JSON.
+
+**Choose kubeswitch** when your kubeconfigs live in Vault or come from
+Gardener, which tug has no provider for, or when you search thousands of
+kubeconfig files.
+
+## k9s
+
+k9s isn't a switcher. It's a full terminal UI for working inside a cluster,
+and tug is built to work with it. k9s started in a tug terminal follows that
+terminal's session, `tug ui --k9s` opens it there, and
+`tug connect --proxy` puts it under the read-only guard. k9s also has a
+read-only mode of its own: `k9s --readonly`, or `readOnly: true` for a
+context in its configuration.
+
+[`tug ui`](/docs/guides/tui) is a smaller view built around tug's own
+commands, such as `why`, `tree`, logs and shells. If you live in k9s, keep
+using it: tug connects it to the right cluster and stays out of the way.
+
+## Trying tug next to what you have
+
+You don't have to give anything up to try tug. It never edits
+`~/.kube/config`, so the tools you use now keep working in terminals tug
+isn't connected in, and `tug disconnect` puts `KUBECONFIG` back as it was.
+`tug import` reads the kubeconfig files you already have, and
+[Uninstalling](/docs/getting-started/uninstalling) takes it all away again.
