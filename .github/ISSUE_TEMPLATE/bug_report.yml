@@ -1,6 +1,6 @@
 name: Bug report
 description: Something tug does is wrong, crashes, or doesn't match the docs.
-labels: [bug]
+labels: [bug, needs triage]
 body:
   - type: markdown
     attributes:
