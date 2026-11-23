@@ -4,9 +4,56 @@ What changed in each tug release, newest first, and what to do when you
 upgrade. tug follows [semantic versioning](https://semver.org): until 1.0, a
 minor release may change behaviour, and its upgrade notes say how.
 
-Every release is on [GitHub](https://github.com/paingha/tugcli/releases),
-with signed checksums and SBOMs. The
+Releases from 0.3.1 on are on
+[GitHub](https://github.com/paingha/tugcli/releases), with signed checksums
+and SBOMs. The releases before 0.3.1 are no longer there; their entries stay
+here as a record of what changed. The
 [user guide](https://paingha.github.io/tugcli/) covers each command in full.
+
+## 0.3.1
+
+Released 22 November 2026.
+
+Release builds that know they are releases, and unlock hints from tugd and
+the TUI that match your team's policy. Releases before this one are no
+longer on GitHub, so install 0.3.1 rather than an older version.
+
+### Upgrading from 0.3.0
+
+Install 0.3.1 the way you installed 0.3.0. Your `config.yaml`, catalog,
+sessions, pins, credentials and plugins work as they did, and the
+first-party plugins are unchanged, so there is nothing to reinstall. What to
+know:
+
+- **`tug version` prints `v0.3.1`.** The 0.3.0 binaries printed `0.3.0`,
+  without the `v`, and so counted as development builds.
+- **Plugins' minimum tug version is checked again.** A 0.3.0 release build
+  skipped `spec.minTugVersion`; 0.3.1 refuses a plugin that needs a newer
+  tug and says to upgrade. `tug plugin init` pins new plugins to the SDK of
+  the tug that made them again, too.
+
+### Fixes
+
+- tugd's [local API proxy](https://paingha.github.io/tugcli/docs/guides/proxy)
+  and the TUI suggested `tug unlock 15m` under a team policy that allows
+  shorter unlocks, which `tug unlock` then refused. They now suggest the
+  unlock the policy allows, as tug's commands do: when a write is refused
+  through the proxy or in the TUI, and when the TUI connects to a read-only
+  cluster.
+- Releases are built with Go 1.26.11 instead of 1.26.0, whose Windows I/O
+  could corrupt a goroutine's stack and crash tug while it streamed logs
+  ([golang/go#77975](https://github.com/golang/go/issues/77975)).
+
+### Docs
+
+- A new page, [How tug compares](https://paingha.github.io/tugcli/docs/compare),
+  sets tug beside kubectx and kubens, kubie, kubeswitch and k9s: what tug
+  adds over each, and when to choose the other tool.
+- The docs home page names the latest release. It had announced
+  0.1.0-alpha.1 since that release.
+- The installation guide says what to do when `tug version` shows an older
+  version than the one you installed: another `tug` comes first on your
+  `PATH`, often one from `go install`.
 
 ## 0.3.0
 
@@ -319,9 +366,4 @@ from. A 0.1.x catalog is read as it is.
 
 The first releases: the catalog and providers, per-terminal sessions,
 credentials in the OS keychain, the plugin protocol and SDKs, tugd, OIDC
-sign-in, directory pins and the TUI. Their notes are on GitHub:
-[0.1.4](https://github.com/paingha/tugcli/releases/tag/v0.1.4),
-[0.1.3](https://github.com/paingha/tugcli/releases/tag/v0.1.3),
-[0.1.2](https://github.com/paingha/tugcli/releases/tag/v0.1.2),
-[0.1.1](https://github.com/paingha/tugcli/releases/tag/v0.1.1) and
-[0.1.0](https://github.com/paingha/tugcli/releases/tag/v0.1.0).
+sign-in, directory pins and the TUI.
