@@ -29,22 +29,25 @@ update the page that shows it.
 
 ## Building for a host
 
-Three environment variables shape a build:
+Four environment variables shape a build:
 
 | Variable | Example | What it sets |
 | --- | --- | --- |
 | `DOCS_BASE_PATH` | `/tugcli` | The sub-path the site is served from. |
 | `DOCS_SITE_URL` | `https://paingha.github.io/tugcli` | The public address, including the base path, for canonical URLs, the sitemap and link previews. |
 | `DOCS_VERSION` | `v0.4.0` | The tug version shown in the sidebar. Default: `main`. |
+| `DOCS_RELEASE` | `v0.4.0` | The latest release, which the home page announces. Default: the highest `vX.Y.Z` tag in git. |
 
 ```bash
 DOCS_BASE_PATH=/tugcli DOCS_SITE_URL=https://paingha.github.io/tugcli npm run build
 ```
 
 `.github/workflows/docs.yml` builds the site on every pull request that
-touches `docs/`, and publishes it to GitHub Pages from `main`. Turn Pages on
-first (Settings, Pages, source: GitHub Actions). Each page's "last updated"
-date comes from git, so the workflow checks out the full history.
+touches `docs/`, and publishes it to GitHub Pages from `main` and after each
+release, so the home page names the new one. Turn Pages on first (Settings,
+Pages, source: GitHub Actions). Each page's "last updated" date and the
+latest release come from git, so the workflow checks out the full history
+and tags.
 
 ## What the build produces
 
