@@ -11,6 +11,13 @@ icon: MessageCircleQuestionMark
     terminal only. Close the terminal or run `tug disconnect` and everything is
     as it was.
   </Accordion>
+  <Accordion title="How is tug different from kubectx, kubie or kubeswitch?">
+    They switch kubeconfig contexts. tug also finds clusters in your cloud
+    accounts, moves their tokens into your keychain, and opens production
+    read-only. Each of them still does something tug doesn't, such as running
+    one command across many clusters. See
+    [How tug compares](/docs/compare).
+  </Accordion>
   <Accordion title="Can I still use kubectl, helm and k9s?">
     Yes. They follow your terminal's session automatically. tug also passes any
     command it doesn't know to kubectl, so `tug get pods` works too. See
