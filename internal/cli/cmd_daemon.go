@@ -51,14 +51,15 @@ func newDaemonRunCmd(a *app) *cobra.Command {
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			srv := daemon.New(daemon.Config{
-				RuntimeDir: a.paths.Runtime,
-				Sessions:   a.sessions(),
-				Upstream:   a.daemonUpstream,
-				Forward:    a.daemonForward,
-				Audit:      a.audit(),
-				Version:    version.String(),
-				Now:        a.now,
-				Log:        a.log,
+				RuntimeDir:      a.paths.Runtime,
+				Sessions:        a.sessions(),
+				Upstream:        a.daemonUpstream,
+				Forward:         a.daemonForward,
+				Audit:           a.audit(),
+				SuggestedUnlock: a.suggestedUnlock,
+				Version:         version.String(),
+				Now:             a.now,
+				Log:             a.log,
 			})
 			return srv.Run(cmd.Context())
 		},

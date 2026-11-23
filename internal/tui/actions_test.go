@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // exitStatus is a shell that exited non-zero, as ops.ExitCode reads it.
@@ -94,6 +95,21 @@ func TestWritesOnAReadOnlySession(t *testing.T) {
 				t.Errorf("Kube calls = %v; the write's client should allow writes", kube)
 			}
 		})
+	}
+}
+
+// TestRefusalSuggestsTheUnlockAllowed checks that a write refused in the
+// TUI suggests the unlock a team policy allows, as tug's commands do.
+func TestRefusalSuggestsTheUnlockAllowed(t *testing.T) {
+	b := newFakeBackend(shop()...).connectedTo("staging", "shop", true)
+	b.unlock = 10 * time.Minute
+	h := newHarness(t, b)
+	selectWorkload(t, h, "deploy/checkout")
+
+	h.press("r", "n")
+	want := "refused restart deploy/checkout: staging is read-only; run `tug unlock 10m` to allow writes"
+	if got := flashed(h.m); got != want {
+		t.Fatalf("after no, flash = %q, want %q", got, want)
 	}
 }
 

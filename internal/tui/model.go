@@ -66,6 +66,9 @@ type model struct {
 
 	// state is the session as last read.
 	state session.State
+	// unlock is how long hints to run tug unlock suggest for the session's
+	// cluster; zero suggests guard.DefaultUnlock.
+	unlock time.Duration
 	// clusters is the catalog as last read; the status bar finds the
 	// session's tunnel in it.
 	clusters clusterList
@@ -100,6 +103,7 @@ func newModel(b Backend, t *tasks, st session.State, sty styles, opts ...Option)
 	}
 	if st.Connected() {
 		m.view = viewWorkloads
+		m.unlock = b.SuggestedUnlock(st)
 	}
 	return m
 }

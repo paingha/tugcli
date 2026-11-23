@@ -196,6 +196,8 @@ type fakeBackend struct {
 	nsErr      error
 	kubeErr    error
 	catalogErr error
+	// unlock is what SuggestedUnlock answers, as a team policy's limit.
+	unlock time.Duration
 
 	connects   []string
 	setNS      []string
@@ -290,6 +292,8 @@ func (b *fakeBackend) Connect(_ context.Context, clusterID string) (session.Stat
 	}
 	return session.State{}, catalog.ErrNotFound
 }
+
+func (b *fakeBackend) SuggestedUnlock(session.State) time.Duration { return b.unlock }
 
 func (b *fakeBackend) Namespaces(context.Context) ([]string, error) {
 	return b.namespaces, b.nsErr

@@ -83,7 +83,7 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request) {
 	read := guard.IsRead(r.Method, &target)
 	pr := &proxyRequest{sess: sess, method: r.Method, path: rest, intent: intentOf(r), client: clientOf(r)}
 	if !read && !sess.State.Writable(now) {
-		denied := &guard.DeniedError{Cluster: sess.State.ClusterName, Action: guard.Describe(r.Method, &target)}
+		denied := &guard.DeniedError{Cluster: sess.State.ClusterName, Action: guard.Describe(r.Method, &target), Unlock: s.suggestedUnlock(sess.State)}
 		s.note(r.Context(), s.entry(audit.KindRefused, pr, func(e *audit.Entry) {
 			e.Status, e.Reason = http.StatusForbidden, audit.ReasonReadOnly
 		}))

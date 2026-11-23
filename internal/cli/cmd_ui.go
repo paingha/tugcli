@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
@@ -154,6 +155,10 @@ func (b *tuiBackend) Connect(ctx context.Context, clusterID string) (session.Sta
 		return session.State{}, err
 	}
 	return s.State, nil
+}
+
+func (b *tuiBackend) SuggestedUnlock(st session.State) time.Duration {
+	return b.a.suggestedUnlock(st)
 }
 
 func (b *tuiBackend) Namespaces(ctx context.Context) ([]string, error) {

@@ -1,15 +1,18 @@
 package tui
 
 import (
+	"cmp"
 	"context"
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/paingha/tugcli/internal/catalog"
+	"github.com/paingha/tugcli/internal/guard"
 	"github.com/paingha/tugcli/internal/resolve"
 	"github.com/paingha/tugcli/internal/session"
 )
@@ -24,7 +27,9 @@ type catalogMsg struct {
 type connectedMsg struct {
 	cluster catalog.Cluster
 	state   session.State
-	err     error
+	// unlock is how long hints to run tug unlock suggest on the cluster.
+	unlock time.Duration
+	err    error
 }
 
 // clusterList is the clusters view: the catalog, filtered by what the user
@@ -240,7 +245,10 @@ func (m *model) connect() tea.Cmd {
 	b := m.b
 	return m.tasks.cmd(func(ctx context.Context) tea.Msg {
 		st, err := b.Connect(ctx, c.ID)
-		return connectedMsg{cluster: c, state: st, err: err}
+		if err != nil {
+			return connectedMsg{cluster: c, err: err}
+		}
+		return connectedMsg{cluster: c, state: st, unlock: b.SuggestedUnlock(st)}
 	})
 }
 
@@ -249,13 +257,13 @@ func (m *model) connected(msg connectedMsg) tea.Cmd {
 		m.setError(msg.err)
 		return nil
 	}
-	m.state = msg.state
+	m.state, m.unlock = msg.state, msg.unlock
 	m.clusters.current = msg.state.ClusterID
 	m.kube, m.kubeFor = nil, ""
 	m.workloads = workloadList{}
 	mode := "read-write"
 	if msg.state.ReadOnly {
-		mode = "read-only (tug unlock 15m to allow writes)"
+		mode = "read-only (tug unlock " + guard.ShortDuration(cmp.Or(m.unlock, guard.DefaultUnlock)) + " to allow writes)"
 	}
 	m.setInfo("Connected to %s, namespace %s, %s", msg.state.ClusterName, msg.state.Namespace, mode)
 	if msg.cluster.Stale {

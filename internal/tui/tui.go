@@ -36,6 +36,11 @@ type Backend interface {
 	// Connect points the session at a catalog cluster as tug connect does:
 	// read-only by its labels, and through tugd when it has a tunnel.
 	Connect(ctx context.Context, clusterID string) (session.State, error)
+	// SuggestedUnlock is how long a hint to run tug unlock on session st
+	// suggests, as tug connect works it out, so that a team policy that
+	// limits unlocks on its cluster does not refuse what the hint
+	// suggests. Zero suggests guard.DefaultUnlock.
+	SuggestedUnlock(st session.State) time.Duration
 	// Namespaces lists the namespaces of the session's cluster.
 	Namespaces(ctx context.Context) ([]string, error)
 	// SetNamespace switches the session's namespace, as tug ns does.
