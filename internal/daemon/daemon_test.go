@@ -191,6 +191,26 @@ func TestProxyNeedsTheSessionToken(t *testing.T) {
 	}
 }
 
+// TestProxyRefusalSuggestsTheUnlockAllowed checks that the refusal of a
+// write suggests the unlock the host works out, such as a team policy's
+// limit, rather than one tug unlock would refuse.
+func TestProxyRefusalSuggestsTheUnlockAllowed(t *testing.T) {
+	var asked atomic.Value
+	f := setup(t, func(c *Config) {
+		c.SuggestedUnlock = func(st session.State) time.Duration {
+			asked.Store(st.ClusterID)
+			return 10 * time.Minute
+		}
+	})
+	code, body := f.do(t, http.MethodDelete, "/api/v1/namespaces/payments", f.token)
+	if want := "run `tug unlock 10m` to allow writes"; code != http.StatusForbidden || !strings.Contains(body, want) {
+		t.Fatalf("DELETE on a read-only session = %d %s, want 403 with %q", code, body, want)
+	}
+	if got := asked.Load(); got != "kubeconfig/x/prod" {
+		t.Errorf("SuggestedUnlock asked about %v, want the session's cluster kubeconfig/x/prod", got)
+	}
+}
+
 func TestProxyGuardsWritesForEveryClient(t *testing.T) {
 	f := setup(t)
 	for _, path := range []string{"/api/v1/namespaces/payments", "/api/v1/namespaces/default/pods/p/exec"} {

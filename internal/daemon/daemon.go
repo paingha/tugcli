@@ -68,10 +68,16 @@ type Config struct {
 	// Audit, when set, records every write the proxy forwards and how it
 	// was answered, every write it refuses, and unlocks that run out. A
 	// write that cannot be recorded is not forwarded.
-	Audit   Recorder
-	Version string
-	Now     func() time.Time
-	Log     *slog.Logger
+	Audit Recorder
+	// SuggestedUnlock, when set, says how long the refusal of a write on a
+	// read-only session suggests unlocking for, such as a team policy's
+	// limit, so that tug unlock does not refuse what the hint suggests.
+	// Without it, or when it returns zero, the refusal suggests
+	// guard.DefaultUnlock.
+	SuggestedUnlock func(st session.State) time.Duration
+	Version         string
+	Now             func() time.Time
+	Log             *slog.Logger
 }
 
 // Recorder notes what the proxy forwards and refuses in the audit log.
@@ -229,6 +235,15 @@ func (s *Server) usesProxy(sessionID string) (*session.Session, bool) {
 		return nil, false
 	}
 	return sess, true
+}
+
+// suggestedUnlock is how long the refusal of a write on st suggests
+// unlocking for; zero leaves it to guard.DeniedError's default.
+func (s *Server) suggestedUnlock(st session.State) time.Duration {
+	if s.cfg.SuggestedUnlock == nil {
+		return 0
+	}
+	return s.cfg.SuggestedUnlock(st)
 }
 
 // idle reports whether no live session has used tugd for IdleTimeout. It

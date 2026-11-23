@@ -107,6 +107,25 @@ func TestConnectFromClusters(t *testing.T) {
 	}
 }
 
+// TestConnectSuggestsTheUnlockAllowed checks that connecting to a
+// read-only cluster suggests the unlock a team policy allows, and keeps it
+// for the refusals of later writes.
+func TestConnectSuggestsTheUnlockAllowed(t *testing.T) {
+	b := newFakeBackend(shop()...)
+	b.unlock = 10 * time.Minute
+	h := newHarness(t, b)
+	h.waitFor("the catalog", func(m *model) bool { return m.clusters.loaded })
+	h.typeText("prod-eu")
+	h.press("enter")
+	h.waitFor("the connection", func(m *model) bool { return m.state.Connected() })
+	if want := "read-only (tug unlock 10m to allow writes)"; !strings.Contains(flashed(h.m), want) {
+		t.Fatalf("after connecting, flash = %q, want it to contain %q", flashed(h.m), want)
+	}
+	if h.m.unlock != b.unlock {
+		t.Fatalf("after connecting, unlock = %v, want %v", h.m.unlock, b.unlock)
+	}
+}
+
 func TestConnectToTunnelledStaleCluster(t *testing.T) {
 	b := newFakeBackend()
 	h := newHarness(t, b)

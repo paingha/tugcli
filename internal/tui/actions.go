@@ -84,7 +84,7 @@ func (m *model) guarded(action string, run func(allowWrites bool) tea.Cmd) tea.C
 	m.ask(fmt.Sprintf("%s is read-only. %s anyway?", cluster, capitalise(action)),
 		func() tea.Cmd { return run(true) },
 		func() tea.Cmd {
-			m.setError(&guard.DeniedError{Cluster: cluster, Action: action})
+			m.setError(&guard.DeniedError{Cluster: cluster, Action: action, Unlock: m.unlock})
 			return nil
 		})
 	return nil
