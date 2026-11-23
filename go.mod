@@ -2,6 +2,8 @@ module github.com/paingha/tugcli
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require (
 	charm.land/bubbles/v2 v2.2.2
 	charm.land/bubbletea/v2 v2.1.2
